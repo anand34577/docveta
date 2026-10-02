@@ -1,0 +1,35 @@
+Docveta - your documents, organised and searchable
+=================================================
+
+TRY IT (any Linux or macOS)
+    ./docveta
+  Open http://localhost:8080, connect Docveta to your PostgreSQL database on the page
+  that appears (Docveta can create its own database), then create your account.
+  Data is stored in ./data next to where you started it.
+
+INSTALL AS A SERVICE
+  Linux (systemd):   sudo ./install.sh            (port: sudo ./install.sh --port 9000)
+                     program /opt/docveta, data /var/lib/docveta, logs: journalctl -u docveta -f
+  macOS:             ./install.sh                 (starts when you log in)
+                     data ~/Library/Application Support/Docveta, logs ~/Library/Logs/Docveta
+  Remove again with --uninstall (your data is kept).
+
+TEXT RECOGNITION (OCR)
+  Download docveta-ocr-<version>-<os>-<arch>.zip from the same release and unzip it in
+  this folder (it creates "ocr/"), then run install.sh again or restart Docveta. Docveta
+  starts it automatically. Choose the device in docveta.conf:
+      DOCVETA_OCR_DEVICE=auto|gpu|igpu|npu|cpu
+  Check what it finds:  ./ocr/docveta-ocr --list-devices  and  ./ocr/docveta-ocr --self-test
+
+NEED POSTGRESQL?
+  Debian/Ubuntu:  sudo apt install postgresql postgresql-contrib
+  Fedora:         sudo dnf install postgresql-server postgresql-contrib
+  macOS:          https://postgresapp.com  or  brew install postgresql@17
+  Docveta needs version 16 or newer.
+
+macOS SECURITY WARNING
+  Docveta isn't notarised by Apple yet. install.sh removes the download quarantine; if
+  you run ./docveta directly and macOS blocks it:  xattr -d com.apple.quarantine docveta
+
+HELP
+  Guides for every step: https://github.com/anand34577/docveta/wiki

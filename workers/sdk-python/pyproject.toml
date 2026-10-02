@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docveta-worker"
+version = "0.1.0"
+description = "SDK for Docveta processing workers (OCR engines). Implements the Docveta worker protocol v1."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "requests>=2.31",
+  "pillow>=10.0",
+  "pypdfium2>=4.25",
+  "pypdf>=4.0",
+  "reportlab>=4.0",
+]
+
+[project.optional-dependencies]
+heic = ["pillow-heif>=0.16"]
+# PaddleOCR (PP-OCR) pre/post-processing shared by the NPU and ONNX Runtime engines
+ppocr = ["numpy>=1.24", "opencv-python-headless>=4.8"]
+
+[project.scripts]
+docveta-worker-mock = "docveta_worker.mock:main"
+
+[tool.setuptools.packages.find]
+include = ["docveta_worker*"]

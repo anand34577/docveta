@@ -1,0 +1,9 @@
+# Normalise line endings: LF in the repository and on Linux/macOS checkouts.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.iss text eol=crlf
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary

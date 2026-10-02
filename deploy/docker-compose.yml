@@ -1,0 +1,90 @@
+# Docveta — typical single-board setup (RK3588 / RK3576 / RK3566 or any amd64/arm64 host).
+#
+#   cp .env.example .env      # then edit secrets
+#   docker compose up -d                          # core + database
+#   docker compose --profile npu up -d            # + Rockchip NPU OCR worker
+#   docker compose --profile ocr up -d            # + PaddleOCR engine on the CPU (recommended)
+#   docker compose --profile cpu-ocr up -d        # + Tesseract CPU OCR worker
+#
+# Worker tokens: open Docveta → Administration → Processing → Add worker, put the token in .env.
+# Building the images from this repository instead of pulling them:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+
+name: docveta
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: docveta
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: docveta
+    volumes:
+      - ${DOCVETA_DB_DIR:-./db}:/var/lib/postgresql/data
+    # Modest settings that suit 4–16 GB boards; raise shared_buffers on bigger hosts.
+    command: >
+      postgres -c shared_buffers=256MB -c effective_cache_size=1GB -c work_mem=16MB
+               -c maintenance_work_mem=128MB -c max_connections=60 -c random_page_cost=1.1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docveta"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  docveta:
+    image: ghcr.io/anand34577/docveta:${DOCVETA_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${DOCVETA_PORT:-8080}:8080"
+    environment:
+      DOCVETA_DATABASE_URL: postgres://docveta:${POSTGRES_PASSWORD}@db:5432/docveta?sslmode=disable
+      # Optional: generated on first start and saved in data/docveta.conf when empty.
+      DOCVETA_SECRET_KEY: ${DOCVETA_SECRET_KEY:-}
+      DOCVETA_BASE_URL: ${DOCVETA_BASE_URL:-http://localhost:8080}
+      DOCVETA_TRUSTED_PROXIES: ${DOCVETA_TRUSTED_PROXIES:-}
+      DOCVETA_MAX_UPLOAD_MB: ${DOCVETA_MAX_UPLOAD_MB:-500}
+      DOCVETA_LOG_LEVEL: ${DOCVETA_LOG_LEVEL:-info}
+      DOCVETA_ALLOW_LOCAL_TARGETS: ${DOCVETA_ALLOW_LOCAL_TARGETS:-false}
+    volumes:
+      - ${DOCVETA_DATA_DIR:-./data}:/data
+
+  worker-npu:
+    profiles: ["npu"]
+    image: ghcr.io/anand34577/docveta-worker-rknn:${DOCVETA_VERSION:-latest}
+    restart: unless-stopped
+    depends_on: [docveta]
+    devices:
+      - /dev/rknpu:/dev/rknpu
+      - /dev/dri:/dev/dri
+    volumes:
+      - ${DOCVETA_MODELS_DIR:-./models}:/app/models:ro
+    environment:
+      DOCVETA_URL: http://docveta:8080
+      DOCVETA_WORKER_TOKEN: ${DOCVETA_NPU_WORKER_TOKEN:-}
+      DOCVETA_WORKER_NAME: npu-1
+
+  worker-ocr:
+    profiles: ["ocr"]
+    image: ghcr.io/anand34577/docveta-ocr:${DOCVETA_VERSION:-latest}
+    restart: unless-stopped
+    depends_on: [docveta]
+    environment:
+      DOCVETA_URL: http://docveta:8080
+      DOCVETA_WORKER_TOKEN: ${DOCVETA_OCR_WORKER_TOKEN:-}
+      DOCVETA_WORKER_NAME: ocr-1
+      DOCVETA_OCR_DEVICE: cpu
+
+  worker-cpu:
+    profiles: ["cpu-ocr"]
+    image: ghcr.io/anand34577/docveta-worker-tesseract:${DOCVETA_VERSION:-latest}
+    restart: unless-stopped
+    depends_on: [docveta]
+    environment:
+      DOCVETA_URL: http://docveta:8080
+      DOCVETA_WORKER_TOKEN: ${DOCVETA_CPU_WORKER_TOKEN:-}
+      DOCVETA_WORKER_NAME: cpu-1
+      DOCVETA_CONCURRENCY: ${DOCVETA_CPU_CONCURRENCY:-2}

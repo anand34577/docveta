@@ -1,0 +1,18 @@
+# Builds the images from this repository (for development or before a release exists):
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+# The OCR image needs models in workers/onnx/models (python workers/onnx/convert.py).
+services:
+  docveta:
+    build: ..
+  worker-ocr:
+    build:
+      context: ../workers
+      dockerfile: onnx/Dockerfile
+  worker-npu:
+    build:
+      context: ../workers
+      dockerfile: rknn/Dockerfile
+  worker-cpu:
+    build:
+      context: ../workers
+      dockerfile: tesseract/Dockerfile

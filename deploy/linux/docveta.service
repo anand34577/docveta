@@ -1,0 +1,35 @@
+# systemd unit for Docveta. install.sh sets this up; to do it by hand:
+#   sudo cp docveta.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now docveta
+# Logs: journalctl -u docveta -f        Settings: /opt/docveta/docveta.conf
+
+[Unit]
+Description=Docveta document manager
+Documentation=https://github.com/anand34577/docveta/wiki
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=docveta
+Group=docveta
+# GPU access for the bundled OCR engine (NVIDIA/Intel/AMD device nodes).
+SupplementaryGroups=video render
+ExecStart=/opt/docveta/docveta serve
+WorkingDirectory=/var/lib/docveta
+Environment=DOCVETA_CONFIG=/opt/docveta/docveta.conf
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+
+# Hardening: Docveta only needs its data folder.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/docveta
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

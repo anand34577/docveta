@@ -1,0 +1,6 @@
+**/__pycache__
+**/*.egg-info
+**/.venv
+rknn/models
+rknn/convert/calib
+rknn/convert/.venv

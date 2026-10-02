@@ -1,0 +1,3931 @@
+# Docveta HTTP API (OpenAPI 3.0.3). Served at /api/v1/openapi.yaml.
+# Keep in sync with internal/api: TestOpenAPIRoutes fails on any route mismatch.
+openapi: 3.0.3
+info:
+  title: Docveta API
+  version: '1'
+  description: 'HTTP API of Docveta, a self-hosted document manager.
+
+
+    Errors are RFC 9457 problem details (`application/problem+json`). Cookie-authenticated unsafe requests must be same-origin
+    (CSRF protection); bearer tokens are exempt.
+
+
+    This file is the contract: `go test ./internal/api` fails when a route is added or removed without updating it, and the
+    integration test validates responses against it.'
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+servers:
+- url: /
+security:
+- sessionCookie: []
+- bearerToken: []
+tags:
+- name: auth
+- name: account
+- name: documents
+- name: spaces
+- name: views
+- name: sync
+- name: taxonomy
+- name: notifications
+- name: admin
+- name: worker
+paths:
+  /api/v1/admin/audit:
+    get:
+      summary: Audit log (newest first)
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEntry'
+        default: &id001
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: action
+        in: query
+        schema: &id002
+          type: string
+      - name: before
+        in: query
+        schema:
+          type: integer
+          format: int64
+          description: Entry id to page before
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 100
+  /api/v1/admin/settings/oidc:
+    get:
+      summary: Get oidc settings
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OIDCConfig'
+        default: *id001
+    put:
+      summary: Replace oidc settings
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OIDCConfig'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OIDCConfig'
+  /api/v1/admin/settings/processing:
+    get:
+      summary: Get processing settings
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessingSettings'
+        default: *id001
+    put:
+      summary: Replace processing settings
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessingSettings'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessingSettings'
+  /api/v1/admin/settings/smtp:
+    get:
+      summary: Get smtp settings
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SMTPConfig'
+        default: *id001
+    put:
+      summary: Replace smtp settings
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SMTPConfig'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SMTPConfig'
+  /api/v1/admin/settings/smtp/test:
+    post:
+      summary: Send a test email to the admin
+      tags:
+      - admin
+      responses:
+        '204': &id003
+          $ref: '#/components/responses/NoContent'
+        default: *id001
+  /api/v1/admin/system:
+    get:
+      summary: System information
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemInfo'
+        default: *id001
+  /api/v1/admin/tasks:
+    get:
+      summary: Processing tasks and queue stats
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - stats
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TaskView'
+                  stats:
+                    $ref: '#/components/schemas/QueueStats'
+        default: *id001
+      parameters:
+      - name: status
+        in: query
+        schema: *id002
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 100
+  /api/v1/admin/tasks/{id}/retry:
+    post:
+      summary: Retry a failed task
+      tags:
+      - admin
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/admin/users:
+    get:
+      summary: List users
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+        default: *id001
+    post:
+      summary: Create a user
+      tags:
+      - admin
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewUser'
+  /api/v1/admin/users/{id}:
+    patch:
+      summary: Update a user
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminUserUpdate'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Delete a user (their personal space must be empty)
+      tags:
+      - admin
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/admin/workers:
+    get:
+      summary: List OCR workers
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Worker'
+        default: *id001
+    post:
+      summary: Register a worker
+      tags:
+      - admin
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - worker
+                - token
+                properties:
+                  worker:
+                    $ref: '#/components/schemas/Worker'
+                  token:
+                    type: string
+                    description: Shown once
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - name
+              properties:
+                name: *id002
+  /api/v1/admin/workers/{id}:
+    patch:
+      summary: Enable or disable a worker
+      tags:
+      - admin
+      responses:
+        '204': *id003
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - enabled
+              properties:
+                enabled: &id007
+                  type: boolean
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Remove a worker
+      tags:
+      - admin
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/admin/workers/{id}/rotate-token:
+    post:
+      summary: Issue a new worker token
+      tags:
+      - admin
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - token
+                properties:
+                  token: *id002
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/auth/login:
+    post:
+      summary: Sign in with email and password
+      tags:
+      - auth
+      responses:
+        '200':
+          description: Signed in; a session cookie is set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default: *id001
+      description: Rate limited per IP and per IP+email; 429 responses carry `Retry-After`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - email
+              - password
+              properties:
+                email: *id002
+                password: *id002
+      security: &id004 []
+  /api/v1/auth/logout:
+    post:
+      summary: Sign out (revokes the current session)
+      tags:
+      - auth
+      responses:
+        '204': *id003
+        default: *id001
+      security: *id004
+  /api/v1/auth/oidc/callback:
+    get:
+      summary: Single sign-on callback
+      tags:
+      - auth
+      responses:
+        '303': &id005
+          description: Redirect
+        default: *id001
+      parameters:
+      - name: state
+        in: query
+        schema: *id002
+      - name: code
+        in: query
+        schema: *id002
+      - name: error
+        in: query
+        schema: *id002
+      - name: error_description
+        in: query
+        schema: *id002
+      security: *id004
+  /api/v1/auth/oidc/start:
+    get:
+      summary: Start single sign-on
+      tags:
+      - auth
+      responses:
+        '303': *id005
+        default: *id001
+      parameters:
+      - name: return_to
+        in: query
+        schema: *id002
+      security: *id004
+  /api/v1/changes:
+    get:
+      summary: Delta sync feed for offline clients
+      tags:
+      - sync
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangesPage'
+        default: *id001
+      parameters:
+      - name: since
+        in: query
+        schema:
+          type: integer
+          format: int64
+          default: 0
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 2000
+          default: 500
+  /api/v1/correspondents:
+    get:
+      summary: List correspondents
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      parameters:
+      - name: space_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Create a correspondent
+      tags:
+      - taxonomy
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+              - $ref: '#/components/schemas/TaxonomyInput'
+              - type: object
+                required:
+                - space_id
+                properties:
+                  space_id:
+                    type: string
+                    format: uuid
+  /api/v1/correspondents/{id}:
+    get:
+      summary: Get a correspondent
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      summary: Update a correspondent
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaxonomyInput'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Delete a correspondent
+      tags:
+      - taxonomy
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/correspondents/{id}/merge:
+    post:
+      summary: Merge other correspondents into this one
+      tags:
+      - taxonomy
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - source_ids
+              properties:
+                source_ids: &id006
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/document-types:
+    get:
+      summary: List document types
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      parameters:
+      - name: space_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Create a document type
+      tags:
+      - taxonomy
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+              - $ref: '#/components/schemas/TaxonomyInput'
+              - type: object
+                required:
+                - space_id
+                properties:
+                  space_id:
+                    type: string
+                    format: uuid
+  /api/v1/document-types/{id}:
+    get:
+      summary: Get a document type
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      summary: Update a document type
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaxonomyInput'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Delete a document type
+      tags:
+      - taxonomy
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/document-types/{id}/merge:
+    post:
+      summary: Merge other document types into this one
+      tags:
+      - taxonomy
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - source_ids
+              properties:
+                source_ids: *id006
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/documents:
+    get:
+      summary: List and search documents
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResult'
+        default: *id001
+      parameters:
+      - name: q
+        in: query
+        schema: *id002
+        description: Search query (supports `tag:`, `from:`, `type:`, `date:`, quotes and `-negation`)
+      - name: sort
+        in: query
+        schema: *id002
+      - name: cursor
+        in: query
+        schema: *id002
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      - name: total
+        in: query
+        schema: *id007
+        description: Set to false to skip counting
+      - name: space_id
+        in: query
+        schema: *id002
+        description: Comma-separated ids; repeatable
+      - name: tag_id
+        in: query
+        schema: *id002
+        description: All of these tags
+      - name: any_tag_id
+        in: query
+        schema: *id002
+      - name: not_tag_id
+        in: query
+        schema: *id002
+      - name: correspondent_id
+        in: query
+        schema: *id002
+      - name: document_type_id
+        in: query
+        schema: *id002
+      - name: date_from
+        in: query
+        schema:
+          type: string
+          format: date
+      - name: date_to
+        in: query
+        schema:
+          type: string
+          format: date
+      - name: added_from
+        in: query
+        schema: *id002
+        description: RFC 3339 or YYYY-MM-DD
+      - name: added_to
+        in: query
+        schema: *id002
+      - name: inbox
+        in: query
+        schema: *id007
+      - name: status
+        in: query
+        schema: *id002
+        description: Comma-separated statuses
+      - name: untagged
+        in: query
+        schema: *id007
+      - name: no_correspondent
+        in: query
+        schema: *id007
+      - name: no_document_type
+        in: query
+        schema: *id007
+      - name: trash
+        in: query
+        schema: *id007
+    post:
+      summary: Upload a document
+      tags:
+      - documents
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default: *id001
+      description: Metadata fields must come before the `file` part; the file is streamed to storage. 409 when the file is
+        a duplicate (unless `allow_duplicate`).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - file
+              properties:
+                space_id:
+                  type: string
+                  format: uuid
+                  description: Defaults to the personal space
+                title: *id002
+                tag_ids:
+                  type: string
+                  description: Comma-separated
+                correspondent_id:
+                  type: string
+                  format: uuid
+                document_type_id:
+                  type: string
+                  format: uuid
+                document_date:
+                  type: string
+                  format: date
+                language: *id002
+                allow_duplicate: *id007
+                source:
+                  type: string
+                  enum:
+                  - share
+                  - scan
+                file:
+                  type: string
+                  format: binary
+                  description: Must be the last part
+  /api/v1/documents/bulk:
+    post:
+      summary: Apply an action to many documents
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkResult'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkInput'
+  /api/v1/documents/search:
+    post:
+      summary: Search with a JSON query
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResult'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchQuery'
+  /api/v1/documents/stats:
+    get:
+      summary: Counts for the home page
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+        default: *id001
+  /api/v1/documents/suggest:
+    get:
+      summary: Search-as-you-type suggestions
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Suggestion'
+        default: *id001
+      parameters:
+      - name: q
+        in: query
+        schema: *id002
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 8
+  /api/v1/documents/{id}:
+    get:
+      summary: Get a document
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+          headers: &id008
+            ETag:
+              schema: *id002
+              description: Document version, for If-Match
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      summary: Update document metadata
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+          headers: *id008
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateInput'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        schema: *id002
+        description: Version from ETag; 412 if it changed
+    delete:
+      summary: Move to trash, or delete permanently
+      tags:
+      - documents
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: permanent
+        in: query
+        schema: *id007
+  /api/v1/documents/{id}/asn:
+    post:
+      summary: Assign the next archive serial number
+      tags:
+      - documents
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/documents/{id}/file:
+    get:
+      summary: Download a document file (supports Range)
+      tags:
+      - documents
+      responses:
+        '200':
+          description: File content
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            image/*:
+              schema:
+                type: string
+                format: binary
+            text/plain:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: Partial content
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: kind
+        in: query
+        schema:
+          type: string
+          enum:
+          - original
+          - archive
+          - thumbnail
+          - best
+          default: original
+      - name: download
+        in: query
+        schema:
+          type: string
+          enum:
+          - '1'
+  /api/v1/documents/{id}/history:
+    get:
+      summary: Change history
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HistoryEntry'
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/documents/{id}/notes:
+    get:
+      summary: List notes
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Note'
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Add a note (`@[Name](user-id)` mentions notify people)
+      tags:
+      - documents
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Note'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - body
+              properties:
+                body:
+                  type: string
+                  maxLength: 5000
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/documents/{id}/notes/{note}:
+    delete:
+      summary: Delete a note
+      tags:
+      - documents
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: note
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/documents/{id}/pages:
+    get:
+      summary: Pages with recognised text
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Page'
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/documents/{id}/reprocess:
+    post:
+      summary: Run processing again
+      tags:
+      - documents
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: force_ocr
+        in: query
+        schema: *id007
+  /api/v1/documents/{id}/restore:
+    post:
+      summary: Restore from trash
+      tags:
+      - documents
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/documents/{id}/thumbnail:
+    get:
+      summary: Thumbnail image
+      tags:
+      - documents
+      responses:
+        '200':
+          description: Thumbnail
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/events:
+    get:
+      summary: Live events (Server-Sent Events)
+      tags:
+      - notifications
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: *id002
+        default: *id001
+  /api/v1/me:
+    get:
+      summary: Current user with their spaces
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/User'
+                - type: object
+                  required:
+                  - spaces
+                  properties:
+                    spaces:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Space'
+        default: *id001
+    patch:
+      summary: Update profile and preferences
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileUpdate'
+  /api/v1/me/password:
+    post:
+      summary: Change password (browser sessions only)
+      tags:
+      - account
+      responses:
+        '204': *id003
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - current_password
+              - new_password
+              properties:
+                current_password: *id002
+                new_password: *id002
+  /api/v1/me/sessions:
+    get:
+      summary: List active sessions
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Session'
+        default: *id001
+  /api/v1/me/sessions/{id}:
+    delete:
+      summary: Revoke a session, or `others` for all but the current one
+      tags:
+      - account
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id002
+        description: Session id or `others`
+  /api/v1/me/tokens:
+    get:
+      summary: List API tokens
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/APIToken'
+        default: *id001
+    post:
+      summary: Create an API token (browser sessions only)
+      tags:
+      - account
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - token
+                - secret
+                properties:
+                  token:
+                    $ref: '#/components/schemas/APIToken'
+                  secret:
+                    type: string
+                    description: Shown once
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewToken'
+  /api/v1/me/tokens/{id}:
+    delete:
+      summary: Revoke an API token
+      tags:
+      - account
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/notification-channels:
+    get:
+      summary: List notification channels
+      tags:
+      - notifications
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - event_types
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Channel'
+                  event_types:
+                    type: array
+                    items: *id002
+        default: *id001
+    post:
+      summary: Create a channel (gotify, ntfy, webhook, email)
+      tags:
+      - notifications
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Channel'
+        default: *id001
+      description: Gotify/ntfy/webhook URLs can't point at private network addresses unless the server sets `DOCVETA_ALLOW_LOCAL_TARGETS=true`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelInput'
+  /api/v1/notification-channels/{id}:
+    patch:
+      summary: Update a channel
+      tags:
+      - notifications
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Channel'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelInput'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Delete a channel
+      tags:
+      - notifications
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/notification-channels/{id}/test:
+    post:
+      summary: Send a test message (422 with the error if delivery fails)
+      tags:
+      - notifications
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/notifications:
+    get:
+      summary: In-app notifications
+      tags:
+      - notifications
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - unread
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+                  unread:
+                    type: integer
+        default: *id001
+      parameters:
+      - name: unread
+        in: query
+        schema: *id007
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 30
+  /api/v1/notifications/read:
+    post:
+      summary: Mark notifications read
+      tags:
+      - notifications
+      responses:
+        '204': *id003
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids: *id006
+                all: *id007
+  /api/v1/openapi.yaml:
+    get:
+      summary: This specification
+      tags:
+      - auth
+      responses:
+        '200':
+          description: OpenAPI document
+          content:
+            application/yaml:
+              schema: *id002
+        default: *id001
+      security: *id004
+  /api/v1/saved-views:
+    get:
+      summary: List saved views
+      tags:
+      - views
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SavedView'
+        default: *id001
+    post:
+      summary: Create a saved view
+      tags:
+      - views
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedView'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavedViewInput'
+  /api/v1/saved-views/{id}:
+    patch:
+      summary: Update a saved view
+      tags:
+      - views
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedView'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavedViewInput'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Delete a saved view
+      tags:
+      - views
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/setup:
+    post:
+      summary: 'First-run setup: create the first administrator'
+      tags:
+      - auth
+      responses:
+        '201':
+          description: Created; a session cookie is set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupInput'
+      security: *id004
+  /api/v1/spaces:
+    get:
+      summary: List the user's spaces
+      tags:
+      - spaces
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Space'
+        default: *id001
+    post:
+      summary: Create a shared space
+      tags:
+      - spaces
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Space'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpaceInput'
+  /api/v1/spaces/{id}:
+    get:
+      summary: Get a space
+      tags:
+      - spaces
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Space'
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      summary: Update a space
+      tags:
+      - spaces
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Space'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpaceInput'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Delete an empty shared space
+      tags:
+      - spaces
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/spaces/{id}/members:
+    get:
+      summary: List members
+      tags:
+      - spaces
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Member'
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/spaces/{id}/members/{user}:
+    put:
+      summary: Add a member or change their role
+      tags:
+      - spaces
+      responses:
+        '204': *id003
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - role
+              properties:
+                role:
+                  type: string
+                  enum:
+                  - owner
+                  - editor
+                  - viewer
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: user
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Remove a member
+      tags:
+      - spaces
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: user
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/status:
+    get:
+      summary: Instance status (public)
+      tags:
+      - auth
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        default: *id001
+      security: *id004
+  /api/v1/tags:
+    get:
+      summary: List tags
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      parameters:
+      - name: space_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Create a tag
+      tags:
+      - taxonomy
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+              - $ref: '#/components/schemas/TaxonomyInput'
+              - type: object
+                required:
+                - space_id
+                properties:
+                  space_id:
+                    type: string
+                    format: uuid
+  /api/v1/tags/{id}:
+    get:
+      summary: Get a tag
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      summary: Update a tag
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaxonomyInput'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Delete a tag
+      tags:
+      - taxonomy
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/tags/{id}/merge:
+    post:
+      summary: Merge other tags into this one
+      tags:
+      - taxonomy
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyItem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - source_ids
+              properties:
+                source_ids: *id006
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/users/directory:
+    get:
+      summary: People the user shares a space with (for @mentions and sharing)
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DirectoryEntry'
+        default: *id001
+  /worker/v1/hello:
+    post:
+      summary: Announce the worker and its capabilities
+      tags:
+      - worker
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HelloResponse'
+        '426':
+          $ref: '#/components/responses/Problem'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HelloRequest'
+      security: &id009
+      - workerToken: []
+  /worker/v1/lease:
+    post:
+      summary: Lease tasks (long poll)
+      tags:
+      - worker
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - tasks
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LeasedTask'
+        '204':
+          description: No task available
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeaseRequest'
+      security: *id009
+  /worker/v1/tasks/{id}/complete:
+    post:
+      summary: Complete a task
+      tags:
+      - worker
+      responses:
+        '204': *id003
+        default: *id001
+      description: Send `lease_id` and `metrics` first, then one `result` or `archive` part.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - lease_id
+              properties:
+                lease_id:
+                  type: string
+                  format: uuid
+                metrics:
+                  type: string
+                  description: JSON object
+                result:
+                  type: string
+                  format: binary
+                  description: ocr-result/v1 JSON
+                archive:
+                  type: string
+                  format: binary
+                  description: Searchable PDF
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      security: *id009
+  /worker/v1/tasks/{id}/fail:
+    post:
+      summary: Report a failure
+      tags:
+      - worker
+      responses:
+        '204': *id003
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FailRequest'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      security: *id009
+  /worker/v1/tasks/{id}/heartbeat:
+    post:
+      summary: Extend a lease
+      tags:
+      - worker
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - lease_expires_at
+                properties:
+                  lease_expires_at:
+                    type: string
+                    format: date-time
+        default: *id001
+      description: 409 when the lease is no longer valid.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HeartbeatRequest'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      security: *id009
+  /worker/v1/tasks/{id}/input:
+    get:
+      summary: Download the task input
+      tags:
+      - worker
+      responses:
+        '200':
+          description: Input file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - &id010
+        name: lease_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+        description: Or the `Docveta-Lease` header
+      security: *id009
+  /worker/v1/tasks/{id}/ocr-result:
+    get:
+      summary: Download the OCR result (archive tasks)
+      tags:
+      - worker
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                nullable: true
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - *id010
+      security: *id009
+  /worker/v1/tasks/{id}/release:
+    post:
+      summary: Give a task back without failing it
+      tags:
+      - worker
+      responses:
+        '204': *id003
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - lease_id
+              properties:
+                lease_id:
+                  type: string
+                  format: uuid
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      security: *id009
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-docveta_session
+      description: Set by login/setup. Named `docveta_session` when the base URL is plain http.
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: Personal access token (`dvt_pat_…`) created in Settings → API tokens.
+    workerToken:
+      type: http
+      scheme: bearer
+      description: Worker token (`dvt_wrk_…`) from Administration → Processing.
+  responses:
+    NoContent:
+      description: Done
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    APIToken:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        expires_at:
+          format: date-time
+          nullable: true
+          type: string
+        id:
+          format: uuid
+          type: string
+        last_used_at:
+          format: date-time
+          nullable: true
+          type: string
+        name:
+          type: string
+        prefix:
+          type: string
+        scopes:
+          items:
+            type: string
+          type: array
+      required:
+      - id
+      - name
+      - prefix
+      - scopes
+      - expires_at
+      - last_used_at
+      - created_at
+      type: object
+    AdminUserUpdate:
+      properties:
+        display_name:
+          nullable: true
+          type: string
+        is_admin:
+          nullable: true
+          type: boolean
+        password:
+          nullable: true
+          type: string
+        status:
+          nullable: true
+          type: string
+      type: object
+    AuditEntry:
+      properties:
+        action:
+          type: string
+        actor_id:
+          format: uuid
+          nullable: true
+          type: string
+        actor_name:
+          type: string
+        actor_type:
+          type: string
+        at:
+          format: date-time
+          type: string
+        details:
+          additionalProperties:
+            nullable: true
+          type: object
+        id:
+          format: int64
+          type: integer
+        ip:
+          type: string
+        target_id:
+          type: string
+        target_type:
+          type: string
+        user_agent:
+          type: string
+      required:
+      - id
+      - at
+      - actor_id
+      - actor_name
+      - actor_type
+      - action
+      - target_type
+      - target_id
+      - ip
+      - user_agent
+      - details
+      type: object
+    BulkInput:
+      properties:
+        action:
+          type: string
+        ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+        update:
+          properties:
+            add_tag_ids:
+              items:
+                format: uuid
+                type: string
+              type: array
+            asn:
+              format: int64
+              type: integer
+              nullable: true
+            correspondent_id:
+              format: uuid
+              type: string
+              nullable: true
+            document_date:
+              type: string
+              nullable: true
+            document_type_id:
+              format: uuid
+              type: string
+              nullable: true
+            inbox:
+              type: boolean
+              nullable: true
+            language:
+              type: string
+              nullable: true
+            physical_location:
+              type: string
+              nullable: true
+            remove_tag_ids:
+              items:
+                format: uuid
+                type: string
+              type: array
+            space_id:
+              format: uuid
+              type: string
+              nullable: true
+            tag_ids:
+              items:
+                format: uuid
+                type: string
+              type: array
+              nullable: true
+            title:
+              type: string
+              nullable: true
+          type: object
+      type: object
+    BulkResult:
+      properties:
+        failed:
+          items:
+            properties:
+              id:
+                format: uuid
+                type: string
+              message:
+                type: string
+            required:
+            - id
+            - message
+            type: object
+          type: array
+        succeeded:
+          type: integer
+      required:
+      - succeeded
+      - failed
+      type: object
+    Capability:
+      properties:
+        concurrency:
+          type: integer
+        engine:
+          type: string
+        engine_version:
+          type: string
+        input_mime:
+          items:
+            type: string
+          type: array
+        languages:
+          items:
+            type: string
+          type: array
+        max_pages_per_task:
+          type: integer
+        outputs:
+          items:
+            type: string
+          type: array
+        tags:
+          items:
+            type: string
+          type: array
+        task_type:
+          type: string
+      required:
+      - task_type
+      - engine
+      type: object
+    ChangesPage:
+      properties:
+        changes:
+          items:
+            properties:
+              data:
+                nullable: true
+              deleted:
+                type: boolean
+              entity:
+                type: string
+              id:
+                format: uuid
+                type: string
+              seq:
+                format: int64
+                type: integer
+              space_id:
+                format: uuid
+                nullable: true
+                type: string
+            required:
+            - seq
+            - entity
+            - id
+            - space_id
+            - deleted
+            type: object
+          type: array
+        has_more:
+          type: boolean
+        next_since:
+          format: int64
+          type: integer
+      required:
+      - changes
+      - next_since
+      - has_more
+      type: object
+    Channel:
+      properties:
+        config:
+          additionalProperties:
+            nullable: true
+          type: object
+        enabled:
+          type: boolean
+        events:
+          items:
+            type: string
+          type: array
+        failure_count:
+          type: integer
+        id:
+          format: uuid
+          type: string
+        last_error:
+          type: string
+        name:
+          type: string
+        system:
+          type: boolean
+        type:
+          type: string
+      required:
+      - id
+      - system
+      - name
+      - type
+      - config
+      - events
+      - enabled
+      - failure_count
+      - last_error
+      type: object
+    ChannelInput:
+      properties:
+        config:
+          nullable: true
+        enabled:
+          nullable: true
+          type: boolean
+        events:
+          items:
+            type: string
+          type: array
+        name:
+          nullable: true
+          type: string
+        system:
+          type: boolean
+        type:
+          type: string
+      type: object
+    DirectoryEntry:
+      properties:
+        display_name:
+          type: string
+        email:
+          type: string
+        id:
+          format: uuid
+          type: string
+      required:
+      - id
+      - email
+      - display_name
+      type: object
+    Document:
+      properties:
+        added_at:
+          format: date-time
+          type: string
+        asn:
+          format: int64
+          nullable: true
+          type: integer
+        correspondent:
+          allOf:
+          - $ref: '#/components/schemas/Ref'
+          nullable: true
+        deleted_at:
+          format: date-time
+          nullable: true
+          type: string
+        document_date:
+          nullable: true
+          type: string
+        document_type:
+          allOf:
+          - $ref: '#/components/schemas/Ref'
+          nullable: true
+        has_archive:
+          type: boolean
+        has_thumbnail:
+          type: boolean
+        id:
+          format: uuid
+          type: string
+        inbox:
+          type: boolean
+        language:
+          type: string
+        matched_page:
+          nullable: true
+          type: integer
+        mime_type:
+          type: string
+        note_count:
+          type: integer
+        original_filename:
+          type: string
+        owner:
+          allOf:
+          - $ref: '#/components/schemas/Ref'
+          nullable: true
+        page_count:
+          nullable: true
+          type: integer
+        physical_location:
+          type: string
+        processing_error:
+          type: string
+        processing_stage:
+          type: string
+        size_bytes:
+          format: int64
+          type: integer
+        snippet:
+          items:
+            properties:
+              hit:
+                type: boolean
+              text:
+                type: string
+            required:
+            - text
+            type: object
+          type: array
+        source:
+          type: string
+        space:
+          $ref: '#/components/schemas/Ref'
+        status:
+          type: string
+        tags:
+          items:
+            $ref: '#/components/schemas/Ref'
+          type: array
+        title:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        version:
+          type: integer
+      required:
+      - id
+      - space
+      - title
+      - document_date
+      - added_at
+      - updated_at
+      - correspondent
+      - document_type
+      - tags
+      - language
+      - page_count
+      - asn
+      - physical_location
+      - inbox
+      - status
+      - processing_stage
+      - mime_type
+      - size_bytes
+      - original_filename
+      - source
+      - owner
+      - has_archive
+      - has_thumbnail
+      - note_count
+      - version
+      type: object
+    FailRequest:
+      properties:
+        code:
+          type: string
+        lease_id:
+          format: uuid
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+      type: object
+    HeartbeatRequest:
+      properties:
+        lease_id:
+          format: uuid
+          type: string
+        progress:
+          additionalProperties:
+            nullable: true
+          type: object
+      type: object
+    HelloRequest:
+      properties:
+        capabilities:
+          items:
+            $ref: '#/components/schemas/Capability'
+          type: array
+        protocol:
+          items:
+            type: integer
+          type: array
+        worker:
+          properties:
+            host:
+              type: string
+            name:
+              type: string
+            version:
+              type: string
+          type: object
+      type: object
+    HelloResponse:
+      properties:
+        heartbeat_interval_seconds:
+          type: integer
+        lease_ttl_seconds:
+          type: integer
+        max_lease_wait_seconds:
+          type: integer
+        protocol:
+          type: integer
+        server_version:
+          type: string
+        worker_id:
+          format: uuid
+          type: string
+      required:
+      - worker_id
+      - protocol
+      - heartbeat_interval_seconds
+      - lease_ttl_seconds
+      - max_lease_wait_seconds
+      - server_version
+      type: object
+    HistoryEntry:
+      properties:
+        action:
+          type: string
+        actor:
+          allOf:
+          - $ref: '#/components/schemas/Ref'
+          nullable: true
+        actor_type:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        details:
+          additionalProperties:
+            nullable: true
+          type: object
+        id:
+          format: uuid
+          type: string
+      required:
+      - id
+      - actor
+      - actor_type
+      - action
+      - details
+      - created_at
+      type: object
+    LeaseRequest:
+      properties:
+        capacity:
+          type: integer
+        types:
+          items:
+            type: string
+          type: array
+        wait_seconds:
+          type: integer
+      type: object
+    LeasedTask:
+      properties:
+        attempt:
+          type: integer
+        complete_url:
+          type: string
+        document_id:
+          format: uuid
+          type: string
+        engine:
+          type: string
+        hints:
+          additionalProperties:
+            nullable: true
+          type: object
+        input:
+          properties:
+            mime:
+              type: string
+            sha256:
+              type: string
+            size:
+              format: int64
+              type: integer
+            url:
+              type: string
+          required:
+          - url
+          - mime
+          - sha256
+          - size
+          type: object
+        lease_expires_at:
+          format: date-time
+          type: string
+        lease_id:
+          format: uuid
+          type: string
+        max_result_bytes:
+          format: int64
+          type: integer
+        ocr_result_url:
+          type: string
+        page_range:
+          description: '[from, to], 1-based inclusive; null means the whole file'
+          items:
+            type: integer
+          maxItems: 2
+          minItems: 2
+          nullable: true
+          type: array
+        task_id:
+          format: uuid
+          type: string
+        type:
+          type: string
+      required:
+      - task_id
+      - lease_id
+      - type
+      - engine
+      - attempt
+      - lease_expires_at
+      - document_id
+      - page_range
+      - hints
+      - input
+      - complete_url
+      - max_result_bytes
+      type: object
+    ListResult:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/Document'
+            nullable: true
+          type: array
+        next_cursor:
+          nullable: true
+          type: string
+        total:
+          nullable: true
+          type: integer
+      required:
+      - items
+      - next_cursor
+      type: object
+    Member:
+      properties:
+        added_at:
+          format: date-time
+          type: string
+        display_name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+        user_id:
+          format: uuid
+          type: string
+      required:
+      - user_id
+      - email
+      - display_name
+      - role
+      - added_at
+      type: object
+    NewToken:
+      properties:
+        expires_in_days:
+          nullable: true
+          type: integer
+        name:
+          type: string
+        scopes:
+          items:
+            type: string
+          type: array
+      type: object
+    NewUser:
+      properties:
+        display_name:
+          type: string
+        email:
+          type: string
+        is_admin:
+          type: boolean
+        password:
+          nullable: true
+          type: string
+      type: object
+    Note:
+      properties:
+        author:
+          allOf:
+          - $ref: '#/components/schemas/Ref'
+          nullable: true
+        body:
+          type: string
+        can_delete:
+          type: boolean
+        created_at:
+          format: date-time
+          type: string
+        id:
+          format: uuid
+          type: string
+        mentions:
+          items:
+            format: uuid
+            type: string
+          type: array
+      required:
+      - id
+      - author
+      - body
+      - mentions
+      - created_at
+      - can_delete
+      type: object
+    Notification:
+      properties:
+        body:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        event_type:
+          type: string
+        id:
+          format: uuid
+          type: string
+        link:
+          type: string
+        read_at:
+          format: date-time
+          nullable: true
+          type: string
+        severity:
+          type: string
+        title:
+          type: string
+      required:
+      - id
+      - event_type
+      - title
+      - body
+      - link
+      - severity
+      - read_at
+      - created_at
+      type: object
+    OIDCConfig:
+      properties:
+        admin_groups:
+          items:
+            type: string
+          type: array
+        allowed_groups:
+          items:
+            type: string
+          type: array
+        auto_provision:
+          type: boolean
+        button_label:
+          type: string
+        client_id:
+          type: string
+        client_secret:
+          nullable: true
+          type: string
+        disable_password_login:
+          type: boolean
+        enabled:
+          type: boolean
+        groups_claim:
+          type: string
+        has_client_secret:
+          type: boolean
+        issuer:
+          type: string
+        link_by_verified_email:
+          type: boolean
+        scopes:
+          items:
+            type: string
+          type: array
+      required:
+      - enabled
+      - issuer
+      - client_id
+      - scopes
+      - button_label
+      - auto_provision
+      - allowed_groups
+      - admin_groups
+      - groups_claim
+      - link_by_verified_email
+      - disable_password_login
+      - has_client_secret
+      type: object
+    Page:
+      properties:
+        confidence:
+          nullable: true
+          type: number
+        page_no:
+          type: integer
+        rotation:
+          type: integer
+        text:
+          type: string
+      required:
+      - page_no
+      - text
+      - confidence
+      - rotation
+      type: object
+    Problem:
+      properties:
+        code:
+          type: string
+        detail:
+          type: string
+        errors:
+          items:
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+            required:
+            - field
+            - message
+            type: object
+          type: array
+        extra:
+          additionalProperties:
+            nullable: true
+          type: object
+        instance:
+          type: string
+        status:
+          type: integer
+        title:
+          type: string
+        type:
+          type: string
+      required:
+      - type
+      - title
+      - status
+      - code
+      type: object
+    ProcessingSettings:
+      properties:
+        archive:
+          type: boolean
+        fallback_after_minutes:
+          type: integer
+        lease_seconds:
+          type: integer
+        max_attempts:
+          type: integer
+        page_batch_size:
+          type: integer
+        prefer_tags:
+          items:
+            type: string
+          type: array
+        skip_ocr_with_text:
+          type: boolean
+        worker_offline_minutes:
+          type: integer
+      required:
+      - prefer_tags
+      - fallback_after_minutes
+      - page_batch_size
+      - skip_ocr_with_text
+      - archive
+      - max_attempts
+      - lease_seconds
+      - worker_offline_minutes
+      type: object
+    ProfileUpdate:
+      properties:
+        date_format:
+          nullable: true
+          type: string
+        display_name:
+          nullable: true
+          type: string
+        locale:
+          nullable: true
+          type: string
+        theme:
+          nullable: true
+          type: string
+        timezone:
+          nullable: true
+          type: string
+      type: object
+    QueueStats:
+      properties:
+        done_24h:
+          type: integer
+        failed_24h:
+          type: integer
+        leased:
+          type: integer
+        pages_done_24h:
+          type: integer
+        queued:
+          type: integer
+      required:
+      - queued
+      - leased
+      - failed_24h
+      - done_24h
+      - pages_done_24h
+      type: object
+    Ref:
+      properties:
+        color:
+          type: string
+        id:
+          format: uuid
+          type: string
+        name:
+          type: string
+      required:
+      - id
+      - name
+      type: object
+    SMTPConfig:
+      properties:
+        enabled:
+          type: boolean
+        from:
+          type: string
+        has_password:
+          type: boolean
+        host:
+          type: string
+        password:
+          nullable: true
+          type: string
+        port:
+          type: integer
+        security:
+          type: string
+        username:
+          type: string
+      required:
+      - enabled
+      - host
+      - port
+      - security
+      - username
+      - from
+      - has_password
+      type: object
+    SavedView:
+      properties:
+        can_edit:
+          type: boolean
+        display:
+          nullable: true
+        id:
+          format: uuid
+          type: string
+        name:
+          type: string
+        owner_id:
+          format: uuid
+          type: string
+        pinned:
+          type: boolean
+        query:
+          nullable: true
+        sort_order:
+          type: integer
+        space_id:
+          format: uuid
+          nullable: true
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - id
+      - space_id
+      - owner_id
+      - name
+      - query
+      - display
+      - pinned
+      - sort_order
+      - can_edit
+      - updated_at
+      type: object
+    SavedViewInput:
+      properties:
+        display:
+          nullable: true
+        name:
+          nullable: true
+          type: string
+        pinned:
+          nullable: true
+          type: boolean
+        query:
+          nullable: true
+        sort_order:
+          nullable: true
+          type: integer
+        space_id:
+          format: uuid
+          nullable: true
+          type: string
+      type: object
+    SearchQuery:
+      properties:
+        added_from:
+          format: date-time
+          nullable: true
+          type: string
+        added_to:
+          format: date-time
+          nullable: true
+          type: string
+        any_tag_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+        correspondent_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+        cursor:
+          type: string
+        date_from:
+          nullable: true
+          type: string
+        date_to:
+          nullable: true
+          type: string
+        inbox:
+          nullable: true
+          type: boolean
+        limit:
+          type: integer
+        no_correspondent:
+          type: boolean
+        no_type:
+          type: boolean
+        not_tag_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+        q:
+          type: string
+        sort:
+          type: string
+        space_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+        statuses:
+          items:
+            type: string
+          type: array
+        tag_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+        trash:
+          type: boolean
+        type_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+        untagged:
+          type: boolean
+      type: object
+    Session:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        current:
+          type: boolean
+        expires_at:
+          format: date-time
+          type: string
+        id:
+          format: uuid
+          type: string
+        ip:
+          type: string
+        last_seen_at:
+          format: date-time
+          type: string
+        user_agent:
+          type: string
+      required:
+      - id
+      - user_agent
+      - ip
+      - created_at
+      - last_seen_at
+      - expires_at
+      - current
+      type: object
+    SetupInput:
+      properties:
+        display_name:
+          type: string
+        email:
+          type: string
+        is_admin:
+          type: boolean
+        password:
+          nullable: true
+          type: string
+        shared_space_name:
+          type: string
+      type: object
+    Space:
+      properties:
+        ai_apply_mode:
+          type: string
+        ai_policy:
+          type: string
+        color:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        default_language:
+          type: string
+        description:
+          type: string
+        document_count:
+          type: integer
+        id:
+          format: uuid
+          type: string
+        kind:
+          type: string
+        member_count:
+          type: integer
+        name:
+          type: string
+        role:
+          type: string
+      required:
+      - id
+      - name
+      - kind
+      - description
+      - color
+      - ai_policy
+      - ai_apply_mode
+      - default_language
+      - role
+      - member_count
+      - document_count
+      - created_at
+      type: object
+    SpaceInput:
+      properties:
+        ai_apply_mode:
+          nullable: true
+          type: string
+        ai_policy:
+          nullable: true
+          type: string
+        color:
+          nullable: true
+          type: string
+        default_language:
+          nullable: true
+          type: string
+        description:
+          nullable: true
+          type: string
+        name:
+          nullable: true
+          type: string
+      type: object
+    Stats:
+      properties:
+        added_this_week:
+          type: integer
+        bytes:
+          format: int64
+          type: integer
+        failed:
+          type: integer
+        inbox:
+          type: integer
+        processing:
+          type: integer
+        total:
+          type: integer
+        trash:
+          type: integer
+      required:
+      - total
+      - inbox
+      - processing
+      - failed
+      - trash
+      - added_this_week
+      - bytes
+      type: object
+    Status:
+      properties:
+        oidc:
+          properties:
+            button_label:
+              type: string
+            enabled:
+              type: boolean
+          required:
+          - enabled
+          - button_label
+          type: object
+        password_login:
+          type: boolean
+        setup_needed:
+          type: boolean
+        version:
+          type: string
+      required:
+      - setup_needed
+      - version
+      - password_login
+      - oidc
+      type: object
+    Suggestion:
+      properties:
+        id:
+          format: uuid
+          type: string
+        title:
+          type: string
+      required:
+      - id
+      - title
+      type: object
+    SystemInfo:
+      properties:
+        database_bytes:
+          format: int64
+          type: integer
+        documents:
+          format: int64
+          type: integer
+        go_version:
+          type: string
+        pages:
+          format: int64
+          type: integer
+        platform:
+          type: string
+        queue:
+          allOf:
+          - $ref: '#/components/schemas/QueueStats'
+          nullable: true
+        storage_bytes:
+          format: int64
+          type: integer
+        storage_free_bytes:
+          format: int64
+          type: integer
+        users:
+          format: int64
+          type: integer
+        version:
+          type: string
+        workers_online:
+          type: integer
+        workers_total:
+          type: integer
+      required:
+      - version
+      - go_version
+      - platform
+      - database_bytes
+      - storage_free_bytes
+      - documents
+      - pages
+      - users
+      - storage_bytes
+      - queue
+      - workers_online
+      - workers_total
+      type: object
+    TaskView:
+      properties:
+        attempt:
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+        document_id:
+          format: uuid
+          type: string
+        document_title:
+          type: string
+        finished_at:
+          format: date-time
+          nullable: true
+          type: string
+        id:
+          format: uuid
+          type: string
+        last_error:
+          type: string
+        page_from:
+          nullable: true
+          type: integer
+        page_to:
+          nullable: true
+          type: integer
+        priority:
+          type: integer
+        status:
+          type: string
+        type:
+          type: string
+        worker:
+          nullable: true
+          type: string
+      required:
+      - id
+      - document_id
+      - document_title
+      - type
+      - status
+      - page_from
+      - page_to
+      - priority
+      - attempt
+      - worker
+      - last_error
+      - created_at
+      - finished_at
+      type: object
+    TaxonomyInput:
+      properties:
+        case_sensitive:
+          nullable: true
+          type: boolean
+        color:
+          nullable: true
+          type: string
+        match_algorithm:
+          nullable: true
+          type: string
+        match_pattern:
+          nullable: true
+          type: string
+        name:
+          nullable: true
+          type: string
+      type: object
+    TaxonomyItem:
+      properties:
+        case_sensitive:
+          type: boolean
+        color:
+          type: string
+        document_count:
+          type: integer
+        id:
+          format: uuid
+          type: string
+        match_algorithm:
+          type: string
+        match_pattern:
+          type: string
+        name:
+          type: string
+        space_id:
+          format: uuid
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - id
+      - space_id
+      - name
+      - match_algorithm
+      - match_pattern
+      - case_sensitive
+      - document_count
+      - updated_at
+      type: object
+    UpdateInput:
+      properties:
+        add_tag_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+        asn:
+          format: int64
+          type: integer
+          nullable: true
+        correspondent_id:
+          format: uuid
+          type: string
+          nullable: true
+        document_date:
+          type: string
+          nullable: true
+        document_type_id:
+          format: uuid
+          type: string
+          nullable: true
+        inbox:
+          type: boolean
+          nullable: true
+        language:
+          type: string
+          nullable: true
+        physical_location:
+          type: string
+          nullable: true
+        remove_tag_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+        space_id:
+          format: uuid
+          type: string
+          nullable: true
+        tag_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
+          nullable: true
+        title:
+          type: string
+          nullable: true
+      type: object
+    User:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        date_format:
+          type: string
+        display_name:
+          type: string
+        email:
+          type: string
+        has_password:
+          type: boolean
+        id:
+          format: uuid
+          type: string
+        is_admin:
+          type: boolean
+        last_login_at:
+          format: date-time
+          nullable: true
+          type: string
+        locale:
+          type: string
+        status:
+          type: string
+        theme:
+          type: string
+        timezone:
+          type: string
+      required:
+      - id
+      - email
+      - display_name
+      - is_admin
+      - status
+      - locale
+      - timezone
+      - date_format
+      - theme
+      - has_password
+      - last_login_at
+      - created_at
+      type: object
+    Worker:
+      properties:
+        active_tasks:
+          type: integer
+        capabilities:
+          items:
+            $ref: '#/components/schemas/Capability'
+          type: array
+        created_at:
+          format: date-time
+          type: string
+        done_24h:
+          type: integer
+        enabled:
+          type: boolean
+        failed_24h:
+          type: integer
+        host:
+          type: string
+        id:
+          format: uuid
+          type: string
+        last_seen_at:
+          format: date-time
+          nullable: true
+          type: string
+        name:
+          type: string
+        online:
+          type: boolean
+        protocol_version:
+          type: integer
+        token_prefix:
+          type: string
+        version:
+          type: string
+      required:
+      - id
+      - name
+      - token_prefix
+      - enabled
+      - protocol_version
+      - version
+      - host
+      - capabilities
+      - last_seen_at
+      - online
+      - active_tasks
+      - done_24h
+      - failed_24h
+      - created_at
+      type: object

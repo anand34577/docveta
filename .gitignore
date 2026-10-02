@@ -1,0 +1,41 @@
+# Build output
+/bin/
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
+web/node_modules/
+web/*.tsbuildinfo
+
+# Local data
+/data/
+/deploy/data/
+/deploy/db/
+/deploy/models/
+/deploy/.env
+.env
+
+# Worker models (large, produced by workers/rknn/convert)
+/workers/rknn/models/
+/workers/rknn/convert/calib/
+/workers/rknn/convert/.venv/
+
+# Python
+__pycache__/
+workers/sdk-python/build/
+*.egg-info/
+.venv/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local launcher scripts
+Claude-Account-*.cmd
+
+# OCR engine build output and models (produced by workers/onnx/convert.py / PyInstaller)
+/workers/onnx/models/
+/workers/onnx/build/
+/workers/onnx/dist/
+/dist/
+/build/

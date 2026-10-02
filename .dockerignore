@@ -1,0 +1,13 @@
+.git
+.github
+bin
+data
+deploy
+docs
+workers
+**/node_modules
+web/*.tsbuildinfo
+internal/webui/dist/assets
+internal/webui/dist/*.html
+*.cmd
+.env

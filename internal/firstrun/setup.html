@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+{{if .Done}}<meta http-equiv="refresh" content="6;url=/">{{end}}
+<title>Set up Docveta</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --fg:#1f2430; --muted:#6b7280; --border:#e3e5ec; --accent:#3b4fd8; --ok:#0f7b4f; --okbg:#e8f6ef; --err:#b42318; --errbg:#fdecea; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111318; --card:#1a1d24; --fg:#e8eaf0; --muted:#9aa1ad; --border:#2b2f39; --accent:#7c8cff; --ok:#5fd39b; --okbg:#12291f; --err:#ff8a80; --errbg:#2d1614; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:560px; margin:40px auto; padding:0 16px; }
+  .brand { display:flex; align-items:center; gap:10px; font-weight:600; font-size:18px; margin-bottom:20px; }
+  .logo { width:30px; height:30px; border-radius:8px; background:var(--accent); color:#fff; display:grid; place-items:center; font-size:16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:24px; }
+  h1 { font-size:20px; margin:0 0 6px; }
+  p { margin:0 0 14px; color:var(--muted); }
+  label { display:block; font-weight:500; margin:14px 0 6px; }
+  .hint { font-weight:400; color:var(--muted); font-size:13px; }
+  input[type=text], input[type=password], input[type=number], select {
+    width:100%; padding:9px 11px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  input:focus, select:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  .row { display:grid; grid-template-columns: 1fr 120px; gap:12px; }
+  .check { display:flex; gap:8px; align-items:flex-start; margin-top:14px; font-weight:400; }
+  .check input { margin-top:4px; }
+  .msg { border-radius:8px; padding:10px 12px; margin:0 0 16px; }
+  .ok { background:var(--okbg); color:var(--ok); }
+  .err { background:var(--errbg); color:var(--err); }
+  .actions { display:flex; gap:10px; justify-content:flex-end; margin-top:22px; flex-wrap:wrap; }
+  button { font:inherit; padding:9px 16px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--fg); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  details { margin-top:18px; color:var(--muted); }
+  summary { cursor:pointer; }
+  code { font-size:13px; background:var(--bg); padding:1px 5px; border-radius:4px; }
+  pre { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px; overflow:auto; font-size:13px; }
+  @media (max-width: 420px) { .row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><div class="logo" aria-hidden="true">D</div> Docveta</div>
+  <div class="card">
+  {{if .Done}}
+    <h1>Starting Docveta…</h1>
+    <p>The database settings are saved. Docveta is creating its tables; this page opens the setup wizard in a few seconds.</p>
+    <p>If it doesn't, <a href="/">open Docveta</a>.</p>
+  {{else}}
+    <h1>Connect a database</h1>
+    <p>Docveta keeps its records in PostgreSQL (version 16 or newer). Enter the details of your PostgreSQL server. Docveta can create its own database if the user is allowed to.</p>
+    {{if .Error}}<div class="msg err" role="alert">{{.Error}}</div>{{end}}
+    {{if .OK}}<div class="msg ok" role="status">{{.OK}}</div>{{end}}
+    <form method="post" action="/" autocomplete="off">
+      {{if .NeedCode}}
+      <label for="code">Setup code <span class="hint">— you're on another computer, so Docveta asks for the code from its log (also saved in <code>{{.CodeFile}}</code>)</span></label>
+      <input type="text" id="code" name="code" value="{{.Code}}" required autocapitalize="characters" placeholder="ABCDE-FGHJK">
+      {{end}}
+      <div class="row">
+        <div>
+          <label for="host">Server</label>
+          <input type="text" id="host" name="host" value="{{.Host}}" required placeholder="localhost">
+        </div>
+        <div>
+          <label for="port">Port</label>
+          <input type="number" id="port" name="port" value="{{.Port}}" required min="1" max="65535">
+        </div>
+      </div>
+      <label for="database">Database name</label>
+      <input type="text" id="database" name="database" value="{{.Database}}" required>
+      <label for="user">User</label>
+      <input type="text" id="user" name="user" value="{{.User}}" required>
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" value="{{.Password}}">
+      <label for="sslmode">Encryption (SSL)</label>
+      <select id="sslmode" name="sslmode">
+        <option value="prefer" {{if eq .SSLMode "prefer"}}selected{{end}}>Use if available (default)</option>
+        <option value="disable" {{if eq .SSLMode "disable"}}selected{{end}}>Off (same computer or trusted network)</option>
+        <option value="require" {{if eq .SSLMode "require"}}selected{{end}}>Required</option>
+        <option value="verify-full" {{if eq .SSLMode "verify-full"}}selected{{end}}>Required, verify certificate</option>
+      </select>
+      <label class="check"><input type="checkbox" name="create" {{if .Create}}checked{{end}}> <span>Create the database if it doesn't exist <span class="hint">(the user needs permission to create databases, e.g. the <code>postgres</code> administrator)</span></span></label>
+      <div class="actions">
+        <button type="submit" name="action" value="test">Test connection</button>
+        <button type="submit" name="action" value="save" class="primary">Save and start</button>
+      </div>
+    </form>
+    <details>
+      <summary>Don't have PostgreSQL yet?</summary>
+      <p style="margin-top:10px"><b>Windows / macOS:</b> install it from <a href="https://www.postgresql.org/download/" target="_blank" rel="noopener">postgresql.org/download</a>, remember the password you choose for the <code>postgres</code> user, and enter <code>postgres</code> and that password above with "Create the database" ticked.</p>
+      <p><b>Debian / Ubuntu:</b></p>
+      <pre>sudo apt install postgresql postgresql-contrib
+sudo -u postgres createuser --pwprompt docveta
+sudo -u postgres createdb --owner docveta docveta</pre>
+      <p>Step-by-step guides for every system are in the <a href="https://github.com/anand34577/docveta/wiki/Database" target="_blank" rel="noopener">Docveta wiki</a>.</p>
+    </details>
+  {{end}}
+  </div>
+</main>
+</body>
+</html>
