@@ -174,17 +174,24 @@ jobs:
         shell: bash
         working-directory: workers/onnx/dist
         run: |
+          set -eu
           V="${VERSION#v}"
-          mv docveta-ocr ocr
+          zipname="docveta-ocr-$V-${{ matrix.label }}.zip"
+          # Copy into a staging folder instead of renaming: on Windows, renaming a folder
+          # of freshly built executables fails while antivirus is still scanning them.
+          mkdir -p pkg
+          cp -R docveta-ocr pkg/ocr
+          cd pkg
           if [ "${{ runner.os }}" = Windows ]; then
-            7z a -tzip -mx=7 "docveta-ocr-$V-${{ matrix.label }}.zip" ocr >/dev/null
+            7z a -tzip -mx=7 -bso0 -bsp0 "$zipname" ocr
           else
-            zip -qry "docveta-ocr-$V-${{ matrix.label }}.zip" ocr
+            zip -qry "$zipname" ocr
           fi
+          ls -la "$zipname"
       - uses: actions/upload-artifact@v7
         with:
           name: ocr-${{ matrix.label }}
-          path: workers/onnx/dist/*.zip
+          path: workers/onnx/dist/pkg/*.zip
 
   installer:
     needs: [server, ocr]
