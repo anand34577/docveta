@@ -17,6 +17,7 @@ Docveta.
 - [Check what's found and test](#check-whats-found-and-test)
 - [An engine on another computer](#an-engine-on-another-computer)
 - [Rockchip NPU](#rockchip-npu)
+- [Allwinner A733 NPU](#allwinner-a733-npu)
 - [Tesseract (100+ languages)](#tesseract)
 - [Several engines: who gets which document](#several-engines-who-gets-which-document)
 
@@ -177,6 +178,13 @@ On RK3588, RK3576 and RK3566/RK3568 boards, the dedicated NPU engine is several 
 than the processor. It runs in Docker (`docker compose --profile npu up -d`) and needs models
 converted for your chip. See
 [workers/rknn/README.md](https://github.com/anand34577/docveta/blob/main/workers/rknn/README.md).
+
+## Allwinner A733 NPU
+
+On A733 boards such as the Radxa Cubie A7A, the NPU does all the text recognition work and
+the processor stays free for other things. It also works inside a Proxmox LXC container.
+The models have to be compiled once with Allwinner's ACUITY Toolkit. See
+[workers/allwinner/README.md](https://github.com/anand34577/docveta/blob/main/workers/allwinner/README.md).
 
 ## Tesseract
 

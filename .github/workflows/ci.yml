@@ -72,6 +72,8 @@ jobs:
         working-directory: workers/sdk-python
       - run: python -m unittest test_onnx
         working-directory: workers/onnx
+      - run: python -m unittest test_allwinner
+        working-directory: workers/allwinner
 
   docker:
     runs-on: ubuntu-latest

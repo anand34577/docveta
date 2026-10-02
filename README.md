@@ -82,6 +82,7 @@ web/                  React + TypeScript app (built into internal/webui/dist and
 workers/sdk-python/   SDK for OCR workers (protocol client, rasterisation, searchable PDFs, PP-OCR)
 workers/onnx/         GPU/NPU/CPU OCR engine (PaddleOCR on ONNX Runtime), bundled as docveta-ocr
 workers/rknn/         Rockchip NPU worker (RK3588/RK3576/RK3566) + model conversion
+workers/allwinner/    Allwinner A733 NPU worker (Radxa Cubie A7A) + model conversion
 workers/tesseract/    CPU worker (Tesseract 5)
 deploy/               Docker Compose, Windows installer (Inno Setup), Linux/macOS install scripts
 docs/wiki/            user guide, published to the GitHub wiki

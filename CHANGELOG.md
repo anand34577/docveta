@@ -5,6 +5,17 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-03
+
+### Added
+- Text recognition on the NPU of Allwinner A733 boards such as the Radxa Cubie A7A
+  (`workers/allwinner`). Finding and reading text both run on the NPU, so the processor stays
+  free, which helps when the board also runs Proxmox containers. Includes a converter for
+  Allwinner's ACUITY Toolkit, `worker.py --probe` to check the NPU and models, and a setup
+  guide for Proxmox LXC. Works with VIPLite 1.13 (Armbian vendor kernels) and 2.0 (Radxa images).
+
+## [0.1.0] - 2026-10-03
+
 ### Added
 - **Zero-configuration start.** Without a database, Docveta shows a setup page in the browser
   that tests the PostgreSQL connection, can create the database, and saves the settings.
