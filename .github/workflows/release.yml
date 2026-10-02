@@ -1,5 +1,6 @@
-# Builds and publishes a Docveta release when a v* tag is pushed (or by hand from the
-# Actions tab, which publishes a draft release for testing).
+# Builds every Docveta download on each push to main (so packaging problems show up
+# early), and publishes a release when a v* tag is pushed. Running it by hand from the
+# Actions tab publishes a draft release for testing.
 #
 # Downloads it produces:
 #   docveta-<ver>-<os>-<arch>.zip|tar.gz   the server: one binary with the web app inside
@@ -12,7 +13,9 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+    paths-ignore: ["docs/wiki/**", "**.md"]
   workflow_dispatch:
     inputs:
       version:
@@ -25,21 +28,26 @@ permissions:
   id-token: write # provenance attestations
 
 env:
-  VERSION: ${{ github.event.inputs.version || github.ref_name }}
+  # Tag name for releases, the given version for manual runs, a dev number otherwise.
+  VERSION: ${{ github.event.inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || format('0.0.0-dev.{0}', github.run_number) }}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci && npm run build
         working-directory: web
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: webui
           path: internal/webui/dist
@@ -49,12 +57,12 @@ jobs:
     needs: web
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: webui
           path: internal/webui/dist
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build and package
@@ -86,11 +94,11 @@ jobs:
             fi
             echo "built $name"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: server
           path: dist/*
-      - uses: actions/upload-artifact@v4 # unpacked Windows builds for the installer job
+      - uses: actions/upload-artifact@v7 # unpacked Windows builds for the installer job
         with:
           name: server-windows
           path: build/docveta-*-windows-*
@@ -98,8 +106,8 @@ jobs:
   models:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: Convert PaddleOCR models to ONNX
@@ -115,11 +123,11 @@ jobs:
                    NotoSansKannada/hinted/ttf/NotoSansKannada-Regular.ttf; do
             curl -fsSL -o "fonts/$(basename "$f")" "$base/$f"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: models
           path: models
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: fonts
           path: fonts
@@ -137,15 +145,15 @@ jobs:
           - { runner: macos-14, label: darwin-arm64, ort: onnxruntime } # Core ML: Apple GPU / Neural Engine
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: models
           path: workers/onnx/models
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fonts
           path: fonts
@@ -173,7 +181,7 @@ jobs:
           else
             zip -qry "docveta-ocr-$V-${{ matrix.label }}.zip" ocr
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ocr-${{ matrix.label }}
           path: workers/onnx/dist/*.zip
@@ -182,12 +190,12 @@ jobs:
     needs: [server, ocr]
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: server-windows
           path: build
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ocr-windows-x64
           path: ocr
@@ -205,17 +213,18 @@ jobs:
             & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q "/DAppVersion=$v" "/DArch=$arch" "/DSourceDir=$PWD\$src" "/DOutputDir=$PWD\dist" deploy\windows\docveta.iss
             if ($LASTEXITCODE -ne 0) { throw "installer for $arch failed" }
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: installers
           path: dist/*.exe
 
   publish:
     needs: [server, ocr, installer, models]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Collect
@@ -241,7 +250,7 @@ jobs:
   images:
     needs: models
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/')
     strategy:
       matrix:
         include:
@@ -250,27 +259,27 @@ jobs:
           - { name: docveta-worker-tesseract, context: workers, file: workers/tesseract/Dockerfile, platforms: "linux/amd64,linux/arm64" }
           - { name: docveta-worker-rknn, context: workers, file: workers/rknn/Dockerfile, platforms: "linux/arm64" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: models
           path: workers/onnx/models
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
