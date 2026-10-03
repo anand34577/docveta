@@ -8,7 +8,8 @@
 ;
 ; What it does: installs Docveta to Program Files, keeps data in C:\ProgramData\Docveta,
 ; writes docveta.conf from the wizard answers, registers and starts the "Docveta" Windows
-; service, optionally opens the firewall, and finally opens the database setup page.
+; service, optionally opens the firewall, and finally opens the setup page (where the
+; built-in database is one click).
 ; Upgrades keep docveta.conf and all data.
 
 #ifndef AppVersion
@@ -104,14 +105,13 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=
 Type: files; Name: "{app}\docveta.conf"
 
 [Messages]
-FinishedLabel=Docveta is installed and running as a Windows service.%n%nIn the browser page that opens next, connect Docveta to your PostgreSQL database and create the first account.
+FinishedLabel=Docveta is installed and running as a Windows service.%n%nIn the browser page that opens next, click Save and start to use the built-in database (or connect your own PostgreSQL), then create the first account.
 
 [Code]
 var
   SettingsPage: TInputQueryWizardPage;
   DevicePage: TInputOptionWizardPage;
   NetworkPage: TInputOptionWizardPage;
-  DatabaseInfoPage: TOutputMsgWizardPage;
 
 function ConfPath(): String;
 begin
@@ -163,14 +163,6 @@ end;
 
 procedure InitializeWizard();
 begin
-  DatabaseInfoPage := CreateOutputMsgPage(wpWelcome,
-    'Before you start', 'Docveta stores its records in PostgreSQL',
-    'Docveta needs a PostgreSQL database (version 16 or newer), on this computer or another one.' + #13#10 + #13#10 +
-    'If you don''t have one yet, install PostgreSQL from https://www.postgresql.org/download/windows/ ' +
-    'and remember the password you choose for the "postgres" user. You can do that now or after this setup.' + #13#10 + #13#10 +
-    'When Docveta starts, a page opens in your browser where you enter the database details. ' +
-    'Docveta can create its own database there.');
-
   SettingsPage := CreateInputQueryPage(wpSelectComponents,
     'Web address', 'Which port should Docveta use?',
     'You open Docveta in the browser at http://localhost:<port>. Change it only if 8080 is taken.');
