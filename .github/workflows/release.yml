@@ -7,6 +7,7 @@
 #   docveta-ocr-<ver>-<os>-<arch>.zip      the OCR engine (GPU/NPU/CPU), unzip next to docveta
 #   docveta-setup-<ver>-windows-<arch>.exe Windows installer (service, OCR included on x64/arm64)
 #   docveta-ocr-models-<ver>.zip           the OCR models alone (Docker image, custom setups)
+#   docveta-worker-allwinner-<ver>-linux-arm64.tar.gz   OCR on the Allwinner A733 NPU
 #   SHA256SUMS
 # plus Docker images on ghcr.io.
 name: Release
@@ -193,6 +194,47 @@ jobs:
           name: ocr-${{ matrix.label }}
           path: workers/onnx/dist/pkg/*.zip
 
+  # OCR worker for the Allwinner A733 NPU (Radxa Cubie A7A). Allwinner's VIPLite libraries
+  # and the NPU models aren't included: users add them (see workers/allwinner/README.md).
+  allwinner:
+    needs: models # for the fonts
+    runs-on: ubuntu-22.04-arm # glibc 2.35: runs on Debian 12/13, Ubuntu 22.04+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          name: fonts
+          path: fonts
+      - name: Build
+        working-directory: workers/allwinner
+        run: |
+          set -eu
+          pip install "../sdk-python[heic,ppocr]" pyinstaller
+          python -m unittest test_allwinner
+          pyinstaller --noconfirm docveta-worker-allwinner.spec
+          out=dist/docveta-worker-allwinner
+          cp -r ../../fonts "$out/fonts"
+          mkdir -p "$out/models" "$out/viplite"
+          cp README.md "$out/README.md"
+          # No NPU here: the program must start and get as far as loading VIPLite.
+          if "$out/docveta-worker-allwinner" --probe > probe.log 2>&1; then cat probe.log; exit 1; fi
+          cat probe.log
+          grep -q "cannot load VIPLite" probe.log
+      - name: Package
+        working-directory: workers/allwinner/dist
+        run: |
+          set -eu
+          V="${VERSION#v}"
+          tar -czf "docveta-worker-allwinner-$V-linux-arm64.tar.gz" docveta-worker-allwinner
+          ls -la *.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: allwinner
+          path: workers/allwinner/dist/*.tar.gz
+
   installer:
     needs: [server, ocr]
     runs-on: windows-latest
@@ -226,7 +268,7 @@ jobs:
           path: dist/*.exe
 
   publish:
-    needs: [server, ocr, installer, models]
+    needs: [server, ocr, installer, models, allwinner]
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -240,7 +282,7 @@ jobs:
           V="${VERSION#v}"
           mkdir -p dist
           cp artifacts/server/* artifacts/installers/* dist/
-          cp artifacts/ocr-*/*.zip dist/
+          cp artifacts/ocr-*/*.zip artifacts/allwinner/*.tar.gz dist/
           (cd artifacts/models && zip -qr "../../dist/docveta-ocr-models-$V.zip" .)
           cd dist && sha256sum * > SHA256SUMS && ls -la
       - name: Create release

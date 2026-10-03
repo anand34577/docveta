@@ -9,6 +9,7 @@
 | **Mac** (Apple silicon) | `docveta-…-darwin-arm64.tar.gz` + `docveta-ocr-…-darwin-arm64.zip` |
 | Mac (Intel) | `docveta-…-darwin-x64.tar.gz` |
 | Docker | `docker compose` with `ghcr.io/anand34577/docveta` (see the wiki) |
+| OCR on an Allwinner A733 board's NPU (Radxa Cubie A7A) | `docveta-worker-allwinner-…-linux-arm64.tar.gz`, set up as described in [its guide](https://github.com/anand34577/docveta/blob/main/workers/allwinner/README.md) |
 
 Docveta needs **PostgreSQL 16 or newer**. On first start a page in your browser asks for the
 database details.

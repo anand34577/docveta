@@ -5,6 +5,13 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-03
+
+### Added
+- `docveta-worker-allwinner-<version>-linux-arm64.tar.gz`: the Allwinner NPU worker as a ready
+  program, so the board needs no git checkout or Python. Add Allwinner's two VIPLite
+  libraries and your converted models next to it (see `workers/allwinner/README.md`).
+
 ### Fixed
 - Allwinner worker: the setup guide now says to use VIPLite 2.0 on every A733, Armbian's
   vendor kernel included (its driver reports 1.13.0 in sysfs, but the 1.13 libraries don't

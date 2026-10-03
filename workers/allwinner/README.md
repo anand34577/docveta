@@ -83,34 +83,45 @@ The driver sets the NPU clock itself. If the host has an NPU entry under
 
 ## 3. Install in the container (Debian 12 or 13, arm64)
 
-```bash
-apt update && apt install -y python3-venv git fonts-noto-core fonts-dejavu-core
-git clone --depth 1 https://github.com/anand34577/docveta.git /opt/docveta-src
-git clone --depth 1 https://github.com/ZIFENG278/ai-sdk.git /opt/ai-sdk
-python3 -m venv /opt/docveta-worker
-/opt/docveta-worker/bin/pip install "/opt/docveta-src/workers/sdk-python[heic,ppocr]"
-mkdir -p /opt/docveta-worker/models
-```
-
-Copy the converted `models/` folder into `/opt/docveta-worker/models`.
-
-The A733 driver is VIPLite 2.0, in Radxa's image and in Armbian's `vendor-sun60iw2` kernel,
-so use the `v2.0` folder of `ai-sdk`. Don't go by `/sys/module/vipcore/version`: it says
-1.13.0 even on a 2.0 driver. The `v1.13` libraries fail with `fail to read device vipcore`.
-
-Before connecting to Docveta, check that the NPU and models work:
+Download the worker from the [releases page](https://github.com/anand34577/docveta/releases)
+(`docveta-worker-allwinner-<version>-linux-arm64.tar.gz`). It doesn't need Python.
 
 ```bash
-cd /opt/docveta-src/workers/allwinner
-DOCVETA_MODELS_DIR=/opt/docveta-worker/models \
-DOCVETA_VIPLITE_DIR=/opt/ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v2.0 \
-/opt/docveta-worker/bin/python worker.py --probe
+VER=0.2.1
+curl -fL "https://github.com/anand34577/docveta/releases/download/v$VER/docveta-worker-allwinner-$VER-linux-arm64.tar.gz" | tar -xz -C /opt
 ```
 
-The first line shows the VIPLite version (2.0.x) and the number of NPU cores. Next comes one line per
-model with its input and output formats and how long one run takes, and `NPU OK` at the end.
-If no models are installed yet, the probe stops after the first line. That's still a useful
-test that the library and driver work together.
+That gives you `/opt/docveta-worker-allwinner/` with the program and three folders:
+
+| Folder | What goes in it |
+|---|---|
+| `viplite/` | Allwinner's two VIPLite 2.0 libraries. They aren't in the download because they can't be redistributed. |
+| `models/` | The models you converted in step 1. |
+| `fonts/` | Already filled. These fonts are used for the text layer of searchable PDFs. |
+
+Get the libraries from Radxa's `ai-sdk` repository:
+
+```bash
+cd /opt/docveta-worker-allwinner/viplite
+base=https://github.com/ZIFENG278/ai-sdk/raw/main/viplite-tina/lib/aarch64-none-linux-gnu/v2.0
+curl -fLO "$base/libNBGlinker.so" && curl -fLO "$base/libVIPhal.so"
+```
+
+Use the `v2.0` libraries even if `/sys/module/vipcore/version` on the host says 1.13.0. The
+A733 driver is 2.0 in both Radxa's image and Armbian's `vendor-sun60iw2` kernel. The `v1.13`
+libraries fail with `fail to read device vipcore`.
+
+Copy the converted models into `/opt/docveta-worker-allwinner/models/`, then check that the
+NPU and models work:
+
+```bash
+/opt/docveta-worker-allwinner/docveta-worker-allwinner --probe
+```
+
+The first line shows the VIPLite version (2.0.x) and the number of NPU cores. Next comes one
+line per model with its input and output formats and how long one run takes, and `NPU OK` at
+the end. Without models the probe stops after the first line, which still shows that the
+library and driver work together.
 
 Add a worker in Docveta (*Administration → Processing → Add worker*) to get a token, and
 create `/etc/docveta-worker.env`:
@@ -118,8 +129,6 @@ create `/etc/docveta-worker.env`:
 ```
 DOCVETA_URL=https://docs.example.com
 DOCVETA_WORKER_TOKEN=dvt_wrk_...
-DOCVETA_MODELS_DIR=/opt/docveta-worker/models
-DOCVETA_VIPLITE_DIR=/opt/ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v2.0
 ```
 
 Then `/etc/systemd/system/docveta-worker.service`:
@@ -132,8 +141,7 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/docveta-worker.env
-WorkingDirectory=/opt/docveta-src/workers/allwinner
-ExecStart=/opt/docveta-worker/bin/python worker.py
+ExecStart=/opt/docveta-worker-allwinner/docveta-worker-allwinner
 Restart=on-failure
 RestartSec=5
 # Other containers share the CPU; give them priority.
@@ -147,6 +155,22 @@ WantedBy=multi-user.target
 systemctl daemon-reload && systemctl enable --now docveta-worker
 journalctl -u docveta-worker -f
 ```
+
+To update later, unpack a newer download over `/opt/docveta-worker-allwinner`. Your
+`viplite/` and `models/` files stay where they are.
+
+### From source instead
+
+```bash
+apt install -y python3-venv git
+git clone --depth 1 https://github.com/anand34577/docveta.git /opt/docveta-src
+python3 -m venv /opt/docveta-venv
+/opt/docveta-venv/bin/pip install "/opt/docveta-src/workers/sdk-python[heic,ppocr]"
+```
+
+Run `/opt/docveta-venv/bin/python /opt/docveta-src/workers/allwinner/worker.py` instead of
+the program. Point it at the libraries and models with `DOCVETA_VIPLITE_DIR` and
+`DOCVETA_MODELS_DIR`, and install `fonts-noto-core` for searchable PDFs.
 
 ## Tuning
 
@@ -173,8 +197,8 @@ journalctl -u docveta-worker -f
 | Problem | What to do |
 |---|---|
 | `/dev/vipcore not found` | The host kernel has no NPU driver, or the device isn't passed to the container (`pct set … -dev0`). |
-| `cannot load VIPLite` | Point `DOCVETA_VIPLITE_DIR` at `ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v2.0`. |
-| `fail to read device vipcore`, `vip_init failed (VIPLite status -2)` | Those are the 1.13 libraries. Use the `v2.0` folder. |
+| `cannot load VIPLite` | `libNBGlinker.so` and `libVIPhal.so` are missing from `viplite/` (or from `DOCVETA_VIPLITE_DIR`). |
+| `fail to read device vipcore`, `vip_init failed (VIPLite status -2)` | Those are the 1.13 libraries. Use the ones from the `v2.0` folder. |
 | `load … failed (VIPLite status -10)` | The driver can't run this model file. It was probably compiled for a different NPU. The A733 target is `VIP9000NANODI_PLUS_PID0X1000003B`. |
 | Boxes look right but the text is garbled | Recompile the reading models with `--rec-dtype bf16`. |
 | ACUITY fails to import a recognition model | The English model (PP-OCRv4) uses operations some ACUITY versions don't support. Try a newer ACUITY image, or start with `devanagari`, `ta`, `te` or `ka` (PP-OCRv3). |

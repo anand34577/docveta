@@ -183,7 +183,8 @@ converted for your chip. See
 
 On A733 boards such as the Radxa Cubie A7A, the NPU does all the text recognition work and
 the processor stays free for other things. It also works inside a Proxmox LXC container.
-The models have to be compiled once with Allwinner's ACUITY Toolkit. See
+Download `docveta-worker-allwinner-…-linux-arm64.tar.gz` from the releases page. The models
+have to be compiled once with Allwinner's ACUITY Toolkit. See
 [workers/allwinner/README.md](https://github.com/anand34577/docveta/blob/main/workers/allwinner/README.md).
 
 ## Tesseract
