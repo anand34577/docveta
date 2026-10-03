@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
 import os
 import platform
 import subprocess
@@ -39,12 +38,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-import cv2
 import numpy as np
 from PIL import Image
 
 from docveta_worker import Engine, EngineError, Line, PageResult, Word, run
 from docveta_worker import ppocr
+from docveta_worker.ppocr import rec_input_float as rec_input
 
 log = logging.getLogger("docveta_worker.onnx")
 
@@ -52,7 +51,6 @@ DEVICES = ("auto", "gpu", "igpu", "npu", "cpu")
 DET_SIZE = 1280  # detection input on GPU/CPU (multiple of 32); larger pages are tiled
 DET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 DET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-REC_MAX_WIDTH = 3200
 
 
 def app_dir() -> str:
@@ -162,19 +160,6 @@ def det_infer(sess: Any, x: np.ndarray) -> np.ndarray:
     a = (a - DET_MEAN) / DET_STD
     a = np.ascontiguousarray(a.transpose(0, 3, 1, 2))
     return sess.run(None, {sess.get_inputs()[0].name: a})[0]
-
-
-def rec_input(crop: np.ndarray) -> tuple[np.ndarray, float]:
-    """Height 48, width padded to a multiple of 160 (few distinct shapes keep GPUs fast).
-    Returns NCHW float input and the share of the width holding the image."""
-    h, w = crop.shape[:2]
-    tw = min(REC_MAX_WIDTH, max(1, int(math.ceil(ppocr.REC_HEIGHT * w / max(h, 1)))))
-    width = max(160, int(math.ceil(tw / 160)) * 160)
-    resized = cv2.resize(crop, (tw, ppocr.REC_HEIGHT), interpolation=cv2.INTER_LINEAR)
-    a = (resized[..., ::-1].astype(np.float32) / 255.0 - 0.5) / 0.5
-    out = np.zeros((ppocr.REC_HEIGHT, width, 3), dtype=np.float32)  # zero = padding, as in PaddleOCR
-    out[:, :tw] = a
-    return np.ascontiguousarray(out.transpose(2, 0, 1)[None]), tw / width
 
 
 def recognize_page(m: Models, img: np.ndarray, script: str) -> list[Line]:

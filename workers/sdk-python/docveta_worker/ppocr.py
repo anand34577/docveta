@@ -232,6 +232,23 @@ def rec_input(crop: np.ndarray) -> tuple[np.ndarray, int, int]:
     return out[None], bucket, content_w
 
 
+REC_MAX_WIDTH = 3200
+
+
+def rec_input_float(crop: np.ndarray) -> tuple[np.ndarray, float]:
+    """Recognition input for engines that run the float models (ONNX Runtime): height 48,
+    width padded to a multiple of 160 (few distinct shapes keep GPUs fast), normalised BGR.
+    Returns NCHW float input and the share of the width holding the image."""
+    h, w = crop.shape[:2]
+    tw = min(REC_MAX_WIDTH, max(1, int(math.ceil(REC_HEIGHT * w / max(h, 1)))))
+    width = max(160, int(math.ceil(tw / 160)) * 160)
+    resized = cv2.resize(crop, (tw, REC_HEIGHT), interpolation=cv2.INTER_LINEAR)
+    a = (resized[..., ::-1].astype(np.float32) / 255.0 - 0.5) / 0.5
+    out = np.zeros((REC_HEIGHT, width, 3), dtype=np.float32)  # zero = padding, as in PaddleOCR
+    out[:, :tw] = a
+    return np.ascontiguousarray(out.transpose(2, 0, 1)[None]), tw / width
+
+
 def ctc_decode(probs: np.ndarray, charset: list[str], content_frac: float = 1.0) -> RecResult:
     """Greedy CTC decode of (T, C) probabilities with character timestep positions.
 
