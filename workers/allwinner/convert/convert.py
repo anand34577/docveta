@@ -3,7 +3,7 @@
 Two steps, both on an x86_64 Linux PC (not on the board):
 
 1. Fixed-shape ONNX models and calibration images (a Python venv):
-       pip install paddlepaddle "paddle2onnx==1.3.1" onnx onnxsim pillow
+       pip install paddlepaddle "paddle2onnx==1.3.1" onnx "onnxsim==0.4.36" pillow setuptools
        python convert.py onnx --scripts en devanagari --calib-dir ~/Scans --work work
 
 2. NBG compilation inside Allwinner's ACUITY Toolkit container (ubuntu-npu:v2.0.10.x):
@@ -18,7 +18,8 @@ Choices:
     on the NPU's integer units. --rec-dtype uint8 is faster but raises character errors;
     bf16 is the most accurate and slowest.
   * The NPU needs static shapes: recognition is compiled once per width in REC_WIDTHS.
-  * Mean/std normalisation is compiled into the models, so the worker feeds raw RGB pixels.
+  * The models expect normalised input. ACUITY uses the mean/std below only to calibrate
+    quantisation, and the worker normalises each tile with a lookup table.
 """
 
 from __future__ import annotations
@@ -113,7 +114,7 @@ def pegasus() -> list[str]:
 
 
 def set_inputmeta(d: str, name: str, mean: list[float], std: list[float]) -> None:
-    """RGB input, normalisation compiled in (same approach as ai-sdk scripts/awnet_normalize.py)."""
+    """Mean/std for calibration (same approach as ai-sdk scripts/awnet_normalize.py)."""
     from acuitylib.vsi_nn import VSInn
 
     nn = VSInn()

@@ -20,7 +20,7 @@ you'll be processing:
 ```bash
 cd workers/allwinner/convert
 python -m venv .venv && . .venv/bin/activate
-pip install paddlepaddle "paddle2onnx==1.3.1" onnx onnxsim pillow
+pip install paddlepaddle "paddle2onnx==1.3.1" onnx "onnxsim==0.4.36" pillow setuptools
 python convert.py onnx --scripts en devanagari --calib-dir ~/Scans --work work
 ```
 
@@ -87,7 +87,7 @@ Download the worker from the [releases page](https://github.com/anand34577/docve
 (`docveta-worker-allwinner-<version>-linux-arm64.tar.gz`). It doesn't need Python.
 
 ```bash
-VER=0.2.1
+VER=0.2.2
 curl -fL "https://github.com/anand34577/docveta/releases/download/v$VER/docveta-worker-allwinner-$VER-linux-arm64.tar.gz" | tar -xz -C /opt
 ```
 
@@ -186,7 +186,9 @@ the program. Point it at the libraries and models with `DOCVETA_VIPLITE_DIR` and
   pieces of a line that were split between tiles are joined again. Text lines are read at
   a height of 48 pixels, in the narrowest of four widths (320, 640, 960, 1280) that fits.
 - Each model's input and output memory is allocated by the driver once and used directly
-  from Python, so a tile is written straight into NPU memory without extra copies.
+  from Python. PP-OCR needs normalised input in BGR order, and the NPU wants that quantised.
+  The worker does both with one 256-entry lookup table per colour channel, written straight
+  into NPU memory, so it costs no more than copying the tile.
 - The NPU is locked only while a model runs, not for a whole page, so two pages can take
   turns on it.
 - Cutting and post-processing use the same code (`docveta_worker.ppocr`) as the Rockchip and

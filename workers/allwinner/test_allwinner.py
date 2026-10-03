@@ -52,5 +52,27 @@ class Quantisation(unittest.TestCase):
         np.testing.assert_array_equal(out[0, 1], nhwc[0, :, :, 1])
 
 
+class InputNormalisation(unittest.TestCase):
+    """The NPU input must equal the ONNX engine's PP-OCR preprocessing (BGR, normalised)."""
+
+    img = np.random.default_rng(1).integers(0, 256, (1, 6, 8, 3), dtype=np.uint8)
+
+    def npu_input(self, norm, dtype, fmt, quant, **q):
+        out = np.zeros((1, 3, 6, 8), dtype=dtype)
+        w.write_input(w.input_lut(norm, np.dtype(dtype), fmt, quant, **q), self.img, out)
+        return w.dequantize(out, fmt, quant, **q)
+
+    def test_detection_uint8(self):  # quantisation reported by det.nb on a Cubie A7A
+        got = self.npu_input(w.DET_NORM, np.uint8, w.FMT_UINT8, w.Q_AFFINE, scale=0.0186584, zero_point=114)
+        bgr = self.img[..., ::-1].astype(np.float32) / 255
+        ref = ((bgr - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]).transpose(0, 3, 1, 2)
+        np.testing.assert_allclose(got, ref, atol=0.0186584 / 2 + 1e-6)
+
+    def test_recognition_int16(self):  # rec_*.nb on a Cubie A7A: int16, fl=15
+        got = self.npu_input(w.REC_NORM, np.int16, w.FMT_INT16, w.Q_DFP, fl=15)
+        ref = ((self.img[..., ::-1].astype(np.float32) / 255 - 0.5) / 0.5).transpose(0, 3, 1, 2)
+        np.testing.assert_allclose(got, ref, atol=2 ** -15 + 1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()
