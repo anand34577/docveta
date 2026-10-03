@@ -5,6 +5,20 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-03
+
+### Fixed
+- Allwinner worker: text recognition on the NPU returned garbage, because the compiled models
+  expect normalised input in BGR order and the worker sent raw RGB pixels. The worker now
+  normalises each tile with a lookup table, matching the ONNX engine. Models built with 0.2.1
+  keep working; no reconversion needed.
+- `docveta-worker-allwinner --probe` now also reads a rendered test image and fails if no text
+  comes back, so a run that's fast but wrong no longer passes.
+- Model converters (Allwinner and Rockchip): onnxsim 0.7 corrupts the PP-OCR recognition
+  models when fixing their input size. The install instructions now pin `onnxsim==0.4.36`, and
+  the converter checks each model and stops with a clear message instead of failing later in
+  the NPU toolkit. They also list `setuptools`, which Paddle needs on Python 3.12+.
+
 ## [0.2.1] - 2026-10-03
 
 ### Added
