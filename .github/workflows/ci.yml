@@ -147,7 +147,7 @@ jobs:
           }
           function WaitFor($url, $pattern) {
             for ($i = 0; $i -lt 90; $i++) {
-              try { $r = Invoke-WebRequest -UseBasicParsing $url -TimeoutSec 5; if ($r.Content -match $pattern) { return $true } } catch {}
+              try { $r = Invoke-WebRequest -UseBasicParsing $url -TimeoutSec 5; if ($r.StatusCode -eq 200 -and (-not $pattern -or [string]$r.Content -match $pattern)) { return $true } } catch {} # YAML arrives as bytes: check the status
               Start-Sleep 2
             }
             return $false
@@ -159,11 +159,11 @@ jobs:
           try { $r = Invoke-WebRequest -UseBasicParsing -Method Post http://localhost:8080/ -Body @{ kind = 'builtin'; action = 'save' } -TimeoutSec 600 }
           catch { Fail "setup request failed: $_" }
           if ($r.Content -notmatch 'Starting Docveta') { Fail ("built-in database setup failed: " + ([regex]::Match($r.Content, 'class="msg err"[^>]*>([^<]*)').Groups[1].Value)) }
-          if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml 'openapi')) { Fail 'Docveta did not start on the built-in database' }
+          if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml '')) { Fail 'Docveta did not start on the built-in database' }
           if (-not (Select-String -Path $log -Pattern 'using the bundled PostgreSQL' -Quiet)) { Fail 'the bundled PostgreSQL was not used' }
           if (Test-Path "$env:ProgramFiles\Docveta\data") { Fail 'data was written next to the program instead of ProgramData' }
           Restart-Service Docveta
-          if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml 'openapi')) { Fail 'Docveta did not come back after a restart' }
+          if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml '')) { Fail 'Docveta did not come back after a restart' }
           Start-Process "$env:ProgramFiles\Docveta\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           Start-Sleep 5
           if (Get-Process postgres -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'C:\ProgramData\Docveta\*' }) { Fail 'PostgreSQL is still running after uninstalling' }
