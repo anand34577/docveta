@@ -37,6 +37,12 @@ APP_DIR = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else o
 MODELS_DIR = os.environ.get("DOCVETA_MODELS_DIR") or os.path.join(APP_DIR, "models")
 LANG_SCRIPT = ppocr.LANG_SCRIPT
 
+# PP-OCR input normalisation, as in the ONNX engine: BGR channel order, then
+# detection (x - mean) / std with ImageNet values, recognition (x - 127.5) / 127.5.
+# ACUITY keeps it out of the compiled model, so the worker applies it (see Net.lut).
+DET_NORM = (np.array([0.485, 0.456, 0.406]) * 255, np.array([0.229, 0.224, 0.225]) * 255)
+REC_NORM = (np.full(3, 127.5), np.full(3, 127.5))
+
 # ponytail: the NPU does the heavy lifting; one OpenCV thread per page keeps the shared CPU free.
 cv2.setNumThreads(1)
 
@@ -70,7 +76,7 @@ class BufferParams(C.Structure):  # vip_buffer_create_params_t
 def quantize(x: np.ndarray, out: np.ndarray, fmt: int, quant: int, scale: float = 1.0, zero_point: int = 0, fl: int = 0) -> None:
     """Writes real values x into the NPU tensor out (its dtype/quantisation)."""
     if out.dtype == x.dtype and (quant == Q_NONE or (quant == Q_AFFINE and scale == 1.0 and zero_point == 0) or (quant == Q_DFP and fl == 0)):
-        np.copyto(out, x)  # raw uint8 pixels into a uint8 input: the usual detection case
+        np.copyto(out, x)  # nothing to convert
         return
     v = x.astype(np.float32)
     if quant == Q_AFFINE:
@@ -94,6 +100,22 @@ def dequantize(a: np.ndarray, fmt: int, quant: int, scale: float = 1.0, zero_poi
     elif quant == Q_DFP:
         f *= np.float32(2.0 ** -fl)
     return f
+
+
+def input_lut(norm: tuple[np.ndarray, np.ndarray], dtype: np.dtype, fmt: int, quant: int,
+              scale: float = 1.0, zero_point: int = 0, fl: int = 0) -> np.ndarray:
+    """(3, 256) table: pixel value -> normalised, quantised input value for each BGR channel."""
+    mean, std = norm
+    lut = np.empty((3, 256), dtype=dtype)
+    for c in range(3):
+        quantize(((np.arange(256) - mean[c]) / std[c]).astype(np.float32), lut[c], fmt, quant, scale, zero_point, fl)
+    return lut
+
+
+def write_input(lut: np.ndarray, x: np.ndarray, out: np.ndarray) -> None:
+    """(1, H, W, 3) uint8 RGB -> (1, 3, H, W) BGR planes of the NPU input, through the table."""
+    for c in range(3):
+        np.take(lut[c], x[0, :, :, 2 - c], out=out[0, c], mode="clip")
 
 
 class VipError(RuntimeError):
@@ -193,7 +215,7 @@ class Tensor:
 class Net:
     """A prepared NBG network with its I/O buffers. run() is serialised per network."""
 
-    def __init__(self, vip: VipLite, path: str, core: Optional[int]) -> None:
+    def __init__(self, vip: VipLite, path: str, core: Optional[int], norm: tuple[np.ndarray, np.ndarray]) -> None:
         lib = vip.lib
         self.vip, self.path, self.lock = vip, path, threading.Lock()
         self.net = C.c_void_p()
@@ -210,12 +232,18 @@ class Net:
             vip.check(lib.vip_set_input(self.net, C.c_uint32(i), t.buf), "vip_set_input")
         for i, t in enumerate(self.outputs):
             vip.check(lib.vip_set_output(self.net, C.c_uint32(i), t.buf), "vip_set_output")
+        # Pixel value -> normalised, quantised input value, per BGR channel: writing a tile is
+        # then one table lookup per channel instead of float maths on every pixel.
+        t = self.inputs[0]
+        if len(t.shape) != 4 or t.shape[1] != 3:
+            raise SystemExit(f"{os.path.basename(path)} input is {t.shape}; expected (1, 3, H, W). Re-convert with convert/convert.py")
+        self.lut = input_lut(norm, t.array.dtype, t.fmt, t.quant, t.scale, t.zero_point, t.fl)
 
     def run(self, x: np.ndarray) -> np.ndarray:
-        """x: real-valued NCHW input (raw pixels; normalisation is compiled in). Returns output 0 as float32."""
+        """x: (1, H, W, 3) uint8 RGB. Returns output 0 as float32."""
         lib, t, o = self.vip.lib, self.inputs[0], self.outputs[0]
         with self.lock:
-            quantize(x.reshape(t.shape), t.array, t.fmt, t.quant, t.scale, t.zero_point, t.fl)
+            write_input(self.lut, x, t.array)
             self.vip.check(lib.vip_flush_buffer(t.buf, OPER_FLUSH), "flush input")
             self.vip.check(lib.vip_run_network(self.net), f"run {os.path.basename(self.path)}")
             self.vip.check(lib.vip_flush_buffer(o.buf, OPER_INVALIDATE), "invalidate output")
@@ -226,22 +254,23 @@ class CoreModels:
     """det + all rec networks loaded for one NPU core."""
 
     def __init__(self, vip: VipLite, model_dir: str, scripts: list[str], core: Optional[int]) -> None:
-        self.det = Net(vip, os.path.join(model_dir, "det.nb"), core)
+        self.det = Net(vip, os.path.join(model_dir, "det.nb"), core, DET_NORM)
         shape = self.det.inputs[0].shape
         if len(shape) != 4 or shape[1] != 3 or shape[2] != shape[3]:
             raise SystemExit(f"det.nb input is {shape}; expected (1, 3, S, S). Re-convert with convert/convert.py")
         self.det_size = shape[2]
-        self.rec = {s: {w: Net(vip, os.path.join(model_dir, f"rec_{s}_{w}.nb"), core) for w in ppocr.REC_WIDTHS} for s in scripts}
+        self.rec = {s: {w: Net(vip, os.path.join(model_dir, f"rec_{s}_{w}.nb"), core, REC_NORM) for w in ppocr.REC_WIDTHS}
+                    for s in scripts}
         self.charsets = {s: ppocr.load_charset(os.path.join(model_dir, f"dict_{s}.txt")) for s in scripts}
 
     def det_infer(self, x: np.ndarray) -> np.ndarray:  # (1, S, S, 3) uint8 -> (1, 1, S, S)
-        return self.det.run(x.transpose(0, 3, 1, 2)).reshape(1, 1, self.det_size, self.det_size)
+        return self.det.run(x).reshape(1, 1, self.det_size, self.det_size)
 
     def rec_infer(self, script: str):
         nets = self.rec[script]
 
         def infer(x: np.ndarray, bucket: int) -> np.ndarray:  # (1, 48, W, 3) uint8 -> (1, T, C)
-            out = nets[bucket].run(x.transpose(0, 3, 1, 2))
+            out = nets[bucket].run(x)
             return out.reshape((1,) + out.shape[-2:])
 
         return infer
@@ -311,7 +340,7 @@ class AllwinnerEngine(Engine):
 
 
 def probe() -> None:
-    """Loads every model on the NPU, prints its tensors and times one inference."""
+    """Loads every model on the NPU, times each one and reads a rendered test image."""
     logging.basicConfig(level="INFO", format="%(message)s")
     vip = VipLite()
     v = vip.version
@@ -323,13 +352,33 @@ def probe() -> None:
     m = e.cores[0]
     nets = [m.det] + [n for per in m.rec.values() for n in per.values()]
     for n in nets:
-        x = np.zeros(n.inputs[0].shape, dtype=np.uint8)
+        nn, c, h, w = n.inputs[0].shape
+        x = np.full((nn, h, w, c), 255, dtype=np.uint8)
         n.run(x)  # warm-up
         t = time.perf_counter()
         for _ in range(5):
             n.run(x)
         ms = (time.perf_counter() - t) / 5 * 1000
         print(f"{os.path.basename(n.path):24} in {n.inputs[0].describe():50} out {n.outputs[0].describe():50} {ms:7.1f} ms")
+
+    # Speed alone proves little: read back a rendered test image.
+    from PIL import ImageDraw, ImageFont
+
+    img = Image.new("RGB", (1240, 400), "white")
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype(os.path.join(os.environ.get("DOCVETA_FONTS_DIR", ""), "NotoSans-Regular.ttf"), 44)
+    except OSError:
+        font = ImageFont.load_default(size=44)
+    for i, line in enumerate(["Electricity bill dated 05/08/2026", "Amount due: 1842.00 INR"]):
+        draw.text((60, 80 + i * 120), line, fill="black", font=font)
+    t = time.perf_counter()
+    res = e.recognize(m, img, 1, ["en"])
+    print(f"Test image: {len(res.lines)} line(s) in {(time.perf_counter() - t) * 1000:.0f} ms")
+    for line in res.lines:
+        print(f"  {line.confidence:.2f}  {line.text}")
+    if not res.lines:
+        raise SystemExit("the NPU ran, but no text was recognised in the test image")
     print("NPU OK")
 
 
