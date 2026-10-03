@@ -5,6 +5,12 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Allwinner worker: the setup guide now says to use VIPLite 2.0 on every A733, Armbian's
+  vendor kernel included (its driver reports 1.13.0 in sysfs, but the 1.13 libraries don't
+  work with it). The worker no longer tries to set the NPU clock unless
+  `DOCVETA_NPU_CLOCK_PERCENT` is set, which avoids a warning at every start.
+
 ## [0.2.0] - 2026-10-03
 
 ### Added
@@ -12,7 +18,7 @@ All notable changes to Docveta. The format follows
   (`workers/allwinner`). Finding and reading text both run on the NPU, so the processor stays
   free, which helps when the board also runs Proxmox containers. Includes a converter for
   Allwinner's ACUITY Toolkit, `worker.py --probe` to check the NPU and models, and a setup
-  guide for Proxmox LXC. Works with VIPLite 1.13 (Armbian vendor kernels) and 2.0 (Radxa images).
+  guide for Proxmox LXC.
 
 ## [0.1.0] - 2026-10-03
 

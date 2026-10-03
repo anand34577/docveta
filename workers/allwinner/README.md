@@ -58,11 +58,10 @@ host:
 
 ```bash
 ls -l /dev/vipcore
-cat /sys/module/vipcore/version
 ```
 
 `vipcore` is usually built into the kernel, so `lsmod` and `dmesg` may show nothing even when
-it works. Note the driver version for step 3.
+it works.
 
 Then give the container access to the device. Proxmox VE 8.1 and newer can do this directly,
 and it works for unprivileged containers too:
@@ -79,9 +78,8 @@ lxc.cgroup2.devices.allow: c <major>:* rwm
 lxc.mount.entry: /dev/vipcore dev/vipcore none bind,optional,create=file
 ```
 
-The worker asks the driver to run the NPU at full clock when it starts. If the host also has
-an NPU entry under `/sys/class/devfreq/`, set its governor to `performance` on the host,
-because a container can't change it.
+The driver sets the NPU clock itself. If the host has an NPU entry under
+`/sys/class/devfreq/`, you can set its governor to `performance` there; a container can't.
 
 ## 3. Install in the container (Debian 12 or 13, arm64)
 
@@ -96,24 +94,20 @@ mkdir -p /opt/docveta-worker/models
 
 Copy the converted `models/` folder into `/opt/docveta-worker/models`.
 
-The `ai-sdk` repository has two versions of the VIPLite library. Use the one that matches the
-driver version from step 2:
-
-| Driver version | `DOCVETA_VIPLITE_DIR` |
-|---|---|
-| 1.13.x (Armbian `vendor-sun60iw2`) | `/opt/ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v1.13` |
-| 2.0.x (Radxa image) | `/opt/ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v2.0` |
+The A733 driver is VIPLite 2.0, in Radxa's image and in Armbian's `vendor-sun60iw2` kernel,
+so use the `v2.0` folder of `ai-sdk`. Don't go by `/sys/module/vipcore/version`: it says
+1.13.0 even on a 2.0 driver. The `v1.13` libraries fail with `fail to read device vipcore`.
 
 Before connecting to Docveta, check that the NPU and models work:
 
 ```bash
 cd /opt/docveta-src/workers/allwinner
 DOCVETA_MODELS_DIR=/opt/docveta-worker/models \
-DOCVETA_VIPLITE_DIR=/opt/ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v1.13 \
+DOCVETA_VIPLITE_DIR=/opt/ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v2.0 \
 /opt/docveta-worker/bin/python worker.py --probe
 ```
 
-The first line shows the VIPLite version and the number of NPU cores. Next comes one line per
+The first line shows the VIPLite version (2.0.x) and the number of NPU cores. Next comes one line per
 model with its input and output formats and how long one run takes, and `NPU OK` at the end.
 If no models are installed yet, the probe stops after the first line. That's still a useful
 test that the library and driver work together.
@@ -125,7 +119,7 @@ create `/etc/docveta-worker.env`:
 DOCVETA_URL=https://docs.example.com
 DOCVETA_WORKER_TOKEN=dvt_wrk_...
 DOCVETA_MODELS_DIR=/opt/docveta-worker/models
-DOCVETA_VIPLITE_DIR=/opt/ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v1.13
+DOCVETA_VIPLITE_DIR=/opt/ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v2.0
 ```
 
 Then `/etc/systemd/system/docveta-worker.service`:
@@ -159,7 +153,7 @@ journalctl -u docveta-worker -f
 | Setting | Default | Notes |
 |---|---|---|
 | `DOCVETA_CONCURRENCY` | 2 (NPU cores + 1) | How many pages the worker handles at once. With 2, one page uses the NPU while the CPU prepares the next one. `1` uses the least CPU, but the NPU then waits between steps. |
-| `DOCVETA_NPU_CLOCK_PERCENT` | 100 | NPU clock the worker asks for at start. |
+| `DOCVETA_NPU_CLOCK_PERCENT` | not set | Asks VIPLite for this NPU clock (1–100). Allwinner's builds usually don't allow it, and the driver manages the clock anyway. |
 | Container CPU cores | | 1–2 is plenty. Turning PDFs into images and building the searchable PDF are the main CPU work. |
 
 ## How it works
@@ -179,8 +173,8 @@ journalctl -u docveta-worker -f
 | Problem | What to do |
 |---|---|
 | `/dev/vipcore not found` | The host kernel has no NPU driver, or the device isn't passed to the container (`pct set … -dev0`). |
-| `cannot load VIPLite` | Point `DOCVETA_VIPLITE_DIR` at the `ai-sdk` folder for your driver version (see step 3). |
-| `vip_init failed` or `buffer smaller than tensor` | The library and driver versions don't match. Compare with `cat /sys/module/vipcore/version` on the host. |
-| `load … failed (VIPLite status -10)` | The driver can't run this model file. Either it was compiled for a different NPU (the A733 target is `VIP9000NANODI_PLUS_PID0X1000003B`), or a 1.13 driver is rejecting models from the 2.0 ACUITY image. In that case use an older ACUITY image or a kernel with a 2.0 driver. |
+| `cannot load VIPLite` | Point `DOCVETA_VIPLITE_DIR` at `ai-sdk/viplite-tina/lib/aarch64-none-linux-gnu/v2.0`. |
+| `fail to read device vipcore`, `vip_init failed (VIPLite status -2)` | Those are the 1.13 libraries. Use the `v2.0` folder. |
+| `load … failed (VIPLite status -10)` | The driver can't run this model file. It was probably compiled for a different NPU. The A733 target is `VIP9000NANODI_PLUS_PID0X1000003B`. |
 | Boxes look right but the text is garbled | Recompile the reading models with `--rec-dtype bf16`. |
 | ACUITY fails to import a recognition model | The English model (PP-OCRv4) uses operations some ACUITY versions don't support. Try a newer ACUITY image, or start with `devanagari`, `ta`, `te` or `ka` (PP-OCRv3). |
