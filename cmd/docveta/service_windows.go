@@ -117,6 +117,7 @@ func serviceCmd(args []string) error {
 		}
 		defer s.Close()
 		_, _ = s.Control(svc.Stop)
+		waitStopped(s) // so the uninstaller doesn't remove files while Docveta shuts down its database
 		if err := s.Delete(); err != nil {
 			return err
 		}
@@ -140,9 +141,20 @@ func serviceCmd(args []string) error {
 		if _, err := s.Control(svc.Stop); err != nil {
 			return err
 		}
-		fmt.Println("Service \"Docveta\" stopping.")
+		waitStopped(s)
+		fmt.Println("Service \"Docveta\" stopped.")
 	default:
 		return errors.New("usage: docveta service install|uninstall|start|stop")
 	}
 	return nil
+}
+
+// waitStopped waits up to a minute for the service to stop.
+func waitStopped(s *mgr.Service) {
+	for i := 0; i < 60; i++ {
+		if st, err := s.Query(); err != nil || st.State == svc.Stopped {
+			return
+		}
+		time.Sleep(time.Second)
+	}
 }

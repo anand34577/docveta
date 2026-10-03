@@ -256,7 +256,8 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  if CurUninstallStep = usPostUninstall then
-    MsgBox('Docveta was removed. Your documents and settings are still in ' + ExpandConstant('{commonappdata}\Docveta') +
-      ' and your PostgreSQL database. Delete them yourself if you no longer need them.', mbInformation, MB_OK);
+  { Not in silent uninstalls: a plain message box would wait for a click nobody can make. }
+  if (CurUninstallStep = usPostUninstall) and not UninstallSilent() then
+    MsgBox('Docveta was removed. Your documents, settings and the built-in database are still in ' +
+      ExpandConstant('{commonappdata}\Docveta') + '. Delete that folder yourself if you no longer need it.', mbInformation, MB_OK);
 end;
