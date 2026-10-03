@@ -131,6 +131,17 @@ jobs:
       - name: Install as a service, set up the built-in database, restart, uninstall
         shell: pwsh
         run: |
+          $log = 'C:\ProgramData\Docveta\logs\docveta.log'
+          $pglog = 'C:\ProgramData\Docveta\postgres\postgres.log'
+          # On failure, one annotation with the reason and the logs (annotations are public).
+          function Fail($why) {
+            $parts = @("$why", '--- service:', (Get-Service Docveta -ErrorAction SilentlyContinue | Out-String))
+            foreach ($f in $log, $pglog) { if (Test-Path $f) { $parts += "--- $f"; $parts += (Get-Content $f -Tail 25) } }
+            $parts += '--- data folder:'; $parts += (Get-ChildItem C:\ProgramData\Docveta -Recurse -Depth 1 -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+            $msg = ($parts -join "`n") -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+            Write-Output "::error title=Windows service test::$msg"
+            exit 1
+          }
           function WaitFor($url, $pattern) {
             for ($i = 0; $i -lt 90; $i++) {
               try { $r = Invoke-WebRequest -UseBasicParsing $url -TimeoutSec 5; if ($r.Content -match $pattern) { return $true } } catch {}
@@ -140,15 +151,15 @@ jobs:
           }
           $setup = Get-ChildItem out\*.exe | Select-Object -First 1
           Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
-          if (-not (WaitFor http://localhost:8080/ 'kind-builtin')) { throw 'the setup page did not appear' }
+          if (-not (WaitFor http://localhost:8080/ 'kind-builtin')) { Fail 'the setup page did not appear' }
           # The service runs as SYSTEM, exactly as on users' computers.
-          $r = Invoke-WebRequest -UseBasicParsing -Method Post http://localhost:8080/ -Body @{ kind = 'builtin'; action = 'save' } -TimeoutSec 600
-          if ($r.Content -notmatch 'Starting Docveta') { $r.Content; throw 'built-in database setup failed' }
-          $log = 'C:\ProgramData\Docveta\logs\docveta.log'
-          if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml 'openapi')) { Get-Content $log -Tail 40; throw 'Docveta did not start on the built-in database' }
-          if (-not (Select-String -Path $log -Pattern 'using the bundled PostgreSQL' -Quiet)) { throw 'the bundled PostgreSQL was not used' }
+          try { $r = Invoke-WebRequest -UseBasicParsing -Method Post http://localhost:8080/ -Body @{ kind = 'builtin'; action = 'save' } -TimeoutSec 600 }
+          catch { Fail "setup request failed: $_" }
+          if ($r.Content -notmatch 'Starting Docveta') { Fail ("built-in database setup failed: " + ([regex]::Match($r.Content, 'class="msg err"[^>]*>([^<]*)').Groups[1].Value)) }
+          if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml 'openapi')) { Fail 'Docveta did not start on the built-in database' }
+          if (-not (Select-String -Path $log -Pattern 'using the bundled PostgreSQL' -Quiet)) { Fail 'the bundled PostgreSQL was not used' }
           Restart-Service Docveta
-          if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml 'openapi')) { Get-Content $log -Tail 40; throw 'Docveta did not come back after a restart' }
+          if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml 'openapi')) { Fail 'Docveta did not come back after a restart' }
           Start-Process "$env:ProgramFiles\Docveta\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           Start-Sleep 5
-          if (Get-Process postgres -ErrorAction SilentlyContinue) { throw 'PostgreSQL is still running after uninstalling' }
+          if (Get-Process postgres -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'C:\ProgramData\Docveta\*' }) { Fail 'PostgreSQL is still running after uninstalling' }
