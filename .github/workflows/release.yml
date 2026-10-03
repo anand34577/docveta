@@ -8,6 +8,7 @@
 #   docveta-setup-<ver>-windows-<arch>.exe Windows installer (service, OCR included on x64/arm64)
 #   docveta-ocr-models-<ver>.zip           the OCR models alone (Docker image, custom setups)
 #   docveta-worker-allwinner-<ver>-linux-arm64.tar.gz   OCR on the Allwinner A733 NPU
+#   get-docveta.sh                         one-step Linux installer (server + text recognition)
 #   SHA256SUMS
 # plus Docker images on ghcr.io.
 name: Release
@@ -82,6 +83,18 @@ jobs:
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=7 go build -trimpath \
               -ldflags "-s -w -X main.version=$V" -o "$out/$exe" ./cmd/docveta
             cp LICENSE "$out/"
+            if [ "$os" = windows ] && [ "$label" != x86 ]; then
+              # PostgreSQL for the built-in database, so Windows installs work offline. Same
+              # package and checksum as internal/platform/builtindb (x64; ARM runs it emulated).
+              pg=internal/platform/builtindb/builtindb.go
+              pgv=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' $pg)
+              pgsum=$(grep '"windows/amd64"' $pg | grep -o '[0-9a-f]\{64\}')
+              jar=embedded-postgres-binaries-windows-amd64-$pgv.jar
+              mkdir -p "$out/postgres"
+              [ -f "build/$jar" ] || curl -fsSL -o "build/$jar" "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-windows-amd64/$pgv/$jar"
+              echo "$pgsum  build/$jar" | sha256sum -c --status
+              cp "build/$jar" "$out/postgres/"
+            fi
             case $os in
               windows) cp deploy/windows/README.txt "$out/README.txt" ;;
               linux)   cp deploy/linux/install.sh deploy/linux/docveta.service "$out/"; cp docs/install-unix.txt "$out/README.txt" ;;
@@ -224,6 +237,7 @@ jobs:
           cp -r ../../fonts "$out/fonts"
           mkdir -p "$out/models" "$out/viplite"
           cp ../../models/rec_*.onnx ../../models/dict_*.txt ../../models/VERSION "$out/models/"
+          cp prebuilt/det.nb "$out/models/det.nb" # compiled with ACUITY, see prebuilt/README.md
           cp README.md "$out/README.md"
           # No NPU here: the program must start and get as far as loading VIPLite.
           if "$out/docveta-worker-allwinner" --probe > probe.log 2>&1; then cat probe.log; exit 1; fi
@@ -289,6 +303,7 @@ jobs:
           mkdir -p dist
           cp artifacts/server/* artifacts/installers/* dist/
           cp artifacts/ocr-*/*.zip artifacts/allwinner/*.tar.gz dist/
+          cp deploy/linux/get-docveta.sh dist/ # releases/latest/download/get-docveta.sh
           (cd artifacts/models && zip -qr "../../dist/docveta-ocr-models-$V.zip" .)
           cd dist && sha256sum * > SHA256SUMS && ls -la
       - name: Create release

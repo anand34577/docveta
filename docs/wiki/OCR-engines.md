@@ -175,23 +175,23 @@ engines can work at once; each document page goes to one of them.
 ## Rockchip NPU
 
 On RK3588, RK3576 and RK3566/RK3568 boards, the dedicated NPU engine is several times faster
-than the processor. It runs in Docker (`docker compose --profile npu up -d`) and needs models
+than the processor. It runs in Docker (`docker compose --profile npu-rockchip up -d`) and needs models
 converted for your chip. See
 [workers/rknn/README.md](https://github.com/anand34577/docveta/blob/main/workers/rknn/README.md).
 
 ## Allwinner A733 NPU
 
 On A733 boards such as the Radxa Cubie A7A, the NPU finds the text on each page and the
-processor reads the lines, with the same accuracy as the GPU/CPU engine. It also works inside
-a Proxmox LXC container. Download `docveta-worker-allwinner-…-linux-arm64.tar.gz` from the
-releases page; the detection model has to be compiled once with Allwinner's ACUITY Toolkit. See
+processor reads the lines, with the same accuracy as the GPU/CPU engine. The
+[Linux installer](Install-on-Linux) finds the NPU and sets everything up, also inside a Proxmox
+container (`get-docveta.sh --proxmox <CTID>` on the host first). See
 [workers/allwinner/README.md](https://github.com/anand34577/docveta/blob/main/workers/allwinner/README.md).
 
 ## Tesseract
 
 Tesseract supports more than 100 languages (including Bengali, Gujarati, Punjabi, Malayalam,
 Urdu) but is less accurate on photos than PaddleOCR. It runs in Docker:
-`docker compose --profile cpu-ocr up -d`. See [Install with Docker](Install-with-Docker).
+`docker compose --profile tesseract up -d`. See [Install with Docker](Install-with-Docker).
 
 ## Several engines: who gets which document
 
