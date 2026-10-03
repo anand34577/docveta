@@ -72,7 +72,8 @@ Name: "ocr"; Description: "Text recognition (OCR) on this computer: GPU, NPU or 
 #endif
 
 [Files]
-Source: "{#SourceDir}\docveta.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: server
+; WriteConf runs right after copying, before [Run] registers and starts the service.
+Source: "{#SourceDir}\docveta.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: server; AfterInstall: WriteConf
 Source: "{#SourceDir}\LICENSE"; DestDir: "{app}"; Components: server
 Source: "{#SourceDir}\README.txt"; DestDir: "{app}"; Flags: isreadme; Components: server
 #if WithOCR
@@ -234,11 +235,13 @@ begin
   Result := '';
 end;
 
-procedure CurStepChanged(CurStep: TSetupStep);
+{ Writes docveta.conf on a fresh install. It must exist before the service first starts,
+  or the service would keep its data next to the program instead of in ProgramData. }
+procedure WriteConf();
 var
   Lines: String;
 begin
-  if (CurStep = ssPostInstall) and not FileExists(ConfPath()) then
+  if not FileExists(ConfPath()) then
   begin
     Lines :=
       '# Docveta settings. Restart the "Docveta" service after changing this file.' + #13#10 +

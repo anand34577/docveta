@@ -33,6 +33,9 @@ Installing Docveta no longer needs a database server, worker tokens or edited co
 - Docker profiles: `tesseract` and `npu-rockchip` (the old `cpu-ocr` and `npu` still work).
 
 ### Fixed
+- Windows installer: the service started before its settings file was written, so a fresh
+  install kept its data in `C:\Program Files\Docveta\data` until the next restart, and then
+  asked for the database again. The settings are now written before the service starts.
 - Search results: with only a few results, a document's thumbnail filled half the screen. The
   grid measured its width before the results list existed.
 
