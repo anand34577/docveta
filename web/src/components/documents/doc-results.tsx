@@ -13,15 +13,16 @@ interface Props {
   onLoaded?: (info: { total?: number; items: Document[] }) => void;
 }
 
-function useContainerWidth(ref: React.RefObject<HTMLElement | null>) {
+/** Width of an element that may mount later (the results list appears after loading). */
+function useElementWidth(el: HTMLElement | null) {
   const [w, setW] = React.useState(0);
   React.useLayoutEffect(() => {
-    if (!ref.current) return;
+    if (!el) return;
     const ro = new ResizeObserver((entries) => setW(entries[0].contentRect.width));
-    ro.observe(ref.current);
-    setW(ref.current.getBoundingClientRect().width);
+    ro.observe(el);
+    setW(el.getBoundingClientRect().width);
     return () => ro.disconnect();
-  }, [ref]);
+  }, [el]);
   return w;
 }
 
@@ -41,8 +42,13 @@ export function DocumentResults({ query, layout, empty, onLoaded }: Props) {
     onLoaded?.({ total, items });
   }, [total, items, onLoaded]);
 
-  const listRef = React.useRef<HTMLDivElement>(null);
-  const width = useContainerWidth(listRef);
+  const listRef = React.useRef<HTMLDivElement | null>(null);
+  const [listEl, setListEl] = React.useState<HTMLDivElement | null>(null);
+  const setList = React.useCallback((el: HTMLDivElement | null) => {
+    listRef.current = el;
+    setListEl(el);
+  }, []);
+  const width = useElementWidth(listEl);
   const cols = layout === "grid" ? Math.max(2, Math.floor((width + 16) / 216)) : 1;
   const rows = Math.ceil(items.length / cols);
   const scrollEl = React.useCallback(() => document.getElementById("main"), []);
@@ -101,7 +107,7 @@ export function DocumentResults({ query, layout, empty, onLoaded }: Props) {
   if (items.length === 0) return <>{empty}</>;
 
   return (
-    <div ref={listRef} className={layout === "grid" ? "px-4 sm:px-6" : "border-t border-border"}>
+    <div ref={setList} className={layout === "grid" ? "px-4 sm:px-6" : "border-t border-border"}>
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {vItems.map((row) => {
           const start = row.index * cols;
