@@ -12,8 +12,9 @@ Wants=network-online.target
 [Service]
 User=docveta
 Group=docveta
-# GPU access for the bundled OCR engine (NVIDIA/Intel/AMD device nodes).
-SupplementaryGroups=video render
+# GPU access for the bundled OCR engine: install.sh adds the docveta user to the video and
+# render groups when they exist. (SupplementaryGroups= here would stop the service from
+# starting on systems without those groups.)
 ExecStart=/opt/docveta/docveta serve
 WorkingDirectory=/var/lib/docveta
 Environment=DOCVETA_CONFIG=/opt/docveta/docveta.conf

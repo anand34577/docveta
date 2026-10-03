@@ -104,6 +104,42 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
 
+  # The Linux package's install.sh on a real init system: Debian (systemd) and Alpine (OpenRC).
+  linux-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Package
+        run: |
+          CGO_ENABLED=0 go build -o pkg/docveta ./cmd/docveta
+          cp deploy/linux/install.sh deploy/linux/docveta.service pkg/
+      - name: Debian with systemd
+        run: |
+          docker run -d --name deb --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw -v "$PWD/pkg:/pkg:ro" jrei/systemd-debian:12
+          sleep 8
+          docker exec deb sh -c '
+            apt-get update -qq >/dev/null && apt-get install -y -qq curl >/dev/null 2>&1
+            /pkg/install.sh
+            for i in $(seq 30); do curl -sf -o /dev/null localhost:8080/healthz && break; sleep 1; done
+            systemctl is-active docveta || { journalctl -u docveta --no-pager | tail -30; exit 1; }
+            curl -sf -X POST -d kind=builtin -d action=save localhost:8080/ | grep -q "Starting Docveta"
+            for i in $(seq 120); do curl -sf -o /dev/null localhost:8080/api/v1/openapi.yaml && exit 0; sleep 1; done
+            journalctl -u docveta --no-pager | tail -30; exit 1'
+      - name: Alpine with OpenRC
+        run: |
+          docker run -d --init --name alp -v "$PWD/pkg:/pkg:ro" alpine sleep infinity
+          docker exec alp sh -c '
+            apk add -q openrc curl >/dev/null
+            mkdir -p /run/openrc && touch /run/openrc/softlevel
+            /pkg/install.sh
+            for i in $(seq 30); do curl -sf -o /dev/null localhost:8080/healthz && break; sleep 1; done
+            curl -sf -X POST -d kind=builtin -d action=save localhost:8080/ | grep -q "Starting Docveta"
+            for i in $(seq 120); do curl -sf -o /dev/null localhost:8080/api/v1/openapi.yaml && exit 0; sleep 1; done
+            tail -30 /var/log/docveta.log; exit 1'
+
   windows:
     runs-on: windows-latest
     steps:
