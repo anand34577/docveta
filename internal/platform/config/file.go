@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -120,6 +122,42 @@ func Save(dataDir string, values map[string]string) error {
 }
 
 // ensureSecret returns DOCVETA_SECRET_KEY, generating and saving one on first start.
+// withPasswordFromFile puts the (trimmed) contents of file into dbURL as the password.
+func withPasswordFromFile(dbURL, file string) (string, error) {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(dbURL)
+	if err != nil || u.User == nil {
+		return "", errors.New("DOCVETA_DATABASE_URL needs a user name, e.g. postgres://docveta@db:5432/docveta")
+	}
+	u.User = url.UserPassword(u.User.Username(), strings.TrimSpace(string(b)))
+	return u.String(), nil
+}
+
+// ensureKeyFile returns the key in file, creating it with a random key on first use.
+// The file is world-readable on purpose: it lives in a volume shared only with the
+// worker containers, which run as other users.
+func ensureKeyFile(file string) ([]byte, error) {
+	if b, err := os.ReadFile(file); err == nil && len(strings.TrimSpace(string(b))) >= 32 {
+		return []byte(strings.TrimSpace(string(b))), nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	key := hex.EncodeToString(b)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return nil, err
+	}
+	tmp := file + ".tmp"
+	if err := os.WriteFile(tmp, []byte(key+"\n"), 0o644); err != nil {
+		return nil, err
+	}
+	return []byte(key), os.Rename(tmp, file)
+}
+
 func ensureSecret(dataDir string) (string, error) {
 	if s := os.Getenv("DOCVETA_SECRET_KEY"); s != "" {
 		return s, nil

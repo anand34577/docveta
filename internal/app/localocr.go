@@ -11,11 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
-
-	"github.com/anand34577/docveta/internal/auth"
-	"github.com/anand34577/docveta/internal/platform/db"
 )
 
 const localOCRName = "local-ocr"
@@ -59,7 +54,7 @@ func (a *App) runLocalOCR(ctx context.Context) {
 	log := a.Log.With("component", "local-ocr")
 	backoff := 5 * time.Second
 	for ctx.Err() == nil {
-		token, err := a.localOCRToken(ctx)
+		token, err := a.Pipeline.IssueWorkerToken(ctx, localOCRName)
 		if err != nil {
 			log.Error("can't register the local OCR engine", "err", err)
 			return
@@ -93,21 +88,6 @@ func (a *App) runLocalOCR(ctx context.Context) {
 		}
 		backoff = min(backoff*2, 5*time.Minute)
 	}
-}
-
-// localOCRToken creates the local-ocr worker on first use, or issues it a new token.
-func (a *App) localOCRToken(ctx context.Context) (string, error) {
-	sys := auth.System()
-	var id uuid.UUID
-	err := a.Pool.QueryRow(ctx, `SELECT id FROM workers WHERE name=$1`, localOCRName).Scan(&id)
-	if db.IsNoRows(err) {
-		_, token, err := a.Pipeline.CreateWorker(ctx, sys, localOCRName)
-		return token, err
-	}
-	if err != nil {
-		return "", err
-	}
-	return a.Pipeline.RotateWorkerToken(ctx, sys, id)
 }
 
 // childEnv is the environment minus Docveta's own secrets, which the engine doesn't need.

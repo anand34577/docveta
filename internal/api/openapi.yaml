@@ -2150,6 +2150,38 @@ paths:
                     items:
                       $ref: '#/components/schemas/DirectoryEntry'
         default: *id001
+  /worker/v1/enroll:
+    post:
+      summary: Get a worker token with the enrollment key (Docker setups)
+      description: Only available when DOCVETA_WORKER_ENROLL_KEY_FILE is set. Creates the
+        worker called `name`, or gives it a new token if it exists.
+      tags:
+      - worker
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, key]
+              properties:
+                name:
+                  type: string
+                key:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token]
+                properties:
+                  token:
+                    type: string
+        default: *id001
   /worker/v1/hello:
     post:
       summary: Announce the worker and its capabilities

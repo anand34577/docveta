@@ -16,21 +16,24 @@ import (
 )
 
 type Config struct {
-	BaseURL        *url.URL
-	ListenAddr     string
-	DatabaseURL    string // empty until set up: `serve` then shows the database setup page
-	DataDir        string
-	SecretKey      []byte
-	TrustedProxies []netip.Prefix
-	MaxUploadBytes int64
-	LogLevel       string
-	LogFormat      string // json | text
-	DevMode        bool   // relaxes cookie Secure flag and CSP for local development
-	SessionIdle    time.Duration
-	SessionMax     time.Duration
-	TrashRetention time.Duration
-	PDFWorkers     int
-	JobWorkers     int
+	BaseURL     *url.URL
+	ListenAddr  string
+	DatabaseURL string // empty until set up: `serve` then shows the database setup page
+	DataDir     string
+	SecretKey   []byte
+	// WorkerEnrollKey lets OCR workers fetch their own token (POST /worker/v1/enroll).
+	// Empty unless DOCVETA_WORKER_ENROLL_KEY_FILE is set (the Docker setup does).
+	WorkerEnrollKey []byte
+	TrustedProxies  []netip.Prefix
+	MaxUploadBytes  int64
+	LogLevel        string
+	LogFormat       string // json | text
+	DevMode         bool   // relaxes cookie Secure flag and CSP for local development
+	SessionIdle     time.Duration
+	SessionMax      time.Duration
+	TrashRetention  time.Duration
+	PDFWorkers      int
+	JobWorkers      int
 	// AllowLocalTargets lets users point Gotify/ntfy/webhook channels at private
 	// network addresses (off by default: SSRF protection).
 	AllowLocalTargets bool
@@ -114,6 +117,22 @@ func Load() (*Config, error) {
 		errs = append(errs, errors.New("DOCVETA_SECRET_KEY must be at least 32 characters (or remove it and Docveta generates one). Back it up: it encrypts stored secrets"))
 	}
 	c.SecretKey = []byte(secret)
+
+	// Docker: the database password lives in a generated file, not in the URL or .env.
+	if f := os.Getenv("DOCVETA_DATABASE_PASSWORD_FILE"); f != "" && c.DatabaseURL != "" {
+		if u, err := withPasswordFromFile(c.DatabaseURL, f); err != nil {
+			errs = append(errs, fmt.Errorf("DOCVETA_DATABASE_PASSWORD_FILE: %w", err))
+		} else {
+			c.DatabaseURL = u
+		}
+	}
+	if f := os.Getenv("DOCVETA_WORKER_ENROLL_KEY_FILE"); f != "" {
+		key, err := ensureKeyFile(f)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("DOCVETA_WORKER_ENROLL_KEY_FILE: %w", err))
+		}
+		c.WorkerEnrollKey = key
+	}
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
