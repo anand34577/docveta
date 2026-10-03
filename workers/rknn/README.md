@@ -20,7 +20,7 @@ The worker advertises tags `npu` + the SoC name, so Docveta routes OCR to it fir
 ```bash
 cd workers/rknn/convert
 python -m venv .venv && . .venv/bin/activate
-pip install rknn-toolkit2 paddle2onnx onnx onnxsim pillow
+pip install rknn-toolkit2 paddle2onnx onnx "onnxsim==0.4.36" pillow
 # 20–200 sample document images (scans/phone photos like yours) for INT8 calibration:
 mkdir calib && cp ~/Scans/*.jpg calib/
 python convert.py --soc rk3588 --scripts en devanagari --calib-dir calib --out ../models

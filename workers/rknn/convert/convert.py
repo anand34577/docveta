@@ -2,7 +2,7 @@
 
 Runs on an x86_64 Linux machine (RKNN-Toolkit2 is x86-only), NOT on the board.
 
-    pip install rknn-toolkit2 paddle2onnx onnx onnxsim
+    pip install rknn-toolkit2 paddle2onnx onnx "onnxsim==0.4.36"
     python convert.py --soc rk3588 --scripts en devanagari --calib-dir ./calib --out ../models
     python convert.py --soc rk3576 ...
     python convert.py --soc rk3566 ...      # also used on RK3568
@@ -80,6 +80,12 @@ def fix_shape(onnx_path: str, shape: list[int]) -> str:
     model, ok = simplify(model, overwrite_input_shapes={model.graph.input[0].name: shape})
     if not ok:
         raise RuntimeError(f"onnxsim failed for {onnx_path}")
+    # Newer onnxsim releases (0.7.x) emit inconsistent recognition graphs: catch that here,
+    # not as a confusing error in the NPU toolkit.
+    try:
+        onnx.shape_inference.infer_shapes(model, strict_mode=True)
+    except Exception as e:
+        raise RuntimeError(f"onnxsim produced an invalid graph for {onnx_path} ({e}); install onnxsim==0.4.36") from e
     out = onnx_path.replace(".onnx", f"_{'x'.join(map(str, shape))}.onnx")
     onnx.save(model, out)
     return out
