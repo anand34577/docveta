@@ -133,10 +133,11 @@ class VipLite:
             counts = (C.c_uint32 * max(1, n.value))()
             self.check(lib.vip_query_hardware(HW_CORE_COUNT, C.sizeof(counts), counts), "query core count")
             self.cores = max(1, counts[0])
-        # Full NPU clock (1-100 %); the driver may also scale it, so only warn on failure.
-        pct = int(os.environ.get("DOCVETA_NPU_CLOCK_PERCENT", "100"))
-        if lib.vip_power_management(C.c_uint32(0), POWER_SET_FREQUENCY, C.byref(C.c_uint8(max(1, min(pct, 100))))) != 0:
-            log.warning("could not set the NPU clock to %d%%; using the driver's setting", pct)
+        # The driver manages the NPU clock; Allwinner's builds usually refuse user control
+        # (vpmdENABLE_USER_CONTROL_POWER), so only ask when the admin sets a value.
+        pct = os.environ.get("DOCVETA_NPU_CLOCK_PERCENT")
+        if pct and lib.vip_power_management(C.c_uint32(0), POWER_SET_FREQUENCY, C.byref(C.c_uint8(max(1, min(int(pct), 100))))) != 0:
+            log.warning("this VIPLite build doesn't allow setting the NPU clock; the driver manages it")
 
     @staticmethod
     def check(status: int, what: str) -> None:
