@@ -10,8 +10,9 @@ Two ways, same program:
 | Needs administrator rights | yes, to install | no |
 | Good for | the PC or server that holds your documents | trying Docveta, USB sticks, no admin rights |
 
-Windows 10 or 11, 64-bit (x64 or ARM). A 32-bit build exists for old PCs (without text
-recognition). First [install PostgreSQL](Database#windows).
+Windows 10 or 11, 64-bit (x64 or ARM). Nothing else to install: Docveta brings its own
+database. A 32-bit build exists for old PCs (without text recognition or the built-in database:
+it needs [your own PostgreSQL](Database#windows)).
 
 ## Installer
 
@@ -28,8 +29,9 @@ recognition). First [install PostgreSQL](Database#windows).
      processor. Details: [OCR engines](OCR-engines).
    - **Network access**: tick it to use Docveta from your phone or other PCs; this opens the
      port in Windows Firewall.
-4. At the end, your browser opens Docveta. [Connect the database](Database#connect-docveta-the-setup-page)
-   and create your account.
+4. At the end, your browser opens Docveta. Click **Save and start** to use the built-in
+   database (or [connect your own PostgreSQL](Database#connect-docveta-the-setup-page)), then
+   create your account.
 
 Start-menu entries: *Open Docveta*, *Docveta data folder*, *Docveta log*, *Docveta help*.
 

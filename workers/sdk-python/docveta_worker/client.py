@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, BinaryIO, Optional
 
 import requests
@@ -19,6 +20,30 @@ class LeaseLost(Exception):
 
 class ProtocolError(Exception):
     pass
+
+
+def enroll(base_url: str, name: str, key_file: str, verify: bool | str = True, wait: float = 5.0) -> str:
+    """Gets a worker token with the enrollment key (Docker setups, POST /worker/v1/enroll).
+
+    Waits for the key file and for the server, so containers can start in any order."""
+    url = base_url.rstrip("/") + "/worker/v1/enroll"
+    waited = 0.0
+    while True:
+        try:
+            with open(key_file, encoding="utf-8") as f:
+                key = f.read().strip()
+            r = requests.post(url, json={"name": name, "key": key}, timeout=30, verify=verify)
+            if r.status_code == 200:
+                return r.json()["token"]
+            if r.status_code in (400, 401, 404):
+                raise ProtocolError(f"Docveta refused enrollment (HTTP {r.status_code}): {r.text[:200]}")
+            reason = f"HTTP {r.status_code}"
+        except (OSError, requests.RequestException) as e:  # key file not there yet, or server starting
+            reason = str(e)
+        if waited % 60 < wait:
+            log.info("waiting to enroll with Docveta (%s)", reason)
+        time.sleep(wait)
+        waited += wait
 
 
 class Client:

@@ -1,7 +1,7 @@
 # Install on macOS
 
-macOS 12 or newer, Apple silicon (M1–M4) or Intel. First
-[install PostgreSQL](Database#macos) (Postgres.app is the easiest).
+macOS 12 or newer, Apple silicon (M1–M4) or Intel. Nothing else to install: Docveta brings its
+own database.
 
 | Your Mac | Download |
 |---|---|
@@ -23,8 +23,8 @@ unzip ../docveta-ocr-*-darwin-arm64.zip     # optional: text recognition, create
 ```
 
 Docveta is copied to `~/Applications/Docveta` and starts now and whenever you log in. Your
-browser opens <http://localhost:8080>: [connect the database](Database#connect-docveta-the-setup-page)
-and create your account.
+browser opens <http://localhost:8080>: click **Save and start** to use the built-in database (or
+[connect your own PostgreSQL](Database#connect-docveta-the-setup-page)) and create your account.
 
 | What | Where |
 |---|---|

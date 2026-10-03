@@ -35,6 +35,8 @@ import (
 	"github.com/anand34577/docveta/internal/platform/config"
 )
 
+const enrollKey = "0123456789abcdef0123456789abcdef"
+
 func TestIntegration(t *testing.T) {
 	dbURL := os.Getenv("DOCVETA_TEST_DATABASE_URL")
 	if dbURL == "" {
@@ -66,7 +68,7 @@ func TestIntegration(t *testing.T) {
 	cfg := &config.Config{
 		BaseURL: base, DatabaseURL: u.String(), DataDir: t.TempDir(), SecretKey: []byte(strings.Repeat("s", 32)),
 		MaxUploadBytes: 50 << 20, SessionIdle: time.Hour, SessionMax: time.Hour, TrashRetention: time.Hour,
-		PDFWorkers: 1, JobWorkers: 4, DevMode: true,
+		PDFWorkers: 1, JobWorkers: 4, DevMode: true, WorkerEnrollKey: []byte(enrollKey),
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if testing.Verbose() {
@@ -162,6 +164,22 @@ func TestIntegration(t *testing.T) {
 			{"task_type": "archive", "engine": "docveta-textlayer", "concurrency": 1},
 		},
 	}, 200, nil)
+
+	// Enrollment (Docker): a wrong key is refused; the right one gives a working token,
+	// and enrolling again replaces it.
+	e := newClient(t, srv.URL)
+	e.do("POST", "/worker/v1/enroll", map[string]any{"name": "docker-ocr", "key": "wrong"}, 401, nil)
+	var en, en2 struct {
+		Token string `json:"token"`
+	}
+	e.do("POST", "/worker/v1/enroll", map[string]any{"name": "docker-ocr", "key": enrollKey}, 200, &en)
+	e.do("POST", "/worker/v1/enroll", map[string]any{"name": "docker-ocr", "key": enrollKey}, 200, &en2)
+	archiveOnly := map[string]any{"protocol": []int{1}, "worker": map[string]any{"name": "docker-ocr", "version": "1"},
+		"capabilities": []map[string]any{{"task_type": "archive", "engine": "docveta-textlayer", "concurrency": 1}}}
+	e.token = en.Token
+	e.do("POST", "/worker/v1/hello", archiveOnly, 401, nil)
+	e.token = en2.Token
+	e.do("POST", "/worker/v1/hello", archiveOnly, 200, nil)
 
 	img := c.upload(family, "scan.png", pngBytes())
 	img = c.waitStage(img.ID, "awaiting_ocr")

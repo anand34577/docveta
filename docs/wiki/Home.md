@@ -9,16 +9,23 @@ Docveta is **one program** with the web app built in. It runs on Windows, Linux 
 ordinary PCs, servers and small boards like the Raspberry Pi. You use it in a web browser,
 from your computer or phone.
 
-## Get started in three steps
+## Get started
 
-1. **Install PostgreSQL**, the database Docveta keeps its records in. → [Database](Database)
-2. **Install Docveta** for your system:
-   - [Windows](Install-on-Windows): installer or portable ZIP
-   - [Linux](Install-on-Linux): servers, Raspberry Pi, Rockchip boards
-   - [macOS](Install-on-macOS)
-   - [Docker](Install-with-Docker)
-3. **Open Docveta in your browser**, connect the database on the page that appears, and
-   create your account. → [First steps](First-steps)
+| Where | How |
+|---|---|
+| **Windows 10/11 PC or server** | Run `docveta-setup-…-windows-x64.exe` (`-arm64` for Windows on ARM): installs a service with text recognition and the database. Or unzip the portable ZIP and double-click `docveta.exe`. |
+| **Linux** server, PC, VM, LXC container, Raspberry Pi | `curl -fsSLO https://github.com/anand34577/docveta/releases/latest/download/get-docveta.sh && sudo sh get-docveta.sh` |
+| **Proxmox** container on a board with an NPU | First `sudo sh get-docveta.sh --proxmox <CTID>` on the host, then the Linux line inside the container |
+| **macOS** (Apple silicon or Intel) | `tar xzf docveta-…-darwin-arm64.tar.gz && cd docveta-* && ./install.sh` |
+| **Docker**, NAS (Synology, Unraid, TrueNAS), Portainer | `docker compose up -d` with [deploy/docker-compose.yml](https://github.com/anand34577/docveta/blob/main/deploy/docker-compose.yml), nothing to edit |
+| Old 32-bit Windows 10 | The x86 installer runs, but without text recognition or the built-in database: it needs a [PostgreSQL server](https://github.com/anand34577/docveta/wiki/Database) |
+| Windows 7 / 8.1, very old PCs | Not supported (too old for Docveta's toolchain). Install Docveta on another machine and use it from that PC's browser. |
+
+Then open the address shown (usually <http://localhost:8080>), click **Save and start** to use
+the built-in database, and create your account. No PostgreSQL to install, nothing to configure.
+
+Step-by-step guides: [Windows](Install-on-Windows) · [Linux](Install-on-Linux) ·
+[macOS](Install-on-macOS) · [Docker](Install-with-Docker) · then [First steps](First-steps).
 
 ## Make it yours
 

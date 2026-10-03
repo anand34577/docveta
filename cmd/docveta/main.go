@@ -35,6 +35,7 @@ import (
 	"github.com/anand34577/docveta/internal/auth"
 	"github.com/anand34577/docveta/internal/firstrun"
 	"github.com/anand34577/docveta/internal/identity"
+	"github.com/anand34577/docveta/internal/platform/builtindb"
 	"github.com/anand34577/docveta/internal/platform/config"
 	"github.com/anand34577/docveta/internal/platform/crypto"
 )
@@ -127,6 +128,11 @@ func run(parent context.Context, args []string) error {
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	stopDB, err := useBuiltinDB(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer func() { stopDB() }()
 	if cmd != "serve" && cfg.DatabaseURL == "" {
 		return errors.New("Docveta isn't connected to a database yet: run `docveta serve` and finish the setup page in your browser, or set DOCVETA_DATABASE_URL")
 	}
@@ -148,6 +154,9 @@ func run(parent context.Context, args []string) error {
 				return err
 			}
 			cfg.DatabaseURL = dbURL
+			if stopDB, err = useBuiltinDB(ctx, cfg, log); err != nil {
+				return err
+			}
 		}
 		if err := waitForDatabase(ctx, cfg, log); err != nil {
 			return nil // stopped while waiting
@@ -224,6 +233,20 @@ func userCmd(ctx context.Context, cfg *config.Config, log *slog.Logger, args []s
 		return fmt.Errorf("unknown user command %q", sub)
 	}
 	return nil
+}
+
+// useBuiltinDB starts Docveta's own PostgreSQL when the setup page chose it
+// (DOCVETA_DATABASE_URL=builtin) and points cfg at it. The returned function stops it.
+func useBuiltinDB(ctx context.Context, cfg *config.Config, log *slog.Logger) (func(), error) {
+	if cfg.DatabaseURL != builtindb.Setting {
+		return func() {}, nil
+	}
+	dbURL, stop, err := builtindb.Start(ctx, cfg.DataDir, log)
+	if err != nil {
+		return nil, fmt.Errorf("built-in database: %w", err)
+	}
+	cfg.DatabaseURL = dbURL
+	return stop, nil
 }
 
 // waitForDatabase retries until PostgreSQL answers. At boot the database service may

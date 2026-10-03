@@ -14,7 +14,7 @@ import time
 from typing import Any, Optional
 
 from ._version import __version__
-from .client import Client, LeaseLost, ProtocolError
+from .client import Client, LeaseLost, ProtocolError, enroll
 from .engine import Engine, EngineError, PageResult
 from .pages import iter_pages
 
@@ -244,7 +244,9 @@ def run(engine: Engine, archive: Optional[bool] = None) -> None:
     """Start a worker using environment configuration:
 
     DOCVETA_URL            base URL of the Docveta server (required)
-    DOCVETA_WORKER_TOKEN   worker token from Admin → Processing (required)
+    DOCVETA_WORKER_TOKEN   worker token from Admin → Processing, or instead:
+    DOCVETA_ENROLL_KEY_FILE  file with Docveta's enrollment key (Docker): the worker
+                           fetches its own token, named after DOCVETA_WORKER_NAME
     DOCVETA_WORKER_NAME    display name (default: hostname)
     DOCVETA_ARCHIVE        "false" to not build searchable PDFs on this worker
     DOCVETA_TLS_VERIFY     "false" to skip TLS verification, or a CA bundle path
@@ -253,12 +255,17 @@ def run(engine: Engine, archive: Optional[bool] = None) -> None:
     logging.basicConfig(level=os.environ.get("DOCVETA_LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(threadName)s %(message)s")
     url = os.environ.get("DOCVETA_URL")
     token = os.environ.get("DOCVETA_WORKER_TOKEN")
-    if not url or not token:
-        raise SystemExit("DOCVETA_URL and DOCVETA_WORKER_TOKEN must be set")
+    key_file = os.environ.get("DOCVETA_ENROLL_KEY_FILE")
+    if not url or not (token or key_file):
+        raise SystemExit("DOCVETA_URL and DOCVETA_WORKER_TOKEN (or DOCVETA_ENROLL_KEY_FILE) must be set")
     if archive is None:
         archive = os.environ.get("DOCVETA_ARCHIVE", "true").lower() not in ("0", "false", "no")
     verify: bool | str = True
     v = os.environ.get("DOCVETA_TLS_VERIFY")
     if v:
         verify = False if v.lower() in ("0", "false", "no") else v
-    Worker(engine, url, token, os.environ.get("DOCVETA_WORKER_NAME"), archive=archive, verify=verify).run()
+    name = os.environ.get("DOCVETA_WORKER_NAME") or socket.gethostname()
+    if not token:
+        token = enroll(url, name, key_file, verify)
+        logging.getLogger("docveta_worker").info("enrolled with Docveta as %s", name)
+    Worker(engine, url, token, name, archive=archive, verify=verify).run()

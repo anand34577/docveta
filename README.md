@@ -19,8 +19,8 @@ text (on your graphics card, an NPU or the CPU), organises them, and finds them 
 - **Single sign-on (OIDC)**, API tokens, audit log.
 - **Notifications** — in-app (live), Gotify, ntfy, email (SMTP), signed webhooks.
 - **One binary, every platform** — the server and web app in a single file for Windows,
-  Linux and macOS (x64, ARM64, ARMv7, x86), plus PostgreSQL. Windows installer with a
-  service, portable ZIP, systemd/launchd scripts, Docker images.
+  Linux and macOS (x64, ARM64, ARMv7, x86), with a built-in database. Windows installer,
+  one-command Linux install, Docker Compose with nothing to edit.
 - **Phone-ready** — installable web app with Android "Share to Docveta"; API designed for a
   future native app (delta sync, token auth).
 
@@ -33,19 +33,21 @@ text (on your graphics card, an NPU or the CPU), organises them, and finds them 
 **Step-by-step guides for every system are in the [wiki](https://github.com/anand34577/docveta/wiki).**
 Downloads are on the [Releases page](https://github.com/anand34577/docveta/releases).
 
-1. Install **PostgreSQL 16+** ([how](https://github.com/anand34577/docveta/wiki/Database)).
-2. Install Docveta:
-   - **Windows**: run `docveta-setup-…-windows-x64.exe` (installs a service, includes GPU/CPU
-     text recognition), or unzip the portable ZIP and double-click `docveta.exe`.
-   - **Linux**: `tar xzf docveta-…-linux-x64.tar.gz && cd docveta-* && sudo ./install.sh`
-   - **macOS**: `tar xzf docveta-…-darwin-arm64.tar.gz && cd docveta-* && ./install.sh`
-   - **Docker**: `docker compose up -d` with [deploy/docker-compose.yml](deploy/docker-compose.yml)
-3. Open <http://localhost:8080>. A setup page asks for the database (Docveta can create it),
-   then you create your account. No configuration files needed.
+| Where | How |
+|---|---|
+| **Windows 10/11 PC or server** | Run `docveta-setup-…-windows-x64.exe` (`-arm64` for Windows on ARM): installs a service with text recognition and the database. Or unzip the portable ZIP and double-click `docveta.exe`. |
+| **Linux** server, PC, VM, LXC container, Raspberry Pi | `curl -fsSLO https://github.com/anand34577/docveta/releases/latest/download/get-docveta.sh && sudo sh get-docveta.sh` |
+| **Proxmox** container on a board with an NPU | First `sudo sh get-docveta.sh --proxmox <CTID>` on the host, then the Linux line inside the container |
+| **macOS** (Apple silicon or Intel) | `tar xzf docveta-…-darwin-arm64.tar.gz && cd docveta-* && ./install.sh` |
+| **Docker**, NAS (Synology, Unraid, TrueNAS), Portainer | `docker compose up -d` with [deploy/docker-compose.yml](https://github.com/anand34577/docveta/blob/main/deploy/docker-compose.yml), nothing to edit |
+| Old 32-bit Windows 10 | The x86 installer runs, but without text recognition or the built-in database: it needs a [PostgreSQL server](https://github.com/anand34577/docveta/wiki/Database) |
+| Windows 7 / 8.1, very old PCs | Not supported (too old for Docveta's toolchain). Install Docveta on another machine and use it from that PC's browser. |
 
-For text recognition, unzip `docveta-ocr-…zip` next to Docveta: Docveta starts it automatically
-and picks your GPU, NPU or CPU (`DOCVETA_OCR_DEVICE=auto|gpu|igpu|npu|cpu`).
-See [OCR engines](https://github.com/anand34577/docveta/wiki/OCR-engines).
+Then open the address shown (usually <http://localhost:8080>), click **Save and start** to use
+the built-in database, and create your account. No PostgreSQL to install, nothing to configure.
+
+Text recognition is included and picks your GPU, NPU or processor by itself. See
+[OCR engines](https://github.com/anand34577/docveta/wiki/OCR-engines).
 
 More: [configuration](https://github.com/anand34577/docveta/wiki/Configuration) ·
 [backups](https://github.com/anand34577/docveta/wiki/Backup-and-restore) ·

@@ -3,12 +3,16 @@ Docveta - your documents, organised and searchable
 
 TRY IT (any Linux or macOS)
     ./docveta
-  Open http://localhost:8080, connect Docveta to your PostgreSQL database on the page
-  that appears (Docveta can create its own database), then create your account.
+  Open http://localhost:8080, click "Save and start" to use the built-in database (or
+  connect your own PostgreSQL), then create your account.
   Data is stored in ./data next to where you started it.
 
+EASIEST ON LINUX: one command installs Docveta and text recognition for this machine
+    curl -fsSLO https://github.com/anand34577/docveta/releases/latest/download/get-docveta.sh
+    sudo sh get-docveta.sh
+
 INSTALL AS A SERVICE
-  Linux (systemd):   sudo ./install.sh            (port: sudo ./install.sh --port 9000)
+  Linux (systemd or OpenRC): sudo ./install.sh    (port: sudo ./install.sh --port 9000)
                      program /opt/docveta, data /var/lib/docveta, logs: journalctl -u docveta -f
   macOS:             ./install.sh                 (starts when you log in)
                      data ~/Library/Application Support/Docveta, logs ~/Library/Logs/Docveta
@@ -21,7 +25,7 @@ TEXT RECOGNITION (OCR)
       DOCVETA_OCR_DEVICE=auto|gpu|igpu|npu|cpu
   Check what it finds:  ./ocr/docveta-ocr --list-devices  and  ./ocr/docveta-ocr --self-test
 
-NEED POSTGRESQL?
+YOUR OWN POSTGRESQL? (optional: the built-in database needs nothing installed)
   Debian/Ubuntu:  sudo apt install postgresql postgresql-contrib
   Fedora:         sudo dnf install postgresql-server postgresql-contrib
   macOS:          https://postgresapp.com  or  brew install postgresql@17

@@ -131,6 +131,23 @@ func (s *Service) RotateWorkerToken(ctx context.Context, p *auth.Principal, id u
 	return token, nil
 }
 
+// IssueWorkerToken creates the worker called name, or gives it a new token if it exists.
+// For workers Docveta sets up itself (the bundled engine, Docker enrollment): no admin
+// copies a token, and a restarted worker simply gets a fresh one.
+func (s *Service) IssueWorkerToken(ctx context.Context, name string) (string, error) {
+	sys := auth.System()
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT id FROM workers WHERE name=$1`, name).Scan(&id)
+	if db.IsNoRows(err) {
+		_, token, err := s.CreateWorker(ctx, sys, name)
+		return token, err
+	}
+	if err != nil {
+		return "", err
+	}
+	return s.RotateWorkerToken(ctx, sys, id)
+}
+
 func (s *Service) SetWorkerEnabled(ctx context.Context, p *auth.Principal, id uuid.UUID, enabled bool) error {
 	if !p.Admin() {
 		return apperr.Forbidden("")

@@ -1,7 +1,9 @@
 // Package firstrun serves the database setup page shown when Docveta starts without a
-// database configured. The person installing Docveta enters PostgreSQL connection
-// details in the browser; Docveta tests them, can create the database, saves them to
-// the data folder's docveta.conf and then starts normally.
+// database configured. The person installing Docveta either picks the built-in database
+// (Docveta runs its own PostgreSQL in the data folder; nothing to install or type) or
+// enters the connection details of their PostgreSQL server, which Docveta tests and can
+// create the database on. The choice is saved to the data folder's docveta.conf and
+// Docveta then starts normally.
 //
 // Requests from this computer are accepted directly. Requests from other computers
 // must include the one-time setup code that Docveta prints in its log and writes to
@@ -30,6 +32,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/anand34577/docveta/internal/platform/builtindb"
 	"github.com/anand34577/docveta/internal/platform/config"
 	"github.com/anand34577/docveta/internal/platform/httpx"
 )
@@ -41,6 +44,7 @@ var page = template.Must(template.ParseFS(pageFS, "setup.html"))
 
 // Form holds what the user typed (re-rendered on errors).
 type Form struct {
+	Kind                                                string // "builtin" or "server"
 	Host, Port, User, Password, Database, SSLMode, Code string
 	Create                                              bool
 }
@@ -48,6 +52,7 @@ type Form struct {
 type view struct {
 	Form
 	NeedCode bool
+	Builtin  bool // the built-in database is available on this system
 	Error    string
 	OK       string
 	Done     bool
@@ -55,7 +60,8 @@ type view struct {
 }
 
 // Run serves the setup page on cfg.ListenAddr until working database settings are
-// saved, and returns the database URL. It returns ctx.Err() if Docveta is stopped first.
+// saved, and returns the database URL (builtindb.Setting for the built-in database).
+// It returns ctx.Err() if Docveta is stopped first.
 func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) (string, error) {
 	code := newCode()
 	codeFile := filepath.Join(cfg.DataDir, "setup-code.txt")
@@ -74,18 +80,30 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) (string, err
 			return
 		}
 		f := Form{
+			Kind: r.FormValue("kind"),
 			Host: strings.TrimSpace(r.FormValue("host")), Port: strings.TrimSpace(r.FormValue("port")),
 			User: strings.TrimSpace(r.FormValue("user")), Password: r.FormValue("password"),
 			Database: strings.TrimSpace(r.FormValue("database")), SSLMode: r.FormValue("sslmode"),
 			Code: strings.TrimSpace(r.FormValue("code")), Create: r.FormValue("create") == "on",
 		}
-		v := view{Form: f, NeedCode: !isLocal(r), CodeFile: codeFile}
+		v := view{Form: f, NeedCode: !isLocal(r), Builtin: builtindb.Supported(), CodeFile: codeFile}
 		if v.NeedCode && subtle.ConstantTimeCompare([]byte(strings.ToUpper(f.Code)), []byte(code)) != 1 {
 			time.Sleep(time.Second) // slows down guessing
 			v.Error = "The setup code is wrong. It is printed in the Docveta log and saved in " + codeFile + "."
 			render(w, v)
 			return
 		}
+		if f.Kind == "builtin" && v.Builtin {
+			// Download and create it now, so problems show here rather than after saving.
+			if err := builtindb.Prepare(r.Context(), cfg.DataDir, log); err != nil {
+				v.Error = "Couldn't set up the built-in database: " + err.Error()
+				render(w, v)
+				return
+			}
+			saveAndFinish(w, v, cfg, log, builtindb.Setting, done)
+			return
+		}
+		v.Kind = "server"
 		dbURL, err := f.URL()
 		if err == nil {
 			cctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
@@ -106,18 +124,7 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) (string, err
 			render(w, v)
 			return
 		}
-		if err := config.Save(cfg.DataDir, map[string]string{"DOCVETA_DATABASE_URL": dbURL}); err != nil {
-			v.Error = "Couldn't save the settings: " + err.Error()
-			render(w, v)
-			return
-		}
-		log.Info("database configured; starting Docveta", "config", config.DataFile(cfg.DataDir))
-		v.Done = true
-		render(w, v)
-		select {
-		case done <- dbURL:
-		default: // already saved by an earlier click
-		}
+		saveAndFinish(w, v, cfg, log, dbURL, done)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -128,8 +135,12 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) (string, err
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
-		render(w, view{Form: Form{Host: "localhost", Port: "5432", User: "docveta", Database: "docveta", SSLMode: "prefer", Create: true},
-			NeedCode: !isLocal(r), CodeFile: codeFile})
+		kind := "server"
+		if builtindb.Supported() {
+			kind = "builtin"
+		}
+		render(w, view{Form: Form{Kind: kind, Host: "localhost", Port: "5432", User: "docveta", Database: "docveta", SSLMode: "prefer", Create: true},
+			NeedCode: !isLocal(r), Builtin: builtindb.Supported(), CodeFile: codeFile})
 	})
 
 	srv := &http.Server{
@@ -156,6 +167,22 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) (string, err
 		return "", ctx.Err()
 	}
 	return dbURL, nil
+}
+
+// saveAndFinish stores the database setting and hands it to Run.
+func saveAndFinish(w http.ResponseWriter, v view, cfg *config.Config, log *slog.Logger, dbURL string, done chan<- string) {
+	if err := config.Save(cfg.DataDir, map[string]string{"DOCVETA_DATABASE_URL": dbURL}); err != nil {
+		v.Error = "Couldn't save the settings: " + err.Error()
+		render(w, v)
+		return
+	}
+	log.Info("database configured; starting Docveta", "config", config.DataFile(cfg.DataDir))
+	v.Done = true
+	render(w, v)
+	select {
+	case done <- dbURL:
+	default: // already saved by an earlier click
+	}
 }
 
 func render(w http.ResponseWriter, v view) {

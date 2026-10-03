@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -41,6 +42,35 @@ func (a *API) registerWorker(mux router) {
 		return id, nil
 	}
 
+	// Enrollment: a worker that can read the enroll key file (shared only with worker
+	// containers) gets a token for its name. Disabled unless the key is configured.
+	mux.HandleFunc("POST /worker/v1/enroll", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Docveta-Protocol", strconv.Itoa(pipeline.ProtocolVersion))
+		key := a.Cfg.WorkerEnrollKey
+		if len(key) == 0 {
+			httpx.Error(w, r, apperr.NotFound("Worker enrollment"))
+			return
+		}
+		in, err := decode[struct {
+			Name string `json:"name"`
+			Key  string `json:"key"`
+		}](r)
+		if err != nil {
+			httpx.Error(w, r, err)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(in.Key), key) != 1 {
+			time.Sleep(time.Second) // slows down guessing
+			httpx.Error(w, r, apperr.Unauthorized("Wrong enrollment key"))
+			return
+		}
+		token, err := a.Pipeline.IssueWorkerToken(r.Context(), in.Name)
+		if err != nil {
+			httpx.Error(w, r, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]string{"token": token})
+	})
 	mux.HandleFunc("POST /worker/v1/hello", worker(func(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
 		in, err := decode[pipeline.HelloRequest](r)
 		if err != nil {

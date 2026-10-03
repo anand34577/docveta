@@ -37,6 +37,13 @@
   summary { cursor:pointer; }
   code { font-size:13px; background:var(--bg); padding:1px 5px; border-radius:4px; }
   pre { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px; overflow:auto; font-size:13px; }
+  .choice { display:flex; gap:10px; align-items:flex-start; border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin:10px 0 0; font-weight:400; cursor:pointer; }
+  .choice:has(input:checked) { border-color:var(--accent); outline:1px solid var(--accent); }
+  .choice input { margin-top:5px; }
+  .choice b { display:block; }
+  form:has(#kind-builtin:checked) .server { display:none; }
+  .busy { display:none; color:var(--muted); font-size:13px; margin-top:10px; text-align:right; }
+  form:has(#kind-builtin:checked) .busy { display:block; }
   @media (max-width: 420px) { .row { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -46,11 +53,11 @@
   <div class="card">
   {{if .Done}}
     <h1>Starting Docveta…</h1>
-    <p>The database settings are saved. Docveta is creating its tables; this page opens the setup wizard in a few seconds.</p>
+    <p>The database is ready. Docveta is creating its tables; this page opens the setup wizard in a few seconds.</p>
     <p>If it doesn't, <a href="/">open Docveta</a>.</p>
   {{else}}
-    <h1>Connect a database</h1>
-    <p>Docveta keeps its records in PostgreSQL (version 16 or newer). Enter the details of your PostgreSQL server. Docveta can create its own database if the user is allowed to.</p>
+    <h1>Choose a database</h1>
+    <p>Docveta keeps its records in a PostgreSQL database.</p>
     {{if .Error}}<div class="msg err" role="alert">{{.Error}}</div>{{end}}
     {{if .OK}}<div class="msg ok" role="status">{{.OK}}</div>{{end}}
     <form method="post" action="/" autocomplete="off">
@@ -58,20 +65,29 @@
       <label for="code">Setup code <span class="hint">— you're on another computer, so Docveta asks for the code from its log (also saved in <code>{{.CodeFile}}</code>)</span></label>
       <input type="text" id="code" name="code" value="{{.Code}}" required autocapitalize="characters" placeholder="ABCDE-FGHJK">
       {{end}}
+      {{if .Builtin}}
+      <label class="choice"><input type="radio" id="kind-builtin" name="kind" value="builtin" {{if eq .Kind "builtin"}}checked{{end}}>
+        <span><b>Built-in database (recommended)</b><span class="hint">Nothing to install. Docveta runs its own private PostgreSQL in its data folder, reachable only from this computer. Back it up together with the data folder.</span></span></label>
+      <label class="choice"><input type="radio" id="kind-server" name="kind" value="server" {{if ne .Kind "builtin"}}checked{{end}}>
+        <span><b>My own PostgreSQL server</b><span class="hint">Version 16 or newer, on this computer or another one.</span></span></label>
+      {{else}}
+      <input type="hidden" name="kind" value="server">
+      {{end}}
+      <div class="server">
       <div class="row">
         <div>
           <label for="host">Server</label>
-          <input type="text" id="host" name="host" value="{{.Host}}" required placeholder="localhost">
+          <input type="text" id="host" name="host" value="{{.Host}}" placeholder="localhost">
         </div>
         <div>
           <label for="port">Port</label>
-          <input type="number" id="port" name="port" value="{{.Port}}" required min="1" max="65535">
+          <input type="number" id="port" name="port" value="{{.Port}}" min="1" max="65535">
         </div>
       </div>
       <label for="database">Database name</label>
-      <input type="text" id="database" name="database" value="{{.Database}}" required>
+      <input type="text" id="database" name="database" value="{{.Database}}">
       <label for="user">User</label>
-      <input type="text" id="user" name="user" value="{{.User}}" required>
+      <input type="text" id="user" name="user" value="{{.User}}">
       <label for="password">Password</label>
       <input type="password" id="password" name="password" value="{{.Password}}">
       <label for="sslmode">Encryption (SSL)</label>
@@ -82,12 +98,14 @@
         <option value="verify-full" {{if eq .SSLMode "verify-full"}}selected{{end}}>Required, verify certificate</option>
       </select>
       <label class="check"><input type="checkbox" name="create" {{if .Create}}checked{{end}}> <span>Create the database if it doesn't exist <span class="hint">(the user needs permission to create databases, e.g. the <code>postgres</code> administrator)</span></span></label>
+      </div>
       <div class="actions">
-        <button type="submit" name="action" value="test">Test connection</button>
+        <button type="submit" name="action" value="test" class="server">Test connection</button>
         <button type="submit" name="action" value="save" class="primary">Save and start</button>
       </div>
+      <p class="busy">The first start downloads PostgreSQL (15–60 MB) and takes about a minute.</p>
     </form>
-    <details>
+    <details class="server">
       <summary>Don't have PostgreSQL yet?</summary>
       <p style="margin-top:10px"><b>Windows / macOS:</b> install it from <a href="https://www.postgresql.org/download/" target="_blank" rel="noopener">postgresql.org/download</a>, remember the password you choose for the <code>postgres</code> user, and enter <code>postgres</code> and that password above with "Create the database" ticked.</p>
       <p><b>Debian / Ubuntu:</b></p>

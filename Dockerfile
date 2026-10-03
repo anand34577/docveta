@@ -17,9 +17,13 @@ COPY . .
 COPY --from=web /src/internal/webui/dist ./internal/webui/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/docveta ./cmd/docveta
+# Empty folders owned by the runtime user: Docker volumes mounted there start out writable.
+RUN mkdir -p /out/data /out/workers
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/docveta /docveta
+COPY --from=build --chown=65532:65532 /out/data /data
+COPY --from=build --chown=65532:65532 /out/workers /run/docveta-workers
 ENV DOCVETA_DATA_DIR=/data DOCVETA_LISTEN=:8080
 VOLUME ["/data"]
 EXPOSE 8080

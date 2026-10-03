@@ -5,6 +5,37 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-03
+
+Installing Docveta no longer needs a database server, worker tokens or edited config files.
+
+### Added
+- **Built-in database.** The setup page's default is now "Built-in database": one click and
+  Docveta runs its own PostgreSQL 17 inside its data folder, listening on this computer only
+  with a generated password. Works on Windows (x64, ARM), macOS, and Linux including Alpine.
+  The Windows downloads include it, so setup works offline; elsewhere it's downloaded once and
+  checked against a pinned SHA-256. Connecting your own PostgreSQL still works as before.
+- **One-command Linux install:** `get-docveta.sh` installs Docveta as a service (systemd, or
+  OpenRC on Alpine) with text recognition for the machine: the NPU on Allwinner A733 boards,
+  otherwise the processor. All downloads are checked against the release's checksums.
+  `--proxmox <CTID>` on a Proxmox host gives a container the NPU and the fast cores.
+- **Docker without editing anything:** `docker compose up -d` generates the database password,
+  and text recognition engines enroll themselves for a token (`POST /worker/v1/enroll` with a
+  key only the engine containers can read). PaddleOCR on the processor now runs by default.
+  Data lives in Docker volumes, so no `chown` either. Older `.env` files keep working.
+- Allwinner A733: the release package now includes a prebuilt detection model (calibrated on
+  generated pages, see `workers/allwinner/prebuilt`), and the installer fetches Allwinner's
+  VIPLite libraries pinned by checksum. Docveta starts the engine itself; no worker service or
+  token is needed.
+
+### Changed
+- The Windows installer no longer asks you to install PostgreSQL first.
+- Docker profiles: `tesseract` and `npu-rockchip` (the old `cpu-ocr` and `npu` still work).
+
+### Fixed
+- Search results: with only a few results, a document's thumbnail filled half the screen. The
+  grid measured its width before the results list existed.
+
 ## [0.3.0] - 2026-10-03
 
 ### Changed
