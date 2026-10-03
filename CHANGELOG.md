@@ -5,6 +5,15 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-03
+
+### Fixed
+- Linux: the service didn't start on systems without `video` and `render` groups (minimal
+  Debian/Ubuntu, many container templates and cloud VMs): the systemd unit required them.
+  `install.sh` already adds Docveta to those groups where they exist, so the unit no longer
+  names them. CI now installs the package on Debian (systemd) and Alpine (OpenRC) and checks
+  the service runs.
+
 ## [0.4.0] - 2026-10-03
 
 Installing Docveta no longer needs a database server, worker tokens or edited config files.
