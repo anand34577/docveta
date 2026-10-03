@@ -194,10 +194,11 @@ jobs:
           name: ocr-${{ matrix.label }}
           path: workers/onnx/dist/pkg/*.zip
 
-  # OCR worker for the Allwinner A733 NPU (Radxa Cubie A7A). Allwinner's VIPLite libraries
-  # and the NPU models aren't included: users add them (see workers/allwinner/README.md).
+  # OCR worker for the Allwinner A733 NPU (Radxa Cubie A7A): detection on the NPU, reading on
+  # the CPU with the bundled ONNX models. Allwinner's VIPLite libraries and det.nb aren't
+  # included: users add them (see workers/allwinner/README.md).
   allwinner:
-    needs: models # for the fonts
+    needs: models # reading models and fonts
     runs-on: ubuntu-22.04-arm # glibc 2.35: runs on Debian 12/13, Ubuntu 22.04+
     steps:
       - uses: actions/checkout@v7
@@ -208,16 +209,21 @@ jobs:
         with:
           name: fonts
           path: fonts
+      - uses: actions/download-artifact@v8
+        with:
+          name: models
+          path: models
       - name: Build
         working-directory: workers/allwinner
         run: |
           set -eu
-          pip install "../sdk-python[heic,ppocr]" pyinstaller
+          pip install "../sdk-python[heic,ppocr]" onnxruntime pyinstaller
           python -m unittest test_allwinner
           pyinstaller --noconfirm docveta-worker-allwinner.spec
           out=dist/docveta-worker-allwinner
           cp -r ../../fonts "$out/fonts"
           mkdir -p "$out/models" "$out/viplite"
+          cp ../../models/rec_*.onnx ../../models/dict_*.txt ../../models/VERSION "$out/models/"
           cp README.md "$out/README.md"
           # No NPU here: the program must start and get as far as loading VIPLite.
           if "$out/docveta-worker-allwinner" --probe > probe.log 2>&1; then cat probe.log; exit 1; fi

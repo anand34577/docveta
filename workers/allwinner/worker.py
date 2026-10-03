@@ -1,13 +1,13 @@
 """Docveta OCR worker for the Allwinner A733 NPU (Radxa Cubie A7A and other A733 boards).
 
-Runs PaddleOCR (PP-OCR) detection + recognition models compiled to NBG (.nb) with the
-ACUITY Toolkit (see convert/convert.py and README.md) on the NPU through VIPLite 1.13 or 2.0
-(device /dev/vipcore). Bound with ctypes, so no C
-compiler is needed on the board.
+Finds text with the PaddleOCR (PP-OCR) detection model compiled to NBG (det.nb) with the
+ACUITY Toolkit (see convert/convert.py and README.md), on the NPU through VIPLite
+(/dev/vipcore, bound with ctypes). Reads the lines on the CPU with ONNX Runtime, using the
+same models as the GPU/CPU engine (see Models for why).
 
 Model layout (DOCVETA_MODELS_DIR):
-    det.nb
-    rec_<script>_<width>.nb  for every width in ppocr.REC_WIDTHS, + dict_<script>.txt
+    det.nb                                   converted for your board
+    rec_<script>.onnx + dict_<script>.txt    included in the release package
 
     python worker.py           run the worker (DOCVETA_URL, DOCVETA_WORKER_TOKEN)
     python worker.py --probe   check the NPU and models, time one inference each, exit
@@ -25,6 +25,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
+import onnxruntime as ort
 from PIL import Image
 
 from docveta_worker import ppocr
@@ -37,13 +38,11 @@ APP_DIR = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else o
 MODELS_DIR = os.environ.get("DOCVETA_MODELS_DIR") or os.path.join(APP_DIR, "models")
 LANG_SCRIPT = ppocr.LANG_SCRIPT
 
-# PP-OCR input normalisation, as in the ONNX engine: BGR channel order, then
-# detection (x - mean) / std with ImageNet values, recognition (x - 127.5) / 127.5.
-# ACUITY keeps it out of the compiled model, so the worker applies it (see Net.lut).
+# PP-OCR detection input, as in the ONNX engine: BGR channel order, (x - mean) / std with
+# ImageNet values. ACUITY keeps it out of the compiled model, so the worker applies it (see Net.lut).
 DET_NORM = (np.array([0.485, 0.456, 0.406]) * 255, np.array([0.229, 0.224, 0.225]) * 255)
-REC_NORM = (np.full(3, 127.5), np.full(3, 127.5))
 
-# ponytail: the NPU does the heavy lifting; one OpenCV thread per page keeps the shared CPU free.
+# ponytail: one OpenCV thread per page keeps the shared CPU free.
 cv2.setNumThreads(1)
 
 # ---------------------------------------------------------------- VIPLite ABI (vip_lite.h, same in 1.13 and 2.0)
@@ -53,7 +52,7 @@ NP_DTYPE = {FMT_FP32: np.float32, FMT_FP16: np.float16, FMT_UINT8: np.uint8, FMT
             FMT_UINT16: np.uint16, FMT_INT16: np.int16, FMT_BFP16: np.uint16, FMT_INT32: np.int32}
 Q_NONE, Q_DFP, Q_AFFINE = 0, 1, 2
 PROP_QUANT, PROP_NDIM, PROP_SIZES, PROP_FORMAT, PROP_DFP_POS, PROP_SCALE, PROP_ZERO_POINT = range(7)
-NET_INPUT_COUNT, NET_OUTPUT_COUNT, NET_SET_CORE_INDEX = 1, 2, 70
+NET_INPUT_COUNT, NET_OUTPUT_COUNT = 1, 2
 CREATE_FROM_FILE = 0x01
 OPER_FLUSH, OPER_INVALIDATE = 1, 2
 HW_DEVICE_COUNT, HW_CORE_COUNT = 1, 2
@@ -215,13 +214,11 @@ class Tensor:
 class Net:
     """A prepared NBG network with its I/O buffers. run() is serialised per network."""
 
-    def __init__(self, vip: VipLite, path: str, core: Optional[int], norm: tuple[np.ndarray, np.ndarray]) -> None:
+    def __init__(self, vip: VipLite, path: str, norm: tuple[np.ndarray, np.ndarray]) -> None:
         lib = vip.lib
         self.vip, self.path, self.lock = vip, path, threading.Lock()
         self.net = C.c_void_p()
         vip.check(lib.vip_create_network(path.encode(), C.c_uint32(0), CREATE_FROM_FILE, C.byref(self.net)), f"load {path}")
-        if core is not None:
-            vip.check(lib.vip_set_network(self.net, NET_SET_CORE_INDEX, C.byref(C.c_uint32(core))), "set core index")
         vip.check(lib.vip_prepare_network(self.net), f"prepare {os.path.basename(path)}")
         n_in, n_out = C.c_uint32(0), C.c_uint32(0)
         vip.check(lib.vip_query_network(self.net, NET_INPUT_COUNT, C.byref(n_in)), "query inputs")
@@ -250,30 +247,36 @@ class Net:
             return dequantize(o.array, o.fmt, o.quant, o.scale, o.zero_point, o.fl)
 
 
-class CoreModels:
-    """det + all rec networks loaded for one NPU core."""
+class Models:
+    """Text detection on the NPU, reading on the CPU (ONNX Runtime). The A733 NPU can't run
+    the PP-OCR recognition network accurately (int16 drifts to blank output, int8 misreads
+    about 20% of characters, float16 is slow and still wrong), while detection works well
+    quantised."""
 
-    def __init__(self, vip: VipLite, model_dir: str, scripts: list[str], core: Optional[int]) -> None:
-        self.det = Net(vip, os.path.join(model_dir, "det.nb"), core, DET_NORM)
+    def __init__(self, vip: VipLite, model_dir: str, scripts: list[str]) -> None:
+        self.det = Net(vip, os.path.join(model_dir, "det.nb"), DET_NORM)
         shape = self.det.inputs[0].shape
-        if len(shape) != 4 or shape[1] != 3 or shape[2] != shape[3]:
+        if shape[2] != shape[3]:
             raise SystemExit(f"det.nb input is {shape}; expected (1, 3, S, S). Re-convert with convert/convert.py")
         self.det_size = shape[2]
-        self.rec = {s: {w: Net(vip, os.path.join(model_dir, f"rec_{s}_{w}.nb"), core, REC_NORM) for w in ppocr.REC_WIDTHS}
+        so = ort.SessionOptions()
+        # ponytail: one CPU thread per page by default; the board's CPU is shared with other work.
+        so.intra_op_num_threads = max(1, int(os.environ.get("DOCVETA_CPU_THREADS", "1")))
+        so.inter_op_num_threads = 1
+        # Sessions are thread-safe: shared by all pages in flight.
+        self.rec = {s: ort.InferenceSession(os.path.join(model_dir, f"rec_{s}.onnx"), so, providers=["CPUExecutionProvider"])
                     for s in scripts}
         self.charsets = {s: ppocr.load_charset(os.path.join(model_dir, f"dict_{s}.txt")) for s in scripts}
 
     def det_infer(self, x: np.ndarray) -> np.ndarray:  # (1, S, S, 3) uint8 -> (1, 1, S, S)
         return self.det.run(x).reshape(1, 1, self.det_size, self.det_size)
 
-    def rec_infer(self, script: str):
-        nets = self.rec[script]
-
-        def infer(x: np.ndarray, bucket: int) -> np.ndarray:  # (1, 48, W, 3) uint8 -> (1, T, C)
-            out = nets[bucket].run(x)
-            return out.reshape((1,) + out.shape[-2:])
-
-        return infer
+    def read(self, img: np.ndarray, box: ppocr.TextBox, script: str) -> Optional[ppocr.RecResult]:
+        inp, frac = ppocr.rec_input_float(ppocr.crop_box(img, box))
+        sess = self.rec[script]
+        probs = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0]
+        r = ppocr.ctc_decode(probs, self.charsets[script], frac)
+        return r if r.text else None
 
 
 class AllwinnerEngine(Engine):
@@ -282,17 +285,15 @@ class AllwinnerEngine(Engine):
     def __init__(self, vip: Optional[VipLite] = None) -> None:
         files = set(os.listdir(MODELS_DIR)) if os.path.isdir(MODELS_DIR) else set()
         if "det.nb" not in files:
-            raise SystemExit(f"No det.nb in {MODELS_DIR}. Convert models with convert/convert.py (README.md) and set DOCVETA_MODELS_DIR.")
-        self.scripts = sorted(s for s in set(LANG_SCRIPT.values())
-                              if f"dict_{s}.txt" in files and all(f"rec_{s}_{w}.nb" in files for w in ppocr.REC_WIDTHS))
+            raise SystemExit(f"No det.nb in {MODELS_DIR}. Convert it with convert/convert.py (README.md) and set DOCVETA_MODELS_DIR.")
+        self.scripts = sorted(s for s in set(LANG_SCRIPT.values()) if f"rec_{s}.onnx" in files and f"dict_{s}.txt" in files)
         if not self.scripts:
-            raise SystemExit(f"No complete recognition model set in {MODELS_DIR}: need rec_<script>_<w>.nb for w in "
-                             f"{ppocr.REC_WIDTHS} plus dict_<script>.txt")
+            raise SystemExit(f"No reading models (rec_<script>.onnx + dict_<script>.txt) in {MODELS_DIR}. "
+                             "They come with the release package.")
         self.vip = vip or VipLite()
-        # One model set per NPU core (A733 has one); several pages in flight so the CPU
-        # pre/post-processing of one page overlaps the NPU work of another.
-        self.cores = [CoreModels(self.vip, MODELS_DIR, self.scripts, c if self.vip.cores > 1 else None) for c in range(self.vip.cores)]
-        self.concurrency = max(1, int(os.environ.get("DOCVETA_CONCURRENCY", self.vip.cores + 1)))
+        self.m = Models(self.vip, MODELS_DIR, self.scripts)
+        # Two pages in flight: one is read on the CPU while the other is detected on the NPU.
+        self.concurrency = max(1, int(os.environ.get("DOCVETA_CONCURRENCY", "2")))
         self.languages = sorted(l for l, s in LANG_SCRIPT.items() if s in self.scripts)
         self.tags = ("npu", "allwinner", "a733")
         self.max_pages_per_task = 20
@@ -302,12 +303,12 @@ class AllwinnerEngine(Engine):
         except OSError:
             version = "unknown"
         self.version = f"a733/{version}"
-        self.models = {"det": "det.nb", **{f"rec_{s}": f"rec_{s}_*.nb" for s in self.scripts}}
-        log.info("Allwinner NPU (VIPLite 0x%08x): %d core(s), %d pages in flight, det %dpx, scripts %s, languages %s",
-                 self.vip.version, self.vip.cores, self.concurrency, self.cores[0].det_size, self.scripts, self.languages)
+        self.models = {"det": "det.nb", **{f"rec_{s}": f"rec_{s}.onnx" for s in self.scripts}}
+        log.info("Allwinner NPU (VIPLite 0x%08x): detection %dpx on the NPU, reading on the CPU; %d pages in flight; "
+                 "scripts %s, languages %s", self.vip.version, self.m.det_size, self.concurrency, self.scripts, self.languages)
 
-    def open_session(self, slot: int) -> CoreModels:
-        return self.cores[slot % len(self.cores)]
+    def open_session(self, slot: int) -> Models:
+        return self.m
 
     def _script(self, languages: list[str]) -> str:
         for l in languages:
@@ -316,50 +317,45 @@ class AllwinnerEngine(Engine):
                 return s
         return "en" if "en" in self.scripts else self.scripts[0]
 
-    def recognize(self, session: Optional[CoreModels], image: Image.Image, page_no: int, languages: list[str]) -> PageResult:
+    def recognize(self, session: Optional[Models], image: Image.Image, page_no: int, languages: list[str]) -> PageResult:
         if session is None:
             raise EngineError("engine_error", "no NPU session", retryable=True)
         img = np.asarray(image.convert("RGB"))
         script = self._script(languages)
-        rec, charset = session.rec_infer(script), session.charsets[script]
         try:
             boxes = ppocr.detect(img, session.det_infer, session.det_size)
-            lines: list[Line] = []
-            for b in boxes:
-                r = ppocr.recognize(img, b, rec, charset)
-                if r is None or r.confidence < 0.5:
-                    continue
-                x0, y0, x1, y1 = b.rect
-                w = x1 - x0
-                words = [Word(t, (x0 + f0 * w, y0, x0 + f1 * w, y1), r.confidence) for t, f0, f1 in r.words]
-                lines.append(Line(text=r.text, bbox=(x0, y0, x1, y1), confidence=r.confidence, words=words))
         except VipError as e:
             raise EngineError("engine_error", str(e), retryable=True)
+        lines: list[Line] = []
+        for b in boxes:
+            r = session.read(img, b, script)
+            if r is None or r.confidence < 0.5:
+                continue
+            x0, y0, x1, y1 = b.rect
+            w = x1 - x0
+            words = [Word(t, (x0 + f0 * w, y0, x0 + f1 * w, y1), r.confidence) for t, f0, f1 in r.words]
+            lines.append(Line(text=r.text, bbox=(x0, y0, x1, y1), confidence=r.confidence, words=words))
         lang = next((l for l in languages if LANG_SCRIPT.get(l) == script), None)
         return PageResult(lines=lines, language=lang)
 
 
 def probe() -> None:
-    """Loads every model on the NPU, times each one and reads a rendered test image."""
+    """Checks the NPU, times detection, and reads a rendered test image."""
     logging.basicConfig(level="INFO", format="%(message)s")
     vip = VipLite()
     v = vip.version
     print(f"VIPLite {vip.library} {v >> 16}.{v >> 8 & 0xFF}.{v & 0xFF}, {vip.cores} NPU core(s)")  # 0x00MMmmpp
     if not os.path.isfile(os.path.join(MODELS_DIR, "det.nb")):
-        print(f"NPU runtime OK; no models in {MODELS_DIR} yet")
+        print(f"NPU runtime OK; no det.nb in {MODELS_DIR} yet")
         return
     e = AllwinnerEngine(vip)
-    m = e.cores[0]
-    nets = [m.det] + [n for per in m.rec.values() for n in per.values()]
-    for n in nets:
-        nn, c, h, w = n.inputs[0].shape
-        x = np.full((nn, h, w, c), 255, dtype=np.uint8)
-        n.run(x)  # warm-up
-        t = time.perf_counter()
-        for _ in range(5):
-            n.run(x)
-        ms = (time.perf_counter() - t) / 5 * 1000
-        print(f"{os.path.basename(n.path):24} in {n.inputs[0].describe():50} out {n.outputs[0].describe():50} {ms:7.1f} ms")
+    m = e.m
+    x = np.full((1, m.det_size, m.det_size, 3), 255, dtype=np.uint8)
+    m.det.run(x)  # warm-up
+    t = time.perf_counter()
+    for _ in range(5):
+        m.det.run(x)
+    print(f"Detection on the NPU: input {m.det.inputs[0].describe()}, {(time.perf_counter() - t) / 5 * 1000:.1f} ms per tile")
 
     # Speed alone proves little: read back a rendered test image.
     from PIL import ImageDraw, ImageFont
@@ -372,14 +368,15 @@ def probe() -> None:
         font = ImageFont.load_default(size=44)
     for i, line in enumerate(["Electricity bill dated 05/08/2026", "Amount due: 1842.00 INR"]):
         draw.text((60, 80 + i * 120), line, fill="black", font=font)
+    e.recognize(m, img, 1, ["en"])  # warm-up
     t = time.perf_counter()
     res = e.recognize(m, img, 1, ["en"])
     print(f"Test image: {len(res.lines)} line(s) in {(time.perf_counter() - t) * 1000:.0f} ms")
     for line in res.lines:
         print(f"  {line.confidence:.2f}  {line.text}")
     if not res.lines:
-        raise SystemExit("the NPU ran, but no text was recognised in the test image")
-    print("NPU OK")
+        raise SystemExit("no text was recognised in the test image")
+    print("OK")
 
 
 if __name__ == "__main__":
