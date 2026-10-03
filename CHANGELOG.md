@@ -5,6 +5,19 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-03
+
+### Changed
+- Allwinner worker: text is still found on the NPU, but each line is now read on the CPU with
+  the same ONNX models as the GPU/CPU engine. Tested on a Cubie A7A, the NPU can't run the
+  PaddleOCR reading network accurately: int16 output drifts to nothing, int8 gets about one
+  character in five wrong, and float16 is 20 times slower and still wrong. Reading on the CPU
+  takes about 0.3 s per line on a Cortex-A76 core.
+- The release package now includes the reading models for English, Devanagari, Tamil, Telugu
+  and Kannada. You only convert the detection model (`det.nb`), and the converter now builds
+  only that.
+- The setup guide shows how to pin the Proxmox container to the A733's two fast cores.
+
 ## [0.2.2] - 2026-10-03
 
 ### Fixed
