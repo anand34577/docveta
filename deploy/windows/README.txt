@@ -6,11 +6,11 @@ PORTABLE (ZIP) VERSION
      docveta.exe, and the "ocr" folder if you downloaded the OCR package.
   2. Double-click docveta.exe. A window shows the log; your browser opens
      http://localhost:8080. Keep the window open while you use Docveta.
-  3. In the browser, connect Docveta to your PostgreSQL database (Docveta can create
-     its own database), then create your account.
+  3. In the browser, click "Save and start" to use the built-in database (or connect
+     your own PostgreSQL), then create your account.
 
-  Your documents and settings are stored in the "data" folder next to docveta.exe.
-  Back up that folder and your PostgreSQL database.
+  Your documents, settings and the built-in database are stored in the "data" folder
+  next to docveta.exe. To back up, close Docveta and copy that folder.
 
   To run Docveta in the background at every start-up instead, open a command prompt
   as administrator in this folder and run:
@@ -21,9 +21,10 @@ INSTALLER VERSION
   The installer sets up Docveta as a Windows service that starts with Windows. Data
   lives in C:\ProgramData\Docveta, settings in docveta.conf in the install folder.
 
-NEED POSTGRESQL?
+YOUR OWN POSTGRESQL? (optional: the built-in database needs nothing installed)
   Download it from https://www.postgresql.org/download/windows/ (version 16 or
-  newer) and remember the password you set for the "postgres" user.
+  newer) and remember the password you set for the "postgres" user. The 32-bit
+  version of Docveta has no built-in database and always needs one.
 
 TEXT RECOGNITION (OCR)
   With the "ocr" folder present, Docveta reads text from scans on your graphics card

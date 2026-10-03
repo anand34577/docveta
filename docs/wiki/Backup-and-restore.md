@@ -10,6 +10,11 @@ Three things make up your Docveta:
 
 Back up all three, and keep at least one copy on another device or in the cloud.
 
+**Built-in database:** everything, the database included, is in the data folder (the database
+in its `postgres` subfolder). Stop Docveta, copy the whole data folder, start Docveta again.
+To restore, put the folder back while Docveta is stopped. The sections below are for your own
+PostgreSQL server.
+
 Files are never changed after they're stored, and files Docveta no longer needs are only
 deleted a week later. So the safe order is: **database first, then files.** A backup taken
 that way is always consistent, even while Docveta runs.

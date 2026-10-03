@@ -3,16 +3,35 @@
 Docveta stores its records (documents' details, tags, users, search index) in
 **PostgreSQL 16 or newer**. The files themselves (PDFs, images) stay in Docveta's data folder.
 
-You need PostgreSQL once; Docveta then sets up its tables by itself. PostgreSQL can run on the
-same computer as Docveta or on another one.
+**Most people don't need to install anything:** on the setup page, the **built-in database**
+is selected by default. Docveta then runs its own private PostgreSQL inside its data folder.
+Choose your own PostgreSQL server instead if you already run one, want the database on another
+computer, or use 32-bit Windows (no built-in database there).
 
+- [The built-in database](#the-built-in-database)
 - [Install PostgreSQL](#install-postgresql)
 - [Connect Docveta: the setup page](#connect-docveta-the-setup-page)
 - [Create the database yourself](#create-the-database-yourself-optional)
 - [A database on another computer](#a-database-on-another-computer)
 - [Change the database later](#change-the-database-later)
 
+## The built-in database
+
+Click **Save and start** on the setup page with *Built-in database* selected. The first time,
+Docveta downloads PostgreSQL 17 (15–60 MB, checked against a fixed checksum) and creates the
+database, which takes about a minute; later starts take seconds.
+
+- It lives in the `postgres` folder inside Docveta's data folder, together with your documents.
+- It only accepts connections from the same computer, with a random password that Docveta
+  generated and keeps in `postgres/password` (readable by Docveta only).
+- Docveta starts and stops it; there is no separate service.
+- **Back up** by stopping Docveta and copying the whole data folder.
+- It needs an internet connection the first time, and doesn't run as `root` (the Linux service
+  runs as the `docveta` user).
+
 ## Install PostgreSQL
+
+Only needed if you don't use the built-in database.
 
 ### Windows
 
