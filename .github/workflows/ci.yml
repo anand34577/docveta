@@ -136,8 +136,11 @@ jobs:
           # On failure, one annotation with the reason and the logs (annotations are public).
           function Fail($why) {
             $parts = @("$why", '--- service:', (Get-Service Docveta -ErrorAction SilentlyContinue | Out-String))
-            foreach ($f in $log, $pglog) { if (Test-Path $f) { $parts += "--- $f"; $parts += (Get-Content $f -Tail 25) } }
-            $parts += '--- data folder:'; $parts += (Get-ChildItem C:\ProgramData\Docveta -Recurse -Depth 1 -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+            $parts += '--- whoami:'; $parts += (whoami /groups | Select-String 'Mandatory Label|BUILTIN\Administrators' | ForEach-Object { $_.Line.Substring(0, [Math]::Min(90, $_.Line.Length)) })
+            $parts += '--- data folder:'; $parts += (cmd /c 'dir /s /b C:\ProgramData\Docveta 2>&1' | Select-Object -First 40)
+            foreach ($f in $log, $pglog) { $parts += "--- $f"; $parts += (cmd /c "type `"$f`" 2>&1" | Select-Object -Last 25) }
+            $parts += '--- postgres processes:'; $parts += (Get-Process postgres -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id) $($_.Path)" })
+            $parts += '--- listening:'; $parts += (netstat -ano | Select-String 'LISTENING' | Select-String ':8080 |127.0.0.1:' | ForEach-Object { $_.Line.Trim() } | Select-Object -First 10)
             $msg = ($parts -join "`n") -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
             Write-Output "::error title=Windows service test::$msg"
             exit 1
