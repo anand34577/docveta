@@ -32,7 +32,9 @@ from docveta_worker import Engine, EngineError, Line, PageResult, Word, run
 
 log = logging.getLogger("docveta_worker.allwinner")
 
-MODELS_DIR = os.environ.get("DOCVETA_MODELS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"))
+# Folder of the program: next to the executable in the release package, else next to this file.
+APP_DIR = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
+MODELS_DIR = os.environ.get("DOCVETA_MODELS_DIR") or os.path.join(APP_DIR, "models")
 LANG_SCRIPT = ppocr.LANG_SCRIPT
 
 # ponytail: the NPU does the heavy lifting; one OpenCV thread per page keeps the shared CPU free.
@@ -104,7 +106,7 @@ class VipLite:
     def __init__(self) -> None:
         # VIPLite 2.0 (libNBGlinker + libVIPhal) or 1.13 (libVIPlite + libVIPuser): the API used here is identical.
         # It must match the host's vipcore driver (cat /sys/module/vipcore/version).
-        d = os.environ.get("DOCVETA_VIPLITE_DIR", "")
+        d = os.environ.get("DOCVETA_VIPLITE_DIR") or (os.path.join(APP_DIR, "viplite") if os.path.isdir(os.path.join(APP_DIR, "viplite")) else "")
         lib, errors = None, []
         for runtime, api in (("libVIPhal.so", "libNBGlinker.so"), ("libVIPuser.so", "libVIPlite.so")):
             try:
@@ -115,8 +117,9 @@ class VipLite:
             except OSError as e:
                 errors.append(str(e))
         if lib is None:
-            raise SystemExit(f"cannot load VIPLite ({'; '.join(errors)}). Set DOCVETA_VIPLITE_DIR to the ai-sdk folder "
-                             "viplite-tina/lib/aarch64-none-linux-gnu/<version> matching the host driver")
+            raise SystemExit(f"cannot load VIPLite ({'; '.join(errors)}). Copy libNBGlinker.so and libVIPhal.so from ai-sdk "
+                             "(viplite-tina/lib/aarch64-none-linux-gnu/v2.0) into viplite/ next to the program, "
+                             "or set DOCVETA_VIPLITE_DIR")
         lib.vip_get_version.restype = C.c_uint32
         lib.vip_get_buffer_size.restype = C.c_uint32
         lib.vip_map_buffer.restype = C.c_void_p  # everything else returns vip_status_e (int, the ctypes default)
@@ -331,6 +334,8 @@ def probe() -> None:
 
 
 if __name__ == "__main__":
+    if os.path.isdir(os.path.join(APP_DIR, "fonts")):  # Noto fonts shipped in the release package
+        os.environ.setdefault("DOCVETA_FONTS_DIR", os.path.join(APP_DIR, "fonts"))
     if "--probe" in sys.argv:
         probe()
     else:

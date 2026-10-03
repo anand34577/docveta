@@ -19,6 +19,8 @@ web/*.tsbuildinfo
 /workers/rknn/convert/.venv/
 /workers/allwinner/models/
 /workers/allwinner/convert/work/
+/workers/allwinner/build/
+/workers/allwinner/dist/
 
 # Python
 __pycache__/
