@@ -25,6 +25,7 @@
   #define OutputDir "..\..\dist"
 #endif
 #define WithOCR DirExists(SourceDir + "\ocr")
+#define WithPostgres DirExists(SourceDir + "\postgres")
 
 [Setup]
 AppId={{35315C92-5E2C-4F9F-B595-DAC420E3B553}
@@ -76,6 +77,10 @@ Source: "{#SourceDir}\LICENSE"; DestDir: "{app}"; Components: server
 Source: "{#SourceDir}\README.txt"; DestDir: "{app}"; Flags: isreadme; Components: server
 #if WithOCR
 Source: "{#SourceDir}\ocr\*"; DestDir: "{app}\ocr"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: ocr
+#endif
+#if WithPostgres
+; PostgreSQL for the built-in database, so setting it up needs no download.
+Source: "{#SourceDir}\postgres\*"; DestDir: "{app}\postgres"; Flags: ignoreversion; Components: server
 #endif
 
 [Dirs]

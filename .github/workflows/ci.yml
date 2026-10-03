@@ -118,6 +118,14 @@ jobs:
           New-Item -ItemType Directory -Force stage | Out-Null
           go build -o stage\docveta.exe .\cmd\docveta
           Copy-Item LICENSE, deploy\windows\README.txt -Destination stage
+          # Bundle PostgreSQL like the release does, so the test covers the offline path.
+          $pg = Get-Content internal\platform\builtindb\builtindb.go -Raw
+          $pgv = [regex]::Match($pg, 'const Version = "([^"]+)"').Groups[1].Value
+          $pgsum = [regex]::Match($pg, '"windows/amd64":\s*\{"windows-amd64", "([0-9a-f]{64})"').Groups[1].Value
+          $jar = "embedded-postgres-binaries-windows-amd64-$pgv.jar"
+          New-Item -ItemType Directory -Force stage\postgres | Out-Null
+          Invoke-WebRequest -UseBasicParsing -OutFile "stage\postgres\$jar" "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-windows-amd64/$pgv/$jar"
+          if ((Get-FileHash "stage\postgres\$jar" -Algorithm SHA256).Hash.ToLower() -ne $pgsum) { throw "PostgreSQL package checksum mismatch" }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DAppVersion=0.0.0-ci /DArch=x64 "/DSourceDir=$PWD\stage" "/DOutputDir=$PWD\out" deploy\windows\docveta.iss
           if ($LASTEXITCODE -ne 0) { throw "installer failed to compile" }
       - name: Install as a service, set up the built-in database, restart, uninstall
@@ -138,6 +146,7 @@ jobs:
           if ($r.Content -notmatch 'Starting Docveta') { $r.Content; throw 'built-in database setup failed' }
           $log = 'C:\ProgramData\Docveta\logs\docveta.log'
           if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml 'openapi')) { Get-Content $log -Tail 40; throw 'Docveta did not start on the built-in database' }
+          if (-not (Select-String -Path $log -Pattern 'using the bundled PostgreSQL' -Quiet)) { throw 'the bundled PostgreSQL was not used' }
           Restart-Service Docveta
           if (-not (WaitFor http://localhost:8080/api/v1/openapi.yaml 'openapi')) { Get-Content $log -Tail 40; throw 'Docveta did not come back after a restart' }
           Start-Process "$env:ProgramFiles\Docveta\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait

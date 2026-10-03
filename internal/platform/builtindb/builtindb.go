@@ -58,12 +58,27 @@ var artifacts = map[string][2]string{
 	"darwin/arm64":  {"darwin-arm64v8", "a1c2786acb0c398f9b2d76806fc52f5dc8b222cbc8e9383a9b9702084daaf3a5"},
 	"windows/amd64": {"windows-amd64", "98040fae18dd9633ff95932125b0cecf0a45a1a9312e216e2a33ad03a31d4251"},
 	"windows/arm64": {"windows-amd64", "98040fae18dd9633ff95932125b0cecf0a45a1a9312e216e2a33ad03a31d4251"}, // runs under x64 emulation
+	// Alpine and other musl-based Linux
+	"linux/amd64/musl": {"linux-amd64-alpine", "ace9a6f95b1c98ce84c9841267cd04ebee5d7de5dc7b8fea148ead44f145afbd"},
+	"linux/arm64/musl": {"linux-arm64v8-alpine", "4ab1a5ced1200b2740186d537fd79628bc1c83f07d2bab7b18b6103390d48c54"},
 }
 
-// Supported reports whether a built-in database is available on this system
-// (not on 32-bit Windows: no current PostgreSQL build exists for it).
+// artifact returns the binary package for this system.
+func artifact() ([2]string, bool) {
+	key := runtime.GOOS + "/" + runtime.GOARCH
+	if runtime.GOOS == "linux" {
+		if m, _ := filepath.Glob("/lib/ld-musl-*.so.1"); len(m) > 0 {
+			key += "/musl"
+		}
+	}
+	a, ok := artifacts[key]
+	return a, ok
+}
+
+// Supported reports whether a built-in database is available on this system (not on
+// 32-bit Windows or 32-bit musl Linux: no current PostgreSQL build exists for them).
 func Supported() bool {
-	_, ok := artifacts[runtime.GOOS+"/"+runtime.GOARCH]
+	_, ok := artifact()
 	return ok
 }
 
@@ -250,12 +265,27 @@ func ensureBinaries(ctx context.Context, p paths, log *slog.Logger) error {
 	if _, err := os.Stat(p.tool("pg_ctl")); err == nil {
 		return nil
 	}
-	a := artifacts[runtime.GOOS+"/"+runtime.GOARCH]
-	src := fmt.Sprintf("%s/embedded-postgres-binaries-%s/%s/embedded-postgres-binaries-%s-%s.jar", downloadBase, a[0], Version, a[0], Version)
-	log.Info("downloading PostgreSQL for the built-in database", "version", Version, "from", src)
-	jar, err := download(ctx, src, a[1])
-	if err != nil {
-		return fmt.Errorf("downloading PostgreSQL failed (%v). Check the internet connection, or connect a PostgreSQL server instead", err)
+	a, _ := artifact()
+	name := fmt.Sprintf("embedded-postgres-binaries-%s-%s.jar", a[0], Version)
+	var jar []byte
+	// Installers can ship the package next to the program, so no download is needed.
+	if exe, err := os.Executable(); err == nil {
+		if b, err := os.ReadFile(filepath.Join(filepath.Dir(exe), "postgres", name)); err == nil {
+			if err := verify(b, a[1]); err != nil {
+				return err
+			}
+			jar = b
+			log.Info("using the bundled PostgreSQL for the built-in database", "version", Version)
+		}
+	}
+	if jar == nil {
+		src := fmt.Sprintf("%s/embedded-postgres-binaries-%s/%s/%s", downloadBase, a[0], Version, name)
+		log.Info("downloading PostgreSQL for the built-in database", "version", Version, "from", src)
+		b, err := download(ctx, src, a[1])
+		if err != nil {
+			return fmt.Errorf("downloading PostgreSQL failed (%v). Check the internet connection, or connect a PostgreSQL server instead", err)
+		}
+		jar = b
 	}
 	tmp := p.bin + ".tmp"
 	_ = os.RemoveAll(tmp)
