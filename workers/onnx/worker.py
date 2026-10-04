@@ -162,24 +162,26 @@ def det_infer(sess: Any, x: np.ndarray) -> np.ndarray:
     return sess.run(None, {sess.get_inputs()[0].name: a})[0]
 
 
-def recognize_page(m: Models, img: np.ndarray, script: str) -> list[Line]:
+def read_line(m: Models, img: np.ndarray, box: ppocr.TextBox, script: str) -> Optional[ppocr.RecResult]:
     sess = m.rec[script]
-    name = sess.get_inputs()[0].name
-    charset = m.charsets[script]
-    lines: list[Line] = []
+    inp, frac = rec_input(ppocr.crop_box(img, box))
+    probs = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0]
+    r = ppocr.ctc_decode(probs, m.charsets[script], frac)
+    return r if r.text else None
+
+
+def recognize_page(m: Models, img: np.ndarray, languages: list[str], scripts: list[str]) -> tuple[list[Line], str]:
+    """Finds the text lines, then reads them in whichever script fits (see ppocr.read_lines)."""
     boxes = ppocr.detect(img, lambda x: det_infer(m.det, x), DET_SIZE)
     # One line per model run keeps this simple; batching same-width lines would speed up GPUs.
-    for b in boxes:
-        inp, frac = rec_input(ppocr.crop_box(img, b))
-        probs = sess.run(None, {name: inp})[0][0]
-        r = ppocr.ctc_decode(probs, charset, frac)
-        if not r.text or r.confidence < 0.5:
-            continue
+    found, script = ppocr.read_lines(boxes, lambda b, sc: read_line(m, img, b, sc), languages, scripts)
+    lines: list[Line] = []
+    for b, r in found:
         x0, y0, x1, y1 = b.rect
         w = x1 - x0
         words = [Word(t, (x0 + f0 * w, y0, x0 + f1 * w, y1), r.confidence) for t, f0, f1 in r.words]
         lines.append(Line(text=r.text, bbox=(x0, y0, x1, y1), confidence=r.confidence, words=words))
-    return lines
+    return lines, script
 
 
 # ---------------------------------------------------------------- engine
@@ -236,22 +238,13 @@ class OnnxEngine(Engine):
         cpus = os.cpu_count() or 2
         return load_models(self.ort, self.mdir, self.scripts, self.plan, max(1, cpus // self.cpu_slots))
 
-    def _script(self, languages: list[str]) -> str:
-        for l in languages:
-            s = ppocr.LANG_SCRIPT.get(l.split("-")[0].lower())
-            if s in self.scripts:
-                return s
-        return "en" if "en" in self.scripts else self.scripts[0]
-
     def recognize(self, session: Optional[Models], image: Image.Image, page_no: int, languages: list[str]) -> PageResult:
         if session is None:
             raise EngineError("engine_error", "no model session", retryable=True)
         img = np.asarray(image.convert("RGB"))
-        script = self._script(languages)
         with session.lock:
-            lines = recognize_page(session, img, script)
-        lang = next((l for l in languages if ppocr.LANG_SCRIPT.get(l.split("-")[0].lower()) == script), None)
-        return PageResult(lines=lines, language=lang)
+            lines, script = recognize_page(session, img, languages, self.scripts)
+        return PageResult(lines=lines, language=ppocr.page_language(languages, script))
 
 
 # ---------------------------------------------------------------- command line

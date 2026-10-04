@@ -4,7 +4,6 @@ import type {
   AIProvider,
   AISuggestion,
   Channel,
-  Conversation,
   CustomField,
   Invite,
   NotificationPrefs,
@@ -111,8 +110,9 @@ export function useDocuments(q: DocQuery, opts: { refetchWhileProcessing?: boole
   });
 }
 
-export function useDocument(id: string) {
+export function useDocument(id: string, opts: { enabled?: boolean } = {}) {
   return useQuery({
+    enabled: opts.enabled ?? true,
     queryKey: keys.document(id),
     queryFn: () => api.get<Document>(`/documents/${id}`),
     refetchInterval: (q) => (q.state.data?.status === "processing" ? 3000 : false),
@@ -278,10 +278,6 @@ export function useWorkflows(spaceId?: string) {
     queryKey: ["workflows", spaceId ?? "all"],
     queryFn: () => api.get<{ items: Workflow[] }>("/workflows", { space_id: spaceId }).then((r) => r.items),
   });
-}
-
-export function useConversations() {
-  return useQuery({ queryKey: ["conversations"], queryFn: () => api.get<{ items: Conversation[] }>("/ai/conversations").then((r) => r.items) });
 }
 
 export function useNotificationPrefs() {

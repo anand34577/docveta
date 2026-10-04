@@ -30,10 +30,11 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
 
   React.useEffect(() => () => clear(), [clear]);
   React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && n > 0 && clear();
+    // Esc clears the selection, unless it's closing one of the bar's dialogs or a menu.
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && n > 0 && !dialog && !document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]') && clear();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [n, clear]);
+  }, [n, clear, dialog]);
 
   if (n === 0) return null;
 

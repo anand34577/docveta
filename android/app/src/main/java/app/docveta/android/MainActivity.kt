@@ -37,11 +37,13 @@ import app.docveta.android.ui.DocvetaTheme
 import app.docveta.android.ui.LocalContainer
 import app.docveta.android.ui.MainShell
 import app.docveta.android.ui.ShareInbox
+import app.docveta.android.ui.SsoInbox
 
 private const val LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
 
 class MainActivity : FragmentActivity() {
     private val shared = ShareInbox()
+    private val sso = SsoInbox()
     private var locked by mutableStateOf(false)
     private var leftAt = 0L
     private lateinit var container: AppContainer
@@ -62,7 +64,7 @@ class MainActivity : FragmentActivity() {
                     var signedIn by remember { mutableStateOf(container.session.signedIn) }
                     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                         when {
-                            !signedIn -> AuthScreen(onSignedIn = { signedIn = true; container.uploads.schedule() })
+                            !signedIn -> AuthScreen(sso, onSignedIn = { signedIn = true; container.uploads.schedule() })
                             locked -> LockScreen(onUnlock = ::promptUnlock)
                             else -> MainShell(shared, onSignedOut = { container.session.signOut(); signedIn = false })
                         }
@@ -92,9 +94,16 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /** Picks up files shared from other apps ("Share, Docveta"). */
+    /** Picks up files shared from other apps ("Share, Docveta") and single sign-on results. */
     private fun handle(i: Intent?) {
         i ?: return
+        // Back from single sign-on in the browser: docveta://sso?code=… (or ?error=…).
+        val data = i.data
+        if (i.action == Intent.ACTION_VIEW && data?.scheme == "docveta" && data.host == "sso") {
+            sso.code = data.getQueryParameter("code")
+            sso.error = data.getQueryParameter("error")
+            return
+        }
         val uris = when (i.action) {
             Intent.ACTION_SEND -> listOfNotNull(streamOf(i))
             Intent.ACTION_SEND_MULTIPLE -> streamsOf(i)

@@ -300,7 +300,9 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit) {
                 doc == null -> LoadingBox()
                 else -> {
                     TabRow(tab) {
-                        listOf("Preview", "Details", "Notes" + if (doc.noteCount > 0) " (${doc.noteCount})" else "").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) }
+                        listOf("Preview", "Details", "Notes" + if (doc.noteCount > 0) " (${doc.noteCount})" else "").forEachIndexed { i, t ->
+                            Tab(tab == i, { tab = i }, text = { Text(t) }, selectedContentColor = MaterialTheme.colorScheme.primary, unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                     when (tab) {
                         0 -> Preview(vm, doc, ctx, scope, startPage)

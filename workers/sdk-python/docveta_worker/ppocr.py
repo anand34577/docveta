@@ -30,6 +30,9 @@ LANG_SCRIPT = {
     "ta": "ta", "te": "te", "kn": "ka",
 }
 
+# Script -> the language reported when a page turns out to be in that script.
+SCRIPT_LANG = {"en": "en", "devanagari": "hi", "ta": "ta", "te": "te", "ka": "kn"}
+
 
 @dataclass
 class TextBox:
@@ -299,3 +302,83 @@ def recognize(img: np.ndarray, box: TextBox, infer: Callable[[np.ndarray, int], 
         return None
     res = ctc_decode(probs, charset, content_w / bucket)
     return res if res.text else None
+
+
+# ---------------------------------------------------------------- script detection
+
+def script_order(languages: list[str], scripts: list[str]) -> list[str]:
+    """Available scripts, those of the requested languages first (in order), then the rest."""
+    out: list[str] = []
+    for l in languages:
+        sc = LANG_SCRIPT.get(l.split("-")[0].lower())
+        if sc in scripts and sc not in out:
+            out.append(sc)
+    if not out and "en" in scripts:
+        out.append("en")
+    out += [sc for sc in scripts if sc not in out]
+    return out
+
+
+def page_language(languages: list[str], script: str) -> Optional[str]:
+    """The language to report for a page read with script: a requested one if it matches."""
+    for l in languages:
+        if LANG_SCRIPT.get(l.split("-")[0].lower()) == script:
+            return l
+    return SCRIPT_LANG.get(script)
+
+
+def read_lines(boxes: list[TextBox], read: Callable[[TextBox, str], Optional[RecResult]], languages: list[str],
+               scripts: list[str], min_conf: float = 0.5, sample: int = 8, sure: float = 0.85,
+               retry_below: float = 0.8, alt_conf: float = 0.75) -> tuple[list[tuple[TextBox, RecResult]], str]:
+    """Reads every box and works out the page's script by itself.
+
+    A document's language is only a hint: spaces default to English, so a Hindi letter would
+    otherwise be read with the English model and every line dropped as unreadable. The widest
+    lines are read with the hinted script first; if it isn't clearly right, with every script,
+    and the most confident one reads the page. Lines the page's script reads poorly are tried
+    again with the other plausible scripts (bilingual forms mix English and Hindi).
+
+    Returns the (box, result) pairs worth keeping, in box order, and the page's script.
+    """
+    order = script_order(languages, scripts)
+    if not boxes or not order:
+        return [], (order[0] if order else "en")
+    cache: dict[tuple[int, str], Optional[RecResult]] = {}
+
+    def get(i: int, sc: str) -> Optional[RecResult]:
+        if (i, sc) not in cache:
+            cache[(i, sc)] = read(boxes[i], sc)
+        return cache[(i, sc)]
+
+    def conf(r: Optional[RecResult]) -> float:
+        return r.confidence if r is not None else 0.0
+
+    primary, others, retry = order[0], order[1:], min_conf + 0.1
+    if others:
+        widest = sorted(range(len(boxes)), key=lambda i: boxes[i].rect[0] - boxes[i].rect[2])[:sample]
+        score = {sc: 0.0 for sc in order}
+        score[primary] = sum(conf(get(i, primary)) for i in widest) / len(widest)
+        if score[primary] < sure:
+            for sc in others:
+                score[sc] = sum(conf(get(i, sc)) for i in widest) / len(widest)
+            primary = max(order, key=lambda sc: score[sc])  # ties keep the hinted script (max is stable)
+            hinted = {LANG_SCRIPT.get(l.split("-")[0].lower()) for l in languages}
+            # Worth retrying weak lines with: requested scripts, ones that read the sample fairly
+            # well, and ones that clearly read at least one sampled line (a few Hindi lines).
+            clear = {sc for sc in order for i in widest if conf(get(i, sc)) >= alt_conf}
+            others = [sc for sc in order if sc != primary and (sc in hinted or sc in clear or score[sc] >= 0.5)]
+            retry = retry_below
+        # When the hinted script is clearly right, only lines it can't read at all are tried
+        # with the other scripts: a Hindi line on an English page, not every faint stamp.
+    out: list[tuple[TextBox, RecResult]] = []
+    for i, b in enumerate(boxes):
+        best = get(i, primary)
+        if conf(best) < retry:
+            for sc in others:
+                r = get(i, sc)
+                # Another script must read the line clearly, or noise turns into foreign text.
+                if conf(r) > conf(best) and conf(r) >= alt_conf:
+                    best = r
+        if best is not None and best.text and best.confidence >= min_conf:
+            out.append((b, best))
+    return out, primary

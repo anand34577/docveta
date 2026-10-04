@@ -2,9 +2,9 @@ import * as React from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { Minus, PanelLeft, Plus, RotateCw } from "lucide-react";
 import { Spinner } from "@/components/ui/misc";
 import { cn } from "@/lib/utils";
+import { usePinchZoom, useViewState, ViewerToolbar } from "./viewer-toolbar";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -22,13 +22,19 @@ interface Props {
 export default function PdfViewer({ url, initialPage, highlight, onPageCount }: Props) {
   const [doc, setDoc] = React.useState<PDFDocumentProxy | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [zoom, setZoom] = React.useState(1); // multiplier on fit-width
-  const [width, setWidth] = React.useState(0);
+  const view = useViewState();
+  const { fit, zoom, rotation } = view;
+  const [box, setBox] = React.useState({ w: 0, h: 0 });
   const [current, setCurrent] = React.useState(1);
   const [baseSize, setBaseSize] = React.useState<{ w: number; h: number } | null>(null);
-  const [rotation, setRotation] = React.useState(0); // viewing only; Arrange pages makes it permanent
   const [thumbs, setThumbs] = React.useState(false);
   const container = React.useRef<HTMLDivElement>(null);
+  const content = React.useRef<HTMLDivElement>(null);
+  // Callers often pass a new function or array on every render; don't reload or repaint for that.
+  const pageCountCb = React.useRef(onPageCount);
+  pageCountCb.current = onPageCount;
+  const highlightKey = (highlight ?? []).join("");
+  const terms = React.useMemo(() => (highlightKey ? highlightKey.split("") : []), [highlightKey]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -42,7 +48,7 @@ export default function PdfViewer({ url, initialPage, highlight, onPageCount }: 
         const vp = p1.getViewport({ scale: 1 });
         setBaseSize({ w: vp.width, h: vp.height });
         setDoc(d);
-        onPageCount?.(d.numPages);
+        pageCountCb.current?.(d.numPages);
       },
       (e: Error) => !cancelled && setError(e.name === "PasswordException" ? "This PDF is password protected." : "This PDF couldn't be displayed. You can still download it."),
     );
@@ -50,18 +56,26 @@ export default function PdfViewer({ url, initialPage, highlight, onPageCount }: 
       cancelled = true;
       void task.destroy();
     };
-  }, [url, onPageCount]);
+  }, [url]);
 
   React.useLayoutEffect(() => {
     if (!container.current) return;
-    const ro = new ResizeObserver((e) => setWidth(e[0].contentRect.width));
+    const ro = new ResizeObserver((e) => setBox({ w: e[0].contentRect.width, h: e[0].contentRect.height }));
     ro.observe(container.current);
     return () => ro.disconnect();
   }, []);
+  usePinchZoom(container, content, view.setZoom);
 
   const sideways = rotation % 180 !== 0;
   const shown = baseSize ? (sideways ? { w: baseSize.h, h: baseSize.w } : baseSize) : null;
-  const scale = shown && width ? Math.min(((width - 32) / shown.w) * zoom, 4) : 1;
+  let scale = 1;
+  if (shown && box.w) {
+    const byWidth = Math.max(box.w - 32, 120) / shown.w;
+    const fitScale = fit === "page" && box.h ? Math.min(byWidth, Math.max(box.h - 32, 120) / shown.h) : byWidth;
+    scale = Math.min(fitScale * zoom, 8);
+  }
+  // pdf.js scale 1 is 72 dpi; "100%" means the page's real size on a 96 dpi screen.
+  const percent = Math.round((scale * 72 * 100) / 96);
   const goTo = (n: number) => container.current?.querySelector(`[data-page="${n}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" });
 
   // Scroll to the requested page once laid out.
@@ -69,59 +83,42 @@ export default function PdfViewer({ url, initialPage, highlight, onPageCount }: 
     if (!doc || !initialPage || initialPage < 2 || !scale) return;
     const el = container.current?.querySelector(`[data-page="${initialPage}"]`);
     el?.scrollIntoView({ block: "start" });
-  }, [doc, initialPage, scale]);
+  }, [doc, initialPage]); // not on zoom: that would jump back while reading
 
   if (error) return <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted">{error}</div>;
 
   return (
     <div className="relative flex h-full">
       {thumbs && doc && <Thumbs doc={doc} current={current} onPick={goTo} rotation={rotation} />}
-      <div className="relative flex min-w-0 flex-1 flex-col">
-      <div ref={container} className="flex-1 overflow-auto scrollbar-thin bg-surface-3 py-4" onScroll={(e) => {
-        const el = e.currentTarget;
-        const pages = el.querySelectorAll<HTMLElement>("[data-page]");
-        const mid = el.scrollTop + el.clientHeight / 3;
-        for (const p of pages) {
-          if (p.offsetTop + p.offsetHeight > mid) {
-            setCurrent(Number(p.dataset.page));
-            break;
-          }
-        }
-      }}>
-        {!doc || !baseSize ? (
-          <div className="flex h-full items-center justify-center">
-            <Spinner />
-          </div>
-        ) : (
-          Array.from({ length: doc.numPages }, (_, i) => (
-            <PdfPage key={i} doc={doc} pageNumber={i + 1} scale={scale} rotation={rotation} estimate={shown ?? baseSize} highlight={highlight} root={container} />
-          ))
-        )}
-      </div>
-      {doc && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
-          <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-surface/95 px-1.5 py-1 text-xs shadow-md backdrop-blur">
-            <button className={cn("rounded-full p-1.5 hover:bg-surface-2", thumbs && "bg-accent-soft text-accent-soft-fg")} onClick={() => setThumbs((t) => !t)} aria-label="Page thumbnails" aria-pressed={thumbs}>
-              <PanelLeft className="size-3.5" />
-            </button>
-            <button className="rounded-full p-1.5 hover:bg-surface-2" onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))} aria-label="Zoom out">
-              <Minus className="size-3.5" />
-            </button>
-            <button className="min-w-12 tabular-nums text-muted" onClick={() => setZoom(1)} aria-label="Fit width">
-              {Math.round(zoom * 100)}%
-            </button>
-            <button className="rounded-full p-1.5 hover:bg-surface-2" onClick={() => setZoom((z) => Math.min(3, z + 0.25))} aria-label="Zoom in">
-              <Plus className="size-3.5" />
-            </button>
-            <button className="rounded-full p-1.5 hover:bg-surface-2" onClick={() => setRotation((r) => (r + 90) % 360)} aria-label="Turn the view" title="Turn the view (just for looking; use Arrange pages to save)">
-              <RotateCw className="size-3.5" />
-            </button>
-            <span className="border-l border-border pl-2 pr-1.5 tabular-nums text-muted">
-              {current} / {doc.numPages}
-            </span>
-          </div>
+      <div className="relative isolate flex min-w-0 flex-1 flex-col">
+        <div
+          ref={container}
+          className="flex-1 overflow-auto scrollbar-thin bg-surface-3 pt-4 pb-16 [touch-action:pan-x_pan-y]"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            const pages = el.querySelectorAll<HTMLElement>("[data-page]");
+            const mid = el.scrollTop + el.clientHeight / 3;
+            for (const p of pages) {
+              if (p.offsetTop + p.offsetHeight > mid) {
+                setCurrent(Number(p.dataset.page));
+                break;
+              }
+            }
+          }}
+        >
+          {!doc || !baseSize ? (
+            <div className="flex h-full items-center justify-center">
+              <Spinner />
+            </div>
+          ) : (
+            <div ref={content} className="px-4">
+              {Array.from({ length: doc.numPages }, (_, i) => (
+                <PdfPage key={i} doc={doc} pageNumber={i + 1} scale={scale} rotation={rotation} estimate={shown ?? baseSize} highlight={terms} root={container} />
+              ))}
+            </div>
+          )}
         </div>
-      )}
+        {doc && <ViewerToolbar view={view} percent={percent} page={current} pages={doc.numPages} thumbs={thumbs} onThumbs={() => setThumbs((t) => !t)} />}
       </div>
     </div>
   );

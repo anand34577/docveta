@@ -100,11 +100,32 @@ func (a *API) registerAuth(mux router) {
 	})
 
 	mux.HandleFunc("GET /api/v1/auth/oidc/start", func(w http.ResponseWriter, r *http.Request) {
-		redirect, cookie, err := a.Identity.OIDCStart(r.Context(), r.URL.Query().Get("return_to"))
+		q := r.URL.Query()
+		o := identity.OIDCStartOptions{BaseURL: a.publicBase(r), ReturnTo: q.Get("return_to")}
+		fail := "/login?error="
+		if q.Get("link") == "1" {
+			// Connect SSO to the signed-in account (Settings → Security).
+			p := auth.From(r.Context())
+			if p == nil || p.Kind != auth.KindSession {
+				http.Redirect(w, r, fail+url.QueryEscape("Sign in first, then connect single sign-on in Settings → Security."), http.StatusSeeOther)
+				return
+			}
+			o.LinkUser = p.UserID
+			fail = "/settings/security?sso_error="
+		}
+		if q.Get("app") == "1" {
+			o.AppChallenge = q.Get("code_challenge")
+			if len(o.AppChallenge) < 43 || len(o.AppChallenge) > 128 {
+				httpx.Error(w, r, apperr.Invalid("code_challenge", "The app must send a PKCE code challenge"))
+				return
+			}
+		}
+		redirect, cookie, err := a.Identity.OIDCStart(r.Context(), o)
 		if err != nil {
-			http.Redirect(w, r, "/login?error="+url.QueryEscape(errMsg(err)), http.StatusSeeOther)
+			http.Redirect(w, r, fail+url.QueryEscape(errMsg(err)), http.StatusSeeOther)
 			return
 		}
+		// Lax: the provider sends people back with a top-level GET, which carries Lax cookies.
 		http.SetCookie(w, &http.Cookie{Name: "docveta_oidc", Value: cookie, Path: "/api/v1/auth/oidc", HttpOnly: true,
 			Secure: a.Cfg.SecureCookies(), SameSite: http.SameSiteLaxMode, MaxAge: 600})
 		http.Redirect(w, r, redirect, http.StatusSeeOther)
@@ -112,28 +133,64 @@ func (a *API) registerAuth(mux router) {
 
 	mux.HandleFunc("GET /api/v1/auth/oidc/callback", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		http.SetCookie(w, &http.Cookie{Name: "docveta_oidc", Value: "", Path: "/api/v1/auth/oidc", MaxAge: -1, HttpOnly: true, Secure: a.Cfg.SecureCookies()})
+		http.SetCookie(w, &http.Cookie{Name: "docveta_oidc", Value: "", Path: "/api/v1/auth/oidc", MaxAge: -1, HttpOnly: true,
+			Secure: a.Cfg.SecureCookies(), SameSite: http.SameSiteLaxMode})
+		c, cerr := r.Cookie("docveta_oidc")
+		fail := func(msg string) {
+			if cerr == nil && a.Identity.OIDCStateFromApp(c.Value) {
+				http.Redirect(w, r, "docveta://sso?error="+url.QueryEscape(msg), http.StatusSeeOther)
+				return
+			}
+			http.Redirect(w, r, "/login?error="+url.QueryEscape(msg), http.StatusSeeOther)
+		}
 		if e := q.Get("error"); e != "" {
 			msg := q.Get("error_description")
 			if msg == "" {
 				msg = e
 			}
-			http.Redirect(w, r, "/login?error="+url.QueryEscape("Sign-in was cancelled or denied: "+msg), http.StatusSeeOther)
+			fail("Sign-in was cancelled or denied: " + msg)
 			return
 		}
-		c, err := r.Cookie("docveta_oidc")
-		if err != nil {
-			http.Redirect(w, r, "/login?error="+url.QueryEscape("Your sign-in took too long. Please try again."), http.StatusSeeOther)
+		if cerr != nil {
+			fail("Your sign-in took too long, or cookies are blocked for this site. Please try again.")
 			return
 		}
-		token, returnTo, err := a.Identity.OIDCCallback(r.Context(), c.Value, q.Get("state"), q.Get("code"), r.UserAgent())
+		res, err := a.Identity.OIDCCallback(r.Context(), c.Value, q.Get("state"), q.Get("code"), r.UserAgent(), auth.From(r.Context()))
 		if err != nil {
 			httpx.Logger(r.Context()).Warn("oidc callback failed", "err", err)
-			http.Redirect(w, r, "/login?error="+url.QueryEscape(errMsg(err)), http.StatusSeeOther)
+			fail(errMsg(err))
+			return
+		}
+		switch {
+		case res.Linked:
+			http.Redirect(w, r, "/settings/security?sso=linked", http.StatusSeeOther)
+		case res.App != "":
+			// Back to the Android app; the code is worthless without the app's PKCE verifier.
+			http.Redirect(w, r, "docveta://sso?code="+url.QueryEscape(a.Identity.AppCode(res.Token, res.App)), http.StatusSeeOther)
+		default:
+			a.setSessionCookie(w, res.Token)
+			http.Redirect(w, r, res.ReturnTo, http.StatusSeeOther)
+		}
+	})
+
+	// The Android app redeems its sign-in code for a session (then makes itself an access token,
+	// as after a password sign-in).
+	mux.HandleFunc("POST /api/v1/auth/oidc/app", func(w http.ResponseWriter, r *http.Request) {
+		in, err := decode[struct {
+			Code         string `json:"code"`
+			CodeVerifier string `json:"code_verifier"`
+		}](r)
+		if err != nil {
+			httpx.Error(w, r, err)
+			return
+		}
+		token, err := a.Identity.RedeemAppCode(in.Code, in.CodeVerifier)
+		if err != nil {
+			httpx.Error(w, r, err)
 			return
 		}
 		a.setSessionCookie(w, token)
-		http.Redirect(w, r, returnTo, http.StatusSeeOther)
+		httpx.NoContent(w)
 	})
 
 	// --- Me ---
@@ -206,6 +263,17 @@ func (a *API) registerAuth(mux router) {
 			return err
 		}
 		return a.Identity.RevokeToken(r.Context(), p, id)
+	}))
+	mux.HandleFunc("GET /api/v1/me/identities", handle(func(r *http.Request, p *auth.Principal) (list[identity.Identity], error) {
+		ids, err := a.Identity.Identities(r.Context(), p)
+		return items(ids), err
+	}))
+	mux.HandleFunc("DELETE /api/v1/me/identities/{id}", handleNoContent(func(r *http.Request, p *auth.Principal) error {
+		id, err := httpx.PathUUID(r, "id")
+		if err != nil {
+			return err
+		}
+		return a.Identity.Unlink(r.Context(), p, id)
 	}))
 	mux.HandleFunc("GET /api/v1/users/directory", handle(func(r *http.Request, p *auth.Principal) (list[identity.DirectoryEntry], error) {
 		d, err := a.Identity.Directory(r.Context(), p)

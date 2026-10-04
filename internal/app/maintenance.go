@@ -43,6 +43,12 @@ func (w *MaintenanceWorker) Work(ctx context.Context, _ *river.Job[jobs.Maintena
 	if err := w.gcBlobs(ctx); err != nil {
 		log.Error("blob gc", "err", err)
 	}
+	// pgvector installed after documents were embedded: copy their vectors over, a slice per run.
+	if n, err := a.AI.BackfillVectors(ctx, 20000); err != nil {
+		log.Error("copy vectors to pgvector", "err", err)
+	} else if n > 0 {
+		log.Info("copied vectors to pgvector", "chunks", n)
+	}
 	return nil
 }
 

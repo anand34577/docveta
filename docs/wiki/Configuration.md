@@ -33,7 +33,7 @@ Restart Docveta after changing it (Windows service: `sc stop Docveta` / `sc star
 | Setting | Default | Meaning |
 |---|---|---|
 | `DOCVETA_LISTEN` | `:8080` | Address and port to listen on. `:8080` = all network interfaces; `127.0.0.1:8080` = this computer only |
-| `DOCVETA_BASE_URL` | `http://localhost:8080` | The address people type to open Docveta. Used in email links, for single sign-on, and to decide on secure cookies (`https://…`) |
+| `DOCVETA_BASE_URL` | `http://localhost:8080` | The address people type to open Docveta, and whether cookies are secure (`https://…`). While it is left at a `localhost` address, Docveta uses the address each browser opened it with (for single sign-on, invitations and share links) and remembers it for links in emails and push notifications; administrators can change that remembered address in Admin → System |
 | `DOCVETA_DATA_DIR` | `./data` | Folder for documents (`blobs/`), temporary uploads, logs and the data `docveta.conf` |
 | `DOCVETA_DATABASE_URL` | set by the setup page | PostgreSQL connection, `postgres://user:password@host:5432/docveta?sslmode=prefer`. See [Database](Database) |
 | `DOCVETA_SECRET_KEY` | generated | Encrypts stored passwords (email, single sign-on). At least 32 characters. **If you lose it, those passwords must be entered again** |
@@ -52,7 +52,8 @@ Restart Docveta after changing it (Windows service: `sc stop Docveta` / `sc star
 | Setting | Default | Meaning |
 |---|---|---|
 | `DOCVETA_TRUSTED_PROXIES` | — | Comma-separated IPs/networks of your reverse proxy, so Docveta sees real client addresses (e.g. `127.0.0.1,172.16.0.0/12`) |
-| `DOCVETA_ALLOW_LOCAL_TARGETS` | `false` | Allow notification channels (Gotify, ntfy, webhooks) to reach addresses on your local network. Off by default so users can't use Docveta to probe your network; turn on if your Gotify/ntfy runs at home |
+| `DOCVETA_ALLOW_LOCAL_TARGETS` | `false` | Allow everyone's notification channels (Gotify, ntfy, webhooks) to reach addresses on your local network. Channels set up by administrators always may. The same switch is in Admin → System |
+| `DOCVETA_METRICS_TOKEN` | — | Lets Prometheus scrape `/metrics` from outside your local network with `Authorization: Bearer <token>`. Without it, `/metrics` only answers local-network addresses |
 | `DOCVETA_SESSION_IDLE` | `720h` | Sign out after this long without activity (30 days) |
 | `DOCVETA_SESSION_MAX` | `2160h` | Sign out after this long at the latest (90 days) |
 

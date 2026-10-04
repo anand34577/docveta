@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCheck, Download, FileDown, LayoutGrid, MoreHorizontal, RotateCcw, ScanText, Share2, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCheck, Download, FileDown, LayoutGrid, MessageSquareText, MoreHorizontal, RotateCcw, ScanText, Share2, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { invalidateDocuments, useAIEnabled, useDocument, useUpdateDocument } from "@/lib/queries";
@@ -151,8 +151,8 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
           ) : (
             <>
               {doc.inbox && canEdit && (
-                <Button size="sm" variant="primary" onClick={markReviewed} loading={update.isPending}>
-                  <CheckCheck /> <span className="hidden sm:inline">{compact ? "Reviewed & next" : "Reviewed"}</span>
+                <Button size="sm" variant="primary" onClick={markReviewed} loading={update.isPending} aria-label={compact ? "Reviewed, go to next" : "Mark as reviewed"} title={compact ? "Reviewed, go to next (E)" : "Mark as reviewed"}>
+                  <CheckCheck /> <span className={compact ? "hidden 2xl:inline" : "hidden sm:inline"}>{compact ? "Reviewed & next" : "Reviewed"}</span>
                 </Button>
               )}
               <Button size="icon-sm" variant="ghost" asChild>
@@ -182,6 +182,11 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
                   <DropdownMenuItem onSelect={() => setSharing(true)}>
                     <Share2 /> Share with a link…
                   </DropdownMenuItem>
+                  {ai?.chat && doc.status === "ready" && (
+                    <DropdownMenuItem onSelect={() => navigate({ to: "/ask", search: { doc: doc.id } })}>
+                      <MessageSquareText /> Ask about this document
+                    </DropdownMenuItem>
+                  )}
                   {pageEditable && (
                     <DropdownMenuItem onSelect={() => setArranging(true)}>
                       <LayoutGrid /> Arrange pages…
@@ -222,7 +227,7 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
         </div>
       </section>
 
-      <aside className={cn("w-full shrink-0 overflow-y-auto scrollbar-thin bg-surface lg:block lg:w-[360px] xl:w-[400px]", pane === "details" ? "block" : "hidden")}>
+      <aside className={cn("w-full shrink-0 overflow-y-auto scrollbar-thin bg-surface lg:block", compact ? "lg:w-[320px] 2xl:w-[400px]" : "lg:w-[360px] xl:w-[400px]", pane === "details" ? "block" : "hidden")}>
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="sticky top-0 z-10 h-14 items-end overflow-x-auto bg-surface px-3 scrollbar-thin [&>button]:shrink-0">
             <TabsTrigger value="details">Details</TabsTrigger>

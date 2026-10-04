@@ -2,13 +2,17 @@ package app
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/anand34577/docveta/internal/platform/httpx"
 )
 
 type metrics struct {
@@ -38,8 +42,33 @@ func (m *metrics) observe(pattern, method string, status int, d time.Duration) {
 	m.requests.WithLabelValues(pattern, method, strconv.Itoa(status)).Observe(d.Seconds())
 }
 
-func (m *metrics) handler() http.Handler {
-	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{})
+// handler serves Prometheus metrics to the local network, or to anyone with the metrics token.
+// Document and worker counts aren't for the internet, and each scrape queries the database.
+func (m *metrics) handler(token string) http.Handler {
+	h := promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token != "" {
+			if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
+				http.Error(w, "metrics token required", http.StatusUnauthorized)
+				return
+			}
+		} else if !localClient(httpx.ClientIP(r.Context())) {
+			http.NotFound(w, r)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// localClient reports whether ip is this computer or on a private network.
+func localClient(ip string) bool {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast()
 }
 
 // dbCollector reports queue and corpus gauges at scrape time.

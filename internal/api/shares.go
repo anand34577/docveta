@@ -26,7 +26,7 @@ func (a *API) registerShares(mux router) {
 		if err != nil {
 			return nil, err
 		}
-		return &shareCreated{Share: sh, Link: a.Cfg.BaseURL.String() + "/s/" + token}, nil
+		return &shareCreated{Share: sh, Link: a.publicBase(r) + "/s/" + token}, nil
 	}))
 	mux.HandleFunc("GET /api/v1/shares", handle(func(r *http.Request, p *auth.Principal) (list[*shares.Share], error) {
 		var doc, view *uuid.UUID

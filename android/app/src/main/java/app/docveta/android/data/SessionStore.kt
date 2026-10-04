@@ -57,6 +57,15 @@ class SessionStore(private val kv: KeyValueStore) {
         get() = kv.get("user_email")
         set(v) = kv.put("user_email", v)
 
+    /** Single sign-on in the browser: the server it's for and the PKCE secret, until the app link comes back. */
+    var pendingSsoServer: String?
+        get() = kv.get("sso_server")
+        set(v) = kv.put("sso_server", v)
+
+    var pendingSsoVerifier: String?
+        get() = kv.get("sso_verifier")
+        set(v) = kv.put("sso_verifier", v)
+
     var appLock: Boolean
         get() = kv.get("app_lock") == "1"
         set(v) = kv.put("app_lock", if (v) "1" else null)

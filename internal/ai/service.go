@@ -25,6 +25,7 @@ type Service struct {
 	keys   *crypto.Keys
 	spaces *spaces.Service
 	audit  *audit.Log
+	vec    vectorState // pgvector support, detected at run time
 }
 
 func NewService(pool *pgxpool.Pool, keys *crypto.Keys, sp *spaces.Service, al *audit.Log) *Service {

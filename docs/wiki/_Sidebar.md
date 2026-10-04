@@ -12,6 +12,8 @@
 - [OCR engines (CPU, GPU, NPU)](OCR-engines)
 - [Configuration](Configuration)
 - [Remote access and HTTPS](Remote-access-and-HTTPS)
+- [Single sign-on (OIDC)](Single-sign-on)
+- [AI and Ask your documents](AI-and-Ask)
 
 **Run**
 - [Backup and restore](Backup-and-restore)

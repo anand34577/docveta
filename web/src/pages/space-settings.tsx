@@ -109,7 +109,7 @@ function General({ space }: { space: Space }) {
           <Field label="Description" htmlFor="sp-desc">
             <Textarea id="sp-desc" rows={2} value={desc} onChange={(e) => setDesc(e.target.value)} disabled={!owner} />
           </Field>
-          <Field label="Default document language" htmlFor="sp-lang" hint="New documents use this language for text recognition. Change it per document if needed.">
+          <Field label="Default document language" htmlFor="sp-lang" hint="The first guess for new documents. Text recognition also spots Hindi, Tamil, Telugu, Kannada and English pages by itself, and corrects the language when the text is in another script.">
             <NativeSelect id="sp-lang" value={lang} onChange={(e) => setLang(e.target.value)} disabled={!owner}>
               <option value="en">English</option>
               <option value="hi">Hindi</option>

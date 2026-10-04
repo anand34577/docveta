@@ -54,7 +54,7 @@ export function HomePage() {
         <StatCard to="/documents" icon={<CalendarPlus />} label="Added this week" value={s?.added_this_week} />
       </div>
 
-      <div className="mt-10 grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="mt-10 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
         <section aria-labelledby="recent-h">
           <SectionHeader id="recent-h" title="Recently added" link={{ to: "/documents", label: "View all" }} />
           {recent.isLoading ? (

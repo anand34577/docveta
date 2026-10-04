@@ -47,9 +47,9 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
   const me = useCurrentUser();
   const layout = useUI((s) => s.layout);
   const pick = useFilePicker();
-  const [info, setInfo] = React.useState<{ total?: number; items: Document[]; facets?: Facets; mode?: string }>({ items: [] });
+  const [info, setInfo] = React.useState<{ total?: number; totalCapped?: boolean; items: Document[]; facets?: Facets; mode?: string }>({ items: [] });
   const [saveOpen, setSaveOpen] = React.useState(false);
-  const onLoaded = React.useCallback((i: { total?: number; items: Document[]; facets?: Facets; mode?: string }) => setInfo(i), []);
+  const onLoaded = React.useCallback((i: { total?: number; totalCapped?: boolean; items: Document[]; facets?: Facets; mode?: string }) => setInfo(i), []);
   const spaceName = query.space_id?.length === 1 ? me.spaces.find((s) => s.id === query.space_id![0]) : undefined;
   const filtered = !!(query.q || query.tag_id || query.correspondent_id || query.document_type_id || query.date_from || query.date_to || query.untagged || query.status);
 
@@ -100,7 +100,7 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
           ))
         }
       />
-      <FilterBar query={query} onChange={onChange} total={info.total} facets={info.facets} found={info.mode} hideSpace={trash} />
+      <FilterBar query={query} onChange={onChange} total={info.total} totalCapped={info.totalCapped} facets={info.facets} found={info.mode} hideSpace={trash} />
       <DocumentResults
         query={query}
         layout={layout}

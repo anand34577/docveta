@@ -212,6 +212,14 @@ func (s *Service) finalize(ctx context.Context, runID uuid.UUID) error {
 					return err
 				}
 			}
+			// Engines work out each page's script themselves; adopt the language most of the text
+			// is in (a Hindi letter in a space whose default is English), unless a person chose it.
+			if lang := mainLanguage(merged.Pages); lang != "" && lang != ocrLanguage(d.Language) {
+				if _, err := tx.Exec(ctx, `UPDATE documents SET language=$2 WHERE id=$1 AND NOT EXISTS (
+					SELECT 1 FROM field_sources WHERE document_id=$1 AND field='language' AND source='user')`, docID, lang); err != nil {
+					return err
+				}
+			}
 			if err := documents.ReindexContent(ctx, tx, docID); err != nil {
 				return err
 			}
@@ -503,4 +511,21 @@ func (s *Service) EnqueueReindex(ctx context.Context, ids []uuid.UUID) error {
 		}
 	}
 	return nil
+}
+
+// mainLanguage returns the language reported for most of the text, or "" when no page says.
+func mainLanguage(pages []OCRPage) string {
+	weight := map[string]int{}
+	for _, p := range pages {
+		if l := ocrLanguage(p.Language); p.Language != "" {
+			weight[l] += len(p.Text) + 1
+		}
+	}
+	best, bestW := "", 0
+	for l, w := range weight {
+		if w > bestW || (w == bestW && l < best) {
+			best, bestW = l, w
+		}
+	}
+	return best
 }

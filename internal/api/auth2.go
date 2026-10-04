@@ -36,7 +36,7 @@ func (a *API) registerAuth2(mux router) {
 		if err != nil {
 			return nil, err
 		}
-		out := &inviteCreated{Invite: inv, Link: a.Cfg.BaseURL.String() + "/invite/" + token}
+		out := &inviteCreated{Invite: inv, Link: a.publicBase(r) + "/invite/" + token}
 		if in.SendEmail && inv.Email != nil {
 			msg := notify.Message{Title: p.Name + " invited you to Docveta",
 				Body: "Docveta keeps your family's or team's documents organised and searchable. Use the link below to create your account. It works once and expires on " +

@@ -122,7 +122,18 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
 
     val m = me
     if (m == null) {
-        if (loadError != null) ErrorState(loadError!!) { loadError = null; scope.launch { runCatching { me = c.repo.me() }.onFailure { loadError = it.friendly() } } } else LoadingBox()
+        if (loadError != null) {
+            // Can't reach the server at start-up: retry, or get out (the server may have moved).
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.weight(1f, fill = false)) {
+                    ErrorState(loadError!!) { loadError = null; scope.launch { runCatching { me = c.repo.me() }.onFailure { loadError = it.friendly() } } }
+                }
+                c.session.serverUrl?.let { Text(it.removePrefix("https://").removePrefix("http://"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                TextButton({ scope.launch { runCatching { c.repo.signOut() }; onSignedOut() } }, Modifier.navigationBarsPadding().padding(bottom = 24.dp)) {
+                    Text("Sign out and change server")
+                }
+            }
+        } else LoadingBox()
         return
     }
 

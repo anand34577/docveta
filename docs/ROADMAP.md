@@ -2,10 +2,16 @@
 
 | | |
 |---|---|
-| **Updated** | 2026-10-02 |
+| **Updated** | 2026-10-04 |
 | **Repository** | github.com/anand34577/docveta |
 | **License** | AGPL-3.0 (server, web, reference workers) · Apache-2.0 (worker SDK) |
 | **Companion docs** | [DESIGN.md](DESIGN.md) (architecture & decisions) · [workers.md](workers.md) · [operations.md](operations.md) |
+
+> **2026-10-04 status.** Most of §1–§4 has shipped (see DESIGN.md → Implementation status and the
+> CHANGELOG). Still **not built**: reminders + ICS feed (§2.3), IMAP email import (§2.4), passkeys
+> (§2.8), paperless-ngx import (§2.9), digest emails (§3.5), i18n / Hindi UI (§5.3), the `/api/docs`
+> page and generated TypeScript types (§1.1), ClamAV and ASN label sheets (§4.4), Playwright
+> end-to-end tests (§5.4). The sections below keep their original scope for those items.
 
 This document lists everything that is **not done yet**, in the order it should be done.
 Each item has: *why*, *scope* (what to build, where), *acceptance criteria* (how we know

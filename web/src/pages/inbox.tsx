@@ -52,7 +52,8 @@ export function InboxPage() {
     if (!isDesktop) return;
     const onKey = async (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable || e.metaKey || e.ctrlKey) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return; // a dialog or menu has the keyboard
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
         move(1);
@@ -94,18 +95,31 @@ export function InboxPage() {
 
   const reviewAll = async () => {
     if (!(await confirm({ title: `Mark all ${total} as reviewed?`, body: "They'll leave the Inbox but stay in your documents.", confirmLabel: "Mark all reviewed" }))) return;
+    // The server picks the documents (all of the Inbox, not just the ones loaded here), in
+    // batches of up to 5000.
+    const t = toast.loading("Marking as reviewed…");
     try {
-      await api.post("/documents/bulk", { ids: items.map((d) => d.id), action: "update", update: { inbox: false } });
+      let done = 0;
+      let skipped = 0;
+      for (let round = 0; round < 100; round++) {
+        const r = await api.post<{ succeeded: number; failed: unknown[]; remaining: number }>("/documents/bulk", { select: "inbox", action: "update", update: { inbox: false } });
+        done += r.succeeded;
+        skipped = r.failed.length;
+        if (r.remaining <= 0 || r.succeeded === 0) break;
+        toast.loading(`Marked ${done.toLocaleString()} as reviewed…`, { id: t });
+      }
+      toast.success(`Marked ${done.toLocaleString()} as reviewed${skipped ? ` (${skipped} you can only view stay in the Inbox)` : ""}`, { id: t });
       invalidateDocuments(qc);
     } catch (e) {
-      toast.error(errorMessage(e));
+      toast.error(errorMessage(e), { id: t });
+      invalidateDocuments(qc);
     }
   };
 
   if (res.isLoading) {
     return (
       <div className="flex lg:h-[calc(100dvh-3.5rem)]">
-        <div className="w-full space-y-px border-r border-border lg:w-[360px]">
+        <div className="w-full space-y-px border-r border-border lg:w-[280px] 2xl:w-[360px]">
           <Skeleton className="m-4 h-7 w-32" />
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="flex gap-3 px-4 py-3">
@@ -143,7 +157,7 @@ export function InboxPage() {
 
   return (
     <div className="flex lg:h-[calc(100dvh-3.5rem)]">
-      <div className="flex w-full flex-col border-r border-border lg:w-[320px] lg:shrink-0 xl:w-[360px]">
+      <div className="flex w-full flex-col border-r border-border lg:w-[280px] lg:shrink-0 2xl:w-[360px]">
         <div className="flex min-h-14 items-center justify-between gap-2 border-b border-border px-4 py-2">
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-[17px] font-semibold leading-tight tracking-tight">

@@ -300,3 +300,14 @@ func Chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler 
 	}
 	return h
 }
+
+// FromTrustedProxy reports whether the request came straight from a trusted reverse proxy,
+// whose X-Forwarded-* headers can then be believed.
+func FromTrustedProxy(r *http.Request, trusted []netip.Prefix) bool {
+	host := r.RemoteAddr
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		host = ap.Addr().String()
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && isTrusted(a, trusted)
+}

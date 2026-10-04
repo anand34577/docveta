@@ -90,5 +90,61 @@ class RecognitionTest(unittest.TestCase):
         self.assertGreater(crop.shape[1], crop.shape[0])
 
 
+def _box(i: int, width: int = 300) -> "ppocr.TextBox":
+    y = 10 + i * 40
+    return ppocr.TextBox(np.array([[10, y], [10 + width, y], [10 + width, y + 30], [10, y + 30]], dtype=np.float32), 0.9)
+
+
+class ScriptDetectionTest(unittest.TestCase):
+    """read_lines picks the page's script from the text itself, not only the language hint."""
+
+    def reader(self, truth: dict, calls: list):
+        # truth[i] = (script the line is written in, its text); the right script reads it at 0.95,
+        # any other script produces a weak 0.3 guess.
+        def read(box, script):
+            i = int((box.rect[1] - 10) // 40)
+            calls.append((i, script))
+            real, text = truth[i]
+            return ppocr.RecResult(text if script == real else "x?", 0.95 if script == real else 0.3, [])
+        return read
+
+    def test_hindi_page_with_english_hint(self):
+        truth = {i: ("devanagari", f"पंक्ति {i}") for i in range(5)}
+        calls: list = []
+        boxes = [_box(i) for i in range(5)]
+        found, script = ppocr.read_lines(boxes, self.reader(truth, calls), ["en"], ["devanagari", "en", "ta"])
+        self.assertEqual(script, "devanagari")
+        self.assertEqual([r.text for _, r in found], [t for _, t in truth.values()])
+        self.assertEqual(ppocr.page_language(["en"], script), "hi")
+
+    def test_english_page_stays_fast(self):
+        truth = {i: ("en", f"line {i}") for i in range(20)}
+        calls: list = []
+        found, script = ppocr.read_lines([_box(i) for i in range(20)], self.reader(truth, calls), ["en"], ["devanagari", "en", "ta"])
+        self.assertEqual(script, "en")
+        self.assertEqual(len(found), 20)
+        self.assertEqual({s for _, s in calls}, {"en"})  # other models never ran
+        self.assertEqual(ppocr.page_language(["en-IN"], script), "en-IN")
+
+    def test_mixed_page_reads_each_line_in_its_script(self):
+        truth = {i: ("en", f"line {i}") for i in range(10)}
+        truth[3] = ("devanagari", "नाम")
+        truth[7] = ("devanagari", "पता")
+        found, script = ppocr.read_lines([_box(i) for i in range(10)], self.reader(truth, []), ["en"], ["devanagari", "en"])
+        self.assertEqual(script, "en")
+        self.assertEqual([r.text for _, r in found], [t for _, t in truth.values()])
+
+    def test_noise_is_not_turned_into_another_script(self):
+        def read(box, script):
+            return ppocr.RecResult("~~", 0.55 if script == "en" else 0.6, [])  # unreadable for everyone
+        found, _ = ppocr.read_lines([_box(0)], read, ["en"], ["devanagari", "en"])
+        self.assertEqual([r.text for _, r in found], ["~~"])  # the English guess, not a "better" foreign one
+
+    def test_single_script_and_empty(self):
+        self.assertEqual(ppocr.read_lines([], lambda b, s: None, ["hi"], ["en"]), ([], "en"))
+        found, script = ppocr.read_lines([_box(0)], lambda b, s: None, ["hi"], ["en"])
+        self.assertEqual((found, script), ([], "en"))
+
+
 if __name__ == "__main__":
     unittest.main()

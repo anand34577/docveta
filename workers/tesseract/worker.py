@@ -48,6 +48,10 @@ class TesseractEngine(Engine):
         # Tesseract is single-threaded per page with OMP_THREAD_LIMIT=1; run pages in parallel.
         self.concurrency = int(os.environ.get("DOCVETA_CONCURRENCY", max(1, cpus // 2)))
         self.psm = os.environ.get("DOCVETA_TESSERACT_PSM", "3")
+        # A document's language is only a hint (spaces default to English), so also read these
+        # scripts on every page. Comma-separated ISO codes; empty to read only the hinted ones.
+        extra = os.environ.get("DOCVETA_OCR_EXTRA_LANGUAGES", "hi")
+        self.extra = [ISO_TO_TESS.get(l.strip(), l.strip()) for l in extra.split(",") if l.strip()]
 
     def _lang_arg(self, languages: list[str]) -> str:
         codes = [ISO_TO_TESS.get(l, l) for l in languages]
@@ -55,6 +59,7 @@ class TesseractEngine(Engine):
         # Always include English: Indian documents mix English with the local script.
         if "eng" in self.tess_langs and "eng" not in codes:
             codes.append("eng")
+        codes += [c for c in self.extra if c in self.tess_langs and c not in codes]
         if not codes:
             raise EngineError("language_unavailable", f"none of {languages} installed (have {self.tess_langs})")
         return "+".join(codes)

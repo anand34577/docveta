@@ -8,6 +8,7 @@ import app.docveta.android.data.DocumentList
 import app.docveta.android.data.MemoryStore
 import app.docveta.android.data.SessionStore
 import app.docveta.android.data.normalizeServerUrl
+import app.docveta.android.data.pkceChallenge
 import app.docveta.android.upload.TusUploader
 import java.io.File
 import kotlinx.coroutines.runBlocking
@@ -22,6 +23,39 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+
+class MarkdownTest {
+    @Test
+    fun parsesTheBlocksModelsWrite() {
+        val md = """Your bill is due on **5 August** [1].
+
+- Amount: ₹1,842 [1]
+- Number: `1234`
+
+| Month | Amount |
+|---|---|
+| July | 1,620 |
+
+```
+code
+```"""
+        val blocks = app.docveta.android.ui.parseMarkdown(md)
+        assertEquals(4, blocks.size)
+        assertTrue(blocks[0] is app.docveta.android.ui.MdBlock.Para)
+        assertEquals(listOf("Amount: ₹1,842 [1]", "Number: `1234`"), (blocks[1] as app.docveta.android.ui.MdBlock.ListBlock).items)
+        val table = blocks[2] as app.docveta.android.ui.MdBlock.Table
+        assertEquals(listOf("Month", "Amount"), table.head)
+        assertEquals(listOf(listOf("July", "1,620")), table.rows)
+        assertEquals("code", (blocks[3] as app.docveta.android.ui.MdBlock.Code).text)
+    }
+}
+
+class PkceTest {
+    @Test
+    fun isBase64UrlSha256LikeTheServer() { // value from Go oauth2.S256ChallengeFromVerifier / Python hashlib
+        assertEquals("UQUQZVXmrIBVkFPCR2BV5cEdaWlPA652WGZSUxI0uxs", pkceChallenge("dBjftJeZ4CVP-mJ92K1D_JKKzM8B9U7gbKvqzRZgd4E"))
+    }
+}
 
 class ServerUrlTest {
     @Test
