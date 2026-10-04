@@ -4,12 +4,15 @@ import (
 	"net/http"
 	"runtime"
 	"strconv"
+	"time"
 
 	"github.com/anand34577/docveta/internal/apperr"
 	"github.com/anand34577/docveta/internal/audit"
 	"github.com/anand34577/docveta/internal/auth"
+	"github.com/anand34577/docveta/internal/exchange"
 	"github.com/anand34577/docveta/internal/identity"
 	"github.com/anand34577/docveta/internal/notify"
+	"github.com/anand34577/docveta/internal/office"
 	"github.com/anand34577/docveta/internal/pipeline"
 	"github.com/anand34577/docveta/internal/platform/httpx"
 )
@@ -108,6 +111,44 @@ func (a *API) registerAdmin(mux router) {
 			return pipeline.Settings{}, err
 		}
 		return a.Pipeline.SetSettings(r.Context(), p, in)
+	}))
+
+	// Export everything as a zip (the same format as `docveta export`).
+	mux.HandleFunc("GET /api/v1/admin/export", func(w http.ResponseWriter, r *http.Request) {
+		p := user(w, r)
+		if p == nil {
+			return
+		}
+		if err := admin(p); err != nil {
+			httpx.Error(w, r, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", `attachment; filename="docveta-export-`+time.Now().Format("2006-01-02")+`.zip"`)
+		w.Header().Set("Cache-Control", "no-store")
+		if _, err := exchange.Export(r.Context(), a.Pool, a.Store, exchange.ZipSink(w), exchange.ExportOptions{Version: a.Version}); err != nil {
+			httpx.Logger(r.Context()).Error("export failed", "err", err) // the download is already under way; the zip will be incomplete
+		}
+		a.Audit.Record(r.Context(), nil, "admin.export", "instance", "", nil)
+	})
+
+	// Office documents (Gotenberg)
+	mux.HandleFunc("GET /api/v1/admin/settings/office", handle(func(r *http.Request, p *auth.Principal) (*office.Info, error) {
+		return a.Office.Info(r.Context(), p)
+	}))
+	mux.HandleFunc("PUT /api/v1/admin/settings/office", handleAction(func(r *http.Request, p *auth.Principal) (*office.Info, error) {
+		in, err := decode[office.Settings](r)
+		if err != nil {
+			return nil, err
+		}
+		return a.Office.Set(r.Context(), p, in.URL)
+	}))
+	mux.HandleFunc("POST /api/v1/admin/settings/office/test", handleNoContent(func(r *http.Request, p *auth.Principal) error {
+		in, err := decode[office.Settings](r)
+		if err != nil {
+			return err
+		}
+		return a.Office.Test(r.Context(), p, in.URL)
 	}))
 
 	// Workers

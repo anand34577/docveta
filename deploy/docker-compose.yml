@@ -10,6 +10,7 @@
 # More engines (run the same command again with a profile):
 #   docker compose --profile tesseract up -d      # Tesseract, 100+ languages
 #   docker compose --profile npu-rockchip up -d   # Rockchip NPU boards (needs converted models)
+#   docker compose --profile office up -d         # Word, Excel and PowerPoint documents (Gotenberg)
 #
 # Optional settings (port, public address, …) go in a .env file next to this one; see
 # https://github.com/anand34577/docveta/blob/main/deploy/.env.example
@@ -76,6 +77,9 @@ services:
       DOCVETA_MAX_UPLOAD_MB: ${DOCVETA_MAX_UPLOAD_MB:-500}
       DOCVETA_LOG_LEVEL: ${DOCVETA_LOG_LEVEL:-info}
       DOCVETA_ALLOW_LOCAL_TARGETS: ${DOCVETA_ALLOW_LOCAL_TARGETS:-false}
+      # With the "office" profile this is http://gotenberg:3000 (set DOCVETA_GOTENBERG_URL in .env,
+      # or enter the address in Administration → Documents).
+      DOCVETA_GOTENBERG_URL: ${DOCVETA_GOTENBERG_URL:-}
     volumes:
       - ${DOCVETA_DATA_DIR:-data}:/data
       - secrets:/run/docveta-secrets:ro
@@ -108,6 +112,12 @@ services:
       DOCVETA_CONCURRENCY: ${DOCVETA_CPU_CONCURRENCY:-2}
     volumes:
       - workers:/run/docveta-workers:ro
+
+  # Converts Word/Excel/PowerPoint/OpenDocument files to PDF so they can be previewed and searched.
+  gotenberg:
+    profiles: ["office"]
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
 
   worker-npu:
     profiles: ["npu-rockchip", "npu"]

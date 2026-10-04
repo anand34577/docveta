@@ -50,6 +50,9 @@ func Handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
+		if strings.HasPrefix(p, "s/") { // public share pages: keep them out of search engines
+			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+		}
 		w.Write(index)
 	})
 }

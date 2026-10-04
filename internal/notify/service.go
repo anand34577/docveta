@@ -30,7 +30,7 @@ import (
 // EventTypes users can subscribe channels to (shown in Settings → Notifications).
 var EventTypes = []string{
 	"document.processed", "document.failed", "note.mention", "reminder.due",
-	"security.new_login", "security.token_created", "worker.offline", "worker.online", "storage.low",
+	"security.new_login", "security.token_created", "security.2fa_changed", "worker.offline", "worker.online", "storage.low", "import.failed", "workflow.notice",
 }
 
 type Service struct {
@@ -40,6 +40,8 @@ type Service struct {
 	cfg      *config.Config
 	log      *slog.Logger
 	Hub      *Hub
+	// Defer schedules a push-only delivery of e at the given time (quiet hours).
+	Defer func(ctx context.Context, e jobs.Event, at time.Time) error
 }
 
 func NewService(pool *pgxpool.Pool, keys *crypto.Keys, st *settings.Store, cfg *config.Config, log *slog.Logger) *Service {
@@ -79,6 +81,22 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, unreadOnly bool, 
 	var unread int
 	err = s.pool.QueryRow(ctx, `SELECT count(*) FROM notifications WHERE user_id=$1 AND read_at IS NULL`, p.UserID).Scan(&unread)
 	return list, unread, err
+}
+
+// Since returns notifications newer than the one with id lastID, oldest first, for
+// replay after an SSE reconnect. An unknown id replays nothing.
+func (s *Service) Since(ctx context.Context, userID, lastID uuid.UUID) ([]Notification, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, event_type, title, body, link, severity, read_at, created_at FROM notifications
+		WHERE user_id=$1 AND (created_at, id) > (SELECT created_at, id FROM notifications WHERE id=$2 AND user_id=$1)
+		ORDER BY created_at, id LIMIT 100`, userID, lastID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Notification, error) {
+		var n Notification
+		err := r.Scan(&n.ID, &n.EventType, &n.Title, &n.Body, &n.Link, &n.Severity, &n.ReadAt, &n.CreatedAt)
+		return n, err
+	})
 }
 
 // MarkRead marks notifications read; ids == nil marks all.
@@ -174,6 +192,14 @@ func validateConfig(typ string, raw json.RawMessage, old map[string]any) (map[st
 			v.Add("config.topic", "Enter a topic")
 		}
 		cfg = map[string]any{"server": server, "topic": str("topic"), "token": str("token")}
+	case "apprise":
+		if !validURL(str("url")) {
+			v.Add("config.url", "Enter your Apprise API address, e.g. http://apprise:8000")
+		}
+		if str("key") == "" && str("urls") == "" {
+			v.Add("config.key", "Enter a configuration key, or Apprise service URLs below")
+		}
+		cfg = map[string]any{"url": strings.TrimRight(str("url"), "/"), "key": str("key"), "urls": str("urls"), "tag": str("tag")}
 	case "webhook":
 		if !validURL(str("url")) {
 			v.Add("config.url", "Enter a valid URL")
@@ -347,6 +373,10 @@ func (s *Service) deliver(ctx context.Context, typ string, cfg map[string]any, o
 		var c WebhookConfig
 		_ = json.Unmarshal(raw, &c)
 		return sendWebhook(ctx, c, m)
+	case "apprise":
+		var c AppriseConfig
+		_ = json.Unmarshal(raw, &c)
+		return sendApprise(ctx, c, m)
 	case "email":
 		var c EmailConfig
 		_ = json.Unmarshal(raw, &c)
@@ -430,6 +460,15 @@ func (s *Service) SetSMTPSettings(ctx context.Context, p *auth.Principal, c SMTP
 	return out, err
 }
 
+// SendEmailTo sends one email with the saved SMTP settings (invitations).
+func (s *Service) SendEmailTo(ctx context.Context, to string, m Message) error {
+	c, pw, err := s.smtp(ctx)
+	if err != nil {
+		return err
+	}
+	return sendEmail(ctx, c, pw, to, m)
+}
+
 // SendTestEmail sends a test email to the admin's address using the saved settings.
 func (s *Service) SendTestEmail(ctx context.Context, p *auth.Principal) error {
 	if !p.Admin() {
@@ -456,12 +495,12 @@ type Worker struct {
 }
 
 func (w *Worker) Work(ctx context.Context, job *river.Job[jobs.NotifyArgs]) error {
-	return w.S.dispatch(ctx, job.Args.Event, job.ID)
+	return w.S.dispatch(ctx, job.Args.Event, job.ID, job.Args.ExternalOnly)
 }
 
 // dispatch delivers an event. In-app rows use IDs derived from the job ID so a retried
 // job never creates duplicates.
-func (s *Service) dispatch(ctx context.Context, e jobs.Event, jobID int64) error {
+func (s *Service) dispatch(ctx context.Context, e jobs.Event, jobID int64, externalOnly bool) error {
 	recipients := slices.Clone(e.Recipients)
 	if e.ToAdmins {
 		rows, err := s.pool.Query(ctx, `SELECT id FROM users WHERE is_admin AND status='active'`)
@@ -483,6 +522,9 @@ func (s *Service) dispatch(ctx context.Context, e jobs.Event, jobID int64) error
 		sev = "info"
 	}
 	for _, uid := range recipients {
+		if externalOnly {
+			break // the in-app notification was created when the event first happened
+		}
 		n := Notification{ID: uuid.NewSHA1(uuid.NameSpaceOID, fmt.Appendf(nil, "docveta-notify/%d/%s", jobID, uid)),
 			EventType: e.Type, Title: e.Title, Body: e.Body, Link: e.Link, Severity: sev, CreatedAt: time.Now()}
 		tag, err := s.pool.Exec(ctx, `INSERT INTO notifications (id, user_id, event_type, title, body, link, severity)
@@ -494,7 +536,29 @@ func (s *Service) dispatch(ctx context.Context, e jobs.Event, jobID int64) error
 			return err
 		}
 		if tag.RowsAffected() > 0 {
-			s.Hub.Publish(uid, "notification", n)
+			s.Hub.Publish(uid, "notification", n.ID.String(), n)
+		}
+	}
+
+	// Quiet hours: hold non-urgent push messages for recipients who are in theirs. Urgent
+	// events (errors, security) always go out at once.
+	pushTo := recipients
+	if !externalOnly && !urgent(e, sev) {
+		pushTo = nil
+		held := map[time.Time][]uuid.UUID{}
+		for _, uid := range recipients {
+			if until := s.quietUntil(ctx, uid); !until.IsZero() {
+				held[until] = append(held[until], uid)
+			} else {
+				pushTo = append(pushTo, uid)
+			}
+		}
+		for until, uids := range held {
+			later := e
+			later.Recipients, later.ToAdmins = uids, false
+			if s.Defer == nil || s.Defer(ctx, later, until) != nil {
+				pushTo = append(pushTo, uids...) // better early than never
+			}
 		}
 	}
 
@@ -503,7 +567,7 @@ func (s *Service) dispatch(ctx context.Context, e jobs.Event, jobID int64) error
 	// one broken channel can't spam the others.
 	rows, err := s.pool.Query(ctx, `SELECT `+channelCols+` FROM notification_channels
 		WHERE enabled AND ((owner_id = ANY($1)) OR (owner_id IS NULL AND $2)) AND (events = '{}' OR $3 = ANY(events))`,
-		recipients, e.ToAdmins, e.Type)
+		pushTo, e.ToAdmins && !externalOnly, e.Type)
 	if err != nil {
 		return err
 	}
@@ -561,6 +625,27 @@ func (s *Service) dispatch(ctx context.Context, e jobs.Event, jobID int64) error
 	return nil
 }
 
+func urgent(e jobs.Event, severity string) bool {
+	return severity == "error" || strings.HasPrefix(e.Type, "security.")
+}
+
+// quietUntil is when the user's quiet hours end, or zero when they aren't in them now.
+func (s *Service) quietUntil(ctx context.Context, uid uuid.UUID) time.Time {
+	prefs, err := s.Prefs(ctx, uid)
+	if err != nil || !prefs.QuietEnabled {
+		return time.Time{}
+	}
+	var tz string
+	if err := s.pool.QueryRow(ctx, `SELECT timezone FROM users WHERE id=$1`, uid).Scan(&tz); err != nil {
+		return time.Time{}
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		loc = time.UTC
+	}
+	return prefs.QuietUntil(time.Now(), loc)
+}
+
 // truncate cuts s to at most n bytes without splitting a UTF-8 character.
 func truncate(s string, n int) string {
 	s = strings.ToValidUTF8(s, "")
@@ -578,6 +663,7 @@ func truncate(s string, n int) string {
 // ---------------------------------------------------------------------------
 
 type HubMessage struct {
+	ID    string // SSE event id: lets a reconnecting browser ask for what it missed
 	Event string
 	Data  any
 }
@@ -609,13 +695,13 @@ func (h *Hub) Subscribe(uid uuid.UUID) (chan HubMessage, func()) {
 }
 
 // Publish sends a message to all of a user's connections without blocking.
-func (h *Hub) Publish(uid uuid.UUID, event string, data any) {
+func (h *Hub) Publish(uid uuid.UUID, event, id string, data any) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for ch := range h.subs[uid] {
 		select {
-		case ch <- HubMessage{Event: event, Data: data}:
-		default: // slow client: drop; the UI refetches on reconnect
+		case ch <- HubMessage{ID: id, Event: event, Data: data}:
+		default: // slow client: dropped here, replayed from the database on reconnect (Since)
 		}
 	}
 }

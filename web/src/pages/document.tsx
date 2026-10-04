@@ -1,15 +1,18 @@
 import * as React from "react";
 import { useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCheck, Download, FileDown, MoreHorizontal, RotateCcw, ScanText, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCheck, Download, FileDown, LayoutGrid, MoreHorizontal, RotateCcw, ScanText, Share2, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
-import { invalidateDocuments, useDocument, useUpdateDocument } from "@/lib/queries";
-import { cn } from "@/lib/utils";
+import { invalidateDocuments, useAIEnabled, useDocument, useUpdateDocument } from "@/lib/queries";
+import { cn, spaceLabel } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { DocViewer } from "@/components/documents/doc-viewer";
 import { MetadataPanel } from "@/components/documents/metadata-panel";
 import { HistoryTab, NotesTab, TextTab } from "@/components/documents/doc-tabs";
+import { SimilarTab, VersionsTab } from "@/components/documents/versions-similar";
+import { ShareDialog } from "@/components/documents/share-dialog";
+const PageManager = React.lazy(() => import("@/components/documents/page-manager").then((m) => ({ default: m.PageManager })));
 import { Button } from "@/components/ui/button";
 import { Spinner, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/misc";
 import {
@@ -59,11 +62,22 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
   const canEdit = !!space && space.role !== "viewer";
   const [tab, setTab] = React.useState("details");
   React.useEffect(() => setTab("details"), [doc.id]);
+  const [pane, setPane] = React.useState<"preview" | "details">("preview"); // phones show one at a time
+  React.useEffect(() => setPane("preview"), [doc.id]);
+  const [sharing, setSharing] = React.useState(false);
+  const [arranging, setArranging] = React.useState(false);
+  const ai = useAIEnabled().data;
+  const pageEditable = canEdit && (doc.mime_type === "application/pdf" || doc.mime_type === "image/jpeg" || doc.mime_type === "image/png");
 
   const markReviewed = async () => {
     try {
       await update.mutateAsync({ patch: { inbox: false } });
-      toast.success("Marked as reviewed");
+      toast.success("Marked as reviewed", {
+        action: {
+          label: "Undo",
+          onClick: () => api.patch(`/documents/${doc.id}`, { inbox: true }).then(() => invalidateDocuments(qc, doc.id), (e) => toast.error(errorMessage(e))),
+        },
+      });
       onReviewed?.();
     } catch (e) {
       toast.error(errorMessage(e));
@@ -114,14 +128,17 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
 
   return (
     <div className={cn("flex flex-col lg:flex-row", compact ? "h-full" : "lg:h-[calc(100dvh-3.5rem)]")}>
-      <section className="flex min-h-0 flex-col border-border lg:flex-1 lg:border-r">
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-2 sm:px-3">
+      <section className="flex min-h-0 min-w-0 flex-col border-border lg:flex-1 lg:border-r">
+        <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border bg-surface px-2 sm:px-3">
           {onBack && (
             <Button size="icon-sm" variant="ghost" onClick={onBack} aria-label="Back">
               <ArrowLeft />
             </Button>
           )}
-          <h1 className="min-w-0 flex-1 truncate text-[15px] font-semibold">{doc.title}</h1>
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-[15px] font-semibold leading-tight">{doc.title}</h1>
+            <div className="truncate text-xs text-subtle">{[spaceLabel(space ?? doc.space), doc.correspondent?.name].filter(Boolean).join(" · ")}</div>
+          </div>
           {doc.deleted_at ? (
             <>
               <Button size="sm" onClick={restore}>
@@ -135,7 +152,7 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
             <>
               {doc.inbox && canEdit && (
                 <Button size="sm" variant="primary" onClick={markReviewed} loading={update.isPending}>
-                  <CheckCheck /> <span className="hidden sm:inline">Reviewed</span>
+                  <CheckCheck /> <span className="hidden sm:inline">{compact ? "Reviewed & next" : "Reviewed"}</span>
                 </Button>
               )}
               <Button size="icon-sm" variant="ghost" asChild>
@@ -162,6 +179,14 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
                       </a>
                     </DropdownMenuItem>
                   )}
+                  <DropdownMenuItem onSelect={() => setSharing(true)}>
+                    <Share2 /> Share with a link…
+                  </DropdownMenuItem>
+                  {pageEditable && (
+                    <DropdownMenuItem onSelect={() => setArranging(true)}>
+                      <LayoutGrid /> Arrange pages…
+                    </DropdownMenuItem>
+                  )}
                   {canEdit && (
                     <>
                       <DropdownMenuSeparator />
@@ -182,17 +207,33 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
             </>
           )}
         </div>
-        <div className="h-[62vh] min-h-0 lg:h-auto lg:flex-1">
+        <div className="flex border-b border-border bg-surface p-1.5 lg:hidden" role="tablist" aria-label="Show">
+          {([
+            ["preview", "Preview"],
+            ["details", "Details & notes"],
+          ] as const).map(([k, l]) => (
+            <button key={k} role="tab" aria-selected={pane === k} onClick={() => setPane(k)} className={cn("flex-1 rounded-md py-1.5 text-sm font-medium text-muted", pane === k && "bg-surface-2 text-fg")}>
+              {l}
+            </button>
+          ))}
+        </div>
+        <div className={cn("min-h-0 lg:block lg:h-auto lg:flex-1", pane === "preview" ? "h-[calc(100dvh-14rem)]" : "hidden")}>
           <DocViewer doc={doc} page={page} highlight={highlight} />
         </div>
       </section>
 
-      <aside className="w-full shrink-0 overflow-y-auto scrollbar-thin bg-surface lg:w-[400px]">
+      <aside className={cn("w-full shrink-0 overflow-y-auto scrollbar-thin bg-surface lg:block lg:w-[360px] xl:w-[400px]", pane === "details" ? "block" : "hidden")}>
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="sticky top-0 z-10 bg-surface px-3">
+          <TabsList className="sticky top-0 z-10 h-14 items-end overflow-x-auto bg-surface px-3 scrollbar-thin [&>button]:shrink-0">
             <TabsTrigger value="details">Details</TabsTrigger>
             <TabsTrigger value="notes">Notes{doc.note_count ? ` (${doc.note_count})` : ""}</TabsTrigger>
             <TabsTrigger value="text">Text</TabsTrigger>
+            <TabsTrigger value="versions">Versions</TabsTrigger>
+            {ai?.embeddings && (
+              <TabsTrigger value="similar">
+                <Sparkles className="mr-1 inline size-3.5" />Similar
+              </TabsTrigger>
+            )}
             <TabsTrigger value="history">History</TabsTrigger>
           </TabsList>
           <div className="p-4">
@@ -203,10 +244,18 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
               <NotesTab id={doc.id} />
             </TabsContent>
             <TabsContent value="text">{tab === "text" && <TextTab id={doc.id} />}</TabsContent>
+            <TabsContent value="versions">{tab === "versions" && <VersionsTab id={doc.id} canEdit={canEdit && !doc.deleted_at} />}</TabsContent>
+            <TabsContent value="similar">{tab === "similar" && <SimilarTab id={doc.id} />}</TabsContent>
             <TabsContent value="history">{tab === "history" && <HistoryTab id={doc.id} />}</TabsContent>
           </div>
         </Tabs>
       </aside>
+      {sharing && <ShareDialog docId={doc.id} title={doc.title} onClose={() => setSharing(false)} />}
+      {arranging && (
+        <React.Suspense fallback={null}>
+          <PageManager doc={doc} onClose={() => setArranging(false)} />
+        </React.Suspense>
+      )}
     </div>
   );
 }

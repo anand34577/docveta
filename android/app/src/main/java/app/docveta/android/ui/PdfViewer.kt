@@ -1,0 +1,178 @@
+package app.docveta.android.ui
+
+import android.graphics.Bitmap
+import android.graphics.Color as AColor
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
+import android.util.LruCache
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
+import java.io.File
+import kotlin.math.max
+import kotlin.math.min
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+
+/** Renders PDF pages to bitmaps, one at a time (PdfRenderer isn't thread-safe), keeping a few in memory. */
+class PdfPages(file: File) : AutoCloseable {
+    private val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    private val renderer = PdfRenderer(fd)
+    private val lock = Mutex()
+    private val cache = object : LruCache<String, Bitmap>(48 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
+    val count: Int get() = renderer.pageCount
+
+    /** Width and height of a page in points (for sizing the placeholder before it's drawn). */
+    suspend fun size(index: Int): Pair<Int, Int> = lock.withLock {
+        withContext(Dispatchers.IO) { renderer.openPage(index).use { it.width to it.height } }
+    }
+
+    suspend fun render(index: Int, widthPx: Int): Bitmap {
+        val key = "$index@$widthPx"
+        cache.get(key)?.let { return it }
+        return lock.withLock {
+            cache.get(key) ?: withContext(Dispatchers.Default) {
+                renderer.openPage(index).use { p ->
+                    val h = (widthPx.toFloat() * p.height / p.width).toInt().coerceAtLeast(1)
+                    val bmp = Bitmap.createBitmap(widthPx, h, Bitmap.Config.ARGB_8888)
+                    bmp.eraseColor(AColor.WHITE)
+                    p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    cache.put(key, bmp)
+                    bmp
+                }
+            }
+        }
+    }
+
+    override fun close() {
+        runCatching { renderer.close() }
+        runCatching { fd.close() }
+    }
+}
+
+/**
+ * Lets two fingers zoom and pan, double-tap toggle zoom, and leaves one finger free to scroll the list underneath
+ * (it only takes over once zoomed in, and then only to pan).
+ */
+fun Modifier.pinchZoom(maxScale: Float = 5f, onScale: (Float) -> Unit = {}): Modifier = composed {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    fun clampOffset(o: Offset, size: androidx.compose.ui.unit.IntSize): Offset {
+        val maxX = (size.width * (scale - 1f)) / 2f
+        val maxY = (size.height * (scale - 1f)) / 2f
+        return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
+    }
+    this
+        .clipToBounds()
+        .pointerInput(Unit) {
+            detectTapGestures(onDoubleTap = { tap ->
+                if (scale > 1.05f) {
+                    scale = 1f
+                    offset = Offset.Zero
+                } else {
+                    scale = 2.5f
+                    offset = clampOffset(Offset((size.width / 2f - tap.x) * (scale - 1f), (size.height / 2f - tap.y) * (scale - 1f)), size)
+                }
+                onScale(scale)
+            })
+        }
+        .pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                do {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val multi = event.changes.count { it.pressed } > 1
+                    if (multi || scale > 1.01f) {
+                        val zoom = event.calculateZoom()
+                        val pan = event.calculatePan()
+                        val newScale = (scale * zoom).coerceIn(1f, maxScale)
+                        scale = newScale
+                        offset = if (newScale <= 1.01f) Offset.Zero else clampOffset(offset + pan, size)
+                        onScale(scale)
+                        event.changes.forEach { if (it.positionChanged()) it.consume() }
+                    }
+                } while (event.changes.any { it.pressed })
+            }
+        }
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+            translationX = offset.x
+            translationY = offset.y
+        }
+}
+
+/** All pages of a PDF in a scrolling column, with pinch zoom. */
+@Composable
+fun PdfView(file: File, modifier: Modifier = Modifier, startPage: Int = 0, onPage: (Int, Int) -> Unit = { _, _ -> }) {
+    val pages = remember(file) { runCatching { PdfPages(file) }.getOrNull() }
+    DisposableEffect(pages) { onDispose { pages?.close() } }
+    if (pages == null) {
+        Text("This PDF couldn't be shown. You can still open it in another app.", Modifier.padding(24.dp), style = MaterialTheme.typography.bodyMedium)
+        return
+    }
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = startPage.coerceIn(0, max(0, pages.count - 1)))
+    val current by remember { derivedStateOf { state.firstVisibleItemIndex } }
+    LaunchedEffect(current) { onPage(current, pages.count) }
+    BoxWithConstraints(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant)) {
+        val widthPx = with(LocalDensity.current) { min(maxWidth.toPx() * 1.6f, 1800f).toInt() }
+        LazyColumn(Modifier.fillMaxSize().pinchZoom(), state = state, contentPadding = PaddingValues(vertical = 12.dp)) {
+            itemsIndexed(List(pages.count) { it }) { i, _ ->
+                val ratio by produceState(1.41f, pages, i) {
+                    val (w, h) = pages.size(i)
+                    value = h.toFloat() / w
+                }
+                val bmp by produceState<Bitmap?>(null, pages, i, widthPx) { value = runCatching { pages.render(i, widthPx) }.getOrNull() }
+                Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp).aspectRatio(1f / ratio), shadowElevation = 2.dp, color = androidx.compose.ui.graphics.Color.White) {
+                    bmp?.let { Image(it.asImageBitmap(), "Page ${i + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.FillWidth) }
+                }
+            }
+        }
+    }
+}

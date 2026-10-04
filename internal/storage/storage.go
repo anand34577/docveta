@@ -35,12 +35,14 @@ type Store interface {
 	FreeBytes() int64
 }
 
-// Staged is a temporary file that hashes everything written to it.
+// Staged is a temporary file that hashes everything written to it. Commit hands the
+// finished file to the store that created it (a rename for the filesystem, an upload
+// for S3).
 type Staged struct {
 	f      *os.File
 	h      hash.Hash
 	size   int64
-	store  *FS
+	commit func(key, tmpPath string) error
 	closed bool
 }
 
@@ -80,19 +82,37 @@ func (s *Staged) Commit() (key string, err error) {
 	}
 	s.closed = true
 	key = KeyFor(s.SHA256())
-	dst := s.store.path(key)
+	if err := s.commit(key, s.f.Name()); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// commitFile moves a finished temporary file into the filesystem store.
+func (s *FS) commitFile(key, tmp string) error {
+	dst := s.path(key)
 	if _, err := os.Stat(dst); err == nil {
-		os.Remove(s.f.Name())
-		return key, nil
+		os.Remove(tmp) // identical content is already stored
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
-		return "", err
+		return err
 	}
-	if err := os.Rename(s.f.Name(), dst); err != nil {
-		return "", err
+	if err := os.Rename(tmp, dst); err != nil {
+		return err
 	}
 	syncDir(filepath.Dir(dst))
-	return key, nil
+	return nil
+}
+
+// NewStaged creates a temporary file in the local scratch area whose Commit calls commit
+// (other stores, such as S3, use it to stage uploads).
+func (s *FS) NewStaged(commit func(key, tmpPath string) error) (*Staged, error) {
+	f, err := os.CreateTemp(s.tmp, "upload-*")
+	if err != nil {
+		return nil, err
+	}
+	return &Staged{f: f, h: sha256.New(), commit: commit}, nil
 }
 
 // KeyFor returns the blob key for a SHA-256 digest.
@@ -132,13 +152,7 @@ func validKey(key string) bool {
 	return len(key) == len("sha256/ab/cd/")+64
 }
 
-func (s *FS) Stage() (*Staged, error) {
-	f, err := os.CreateTemp(s.tmp, "upload-*")
-	if err != nil {
-		return nil, err
-	}
-	return &Staged{f: f, h: sha256.New(), store: s}, nil
-}
+func (s *FS) Stage() (*Staged, error) { return s.NewStaged(s.commitFile) }
 
 func (s *FS) Open(_ context.Context, key string) (io.ReadSeekCloser, int64, error) {
 	if !validKey(key) {

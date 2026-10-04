@@ -1,4 +1,5 @@
 // Minimal typed fetch wrapper for the Docveta API. Errors are RFC 9457 problem details.
+import { TUS_THRESHOLD, tusUpload } from "./tus";
 
 export interface FieldError {
   field: string;
@@ -108,6 +109,8 @@ export interface UploadOptions {
 
 /** Upload with progress (fetch has no upload progress, so this uses XHR). */
 export function uploadDocument<T>(o: UploadOptions): Promise<T> {
+  // Big files go in chunks that resume after a dropped connection.
+  if (o.file.size > TUS_THRESHOLD) return tusUpload<T>(o, (id) => api.get<T>(`/documents/${id}`));
   return new Promise((resolve, reject) => {
     const form = new FormData();
     // Metadata fields must come before the file: the server streams the file part.

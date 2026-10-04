@@ -38,7 +38,7 @@ func uuidList(vals []string) ([]uuid.UUID, error) {
 // parseQuery reads search parameters from the URL.
 func parseQuery(r *http.Request) (search.Query, error) {
 	v := r.URL.Query()
-	q := search.Query{Q: v.Get("q"), Sort: v.Get("sort"), Cursor: v.Get("cursor"), WithTotal: v.Get("total") != "false"}
+	q := search.Query{Q: v.Get("q"), Sort: v.Get("sort"), Cursor: v.Get("cursor"), WithTotal: v.Get("total") != "false", WithFacets: v.Get("facets") == "true"}
 	q.Limit = httpx.QueryInt(r, "limit", 50, 1, 200)
 	var err error
 	for _, f := range []struct {
@@ -82,6 +82,12 @@ func parseQuery(r *http.Request) (search.Query, error) {
 	q.NoCorrespondent = v.Get("no_correspondent") == "true"
 	q.NoType = v.Get("no_document_type") == "true"
 	q.Trash = v.Get("trash") == "true"
+	switch m := v.Get("mode"); m {
+	case "", "keyword", "semantic", "hybrid":
+		q.Mode = m
+	default:
+		return q, apperr.Invalid("mode", "Must be keyword, semantic or hybrid")
+	}
 	return q, nil
 }
 
@@ -91,7 +97,7 @@ func (a *API) registerDocuments(mux router) {
 		if err != nil {
 			return nil, err
 		}
-		return a.Documents.List(r.Context(), p, q)
+		return a.listDocuments(r, p, q)
 	}))
 	mux.HandleFunc("POST /api/v1/documents/search", func(w http.ResponseWriter, r *http.Request) {
 		p := user(w, r)
@@ -104,7 +110,7 @@ func (a *API) registerDocuments(mux router) {
 			return
 		}
 		q.WithTotal = true
-		res, err := a.Documents.List(r.Context(), p, q)
+		res, err := a.listDocuments(r, p, q)
 		if err != nil {
 			httpx.Error(w, r, err)
 			return
@@ -116,7 +122,13 @@ func (a *API) registerDocuments(mux router) {
 		return items(s), err
 	}))
 	mux.HandleFunc("GET /api/v1/documents/stats", handle(func(r *http.Request, p *auth.Principal) (*documents.Stats, error) {
-		return a.Documents.Stats(r.Context(), p)
+		st, err := a.Documents.Stats(r.Context(), p)
+		if err != nil {
+			return nil, err
+		}
+		st.OCRAvailable = a.Pipeline.OCRAvailable(r.Context())
+		st.TrashRetentionDays = int(a.Cfg.TrashRetention.Hours() / 24)
+		return st, nil
 	}))
 	mux.HandleFunc("POST /api/v1/documents", a.upload)
 	mux.HandleFunc("POST /api/v1/documents/bulk", func(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +306,7 @@ func (a *API) serveFile(w http.ResponseWriter, r *http.Request) {
 	switch kind {
 	case "", "original":
 		kind = "original"
-	case "archive", "thumbnail":
+	case "archive", "thumbnail", "derived":
 	case "best": // archive when available, else original
 		kind = "archive"
 		f, err := a.Documents.OpenFile(r.Context(), p, id, kind)
@@ -304,15 +316,25 @@ func (a *API) serveFile(w http.ResponseWriter, r *http.Request) {
 			f.Reader.Close()
 		}
 	default:
-		httpx.Error(w, r, apperr.Invalid("kind", "Must be original, archive, thumbnail or best"))
+		httpx.Error(w, r, apperr.Invalid("kind", "Must be original, archive, derived, thumbnail or best"))
 		return
 	}
-	f, err := a.Documents.OpenFile(r.Context(), p, id, kind)
+	var f *documents.File
+	if v, _ := strconv.Atoi(r.URL.Query().Get("version")); v > 0 && kind == "original" {
+		f, err = a.Documents.OpenFileVersion(r.Context(), p, id, v)
+	} else {
+		f, err = a.Documents.OpenFile(r.Context(), p, id, kind)
+	}
 	if err != nil {
 		httpx.Error(w, r, err)
 		return
 	}
 	defer f.Reader.Close()
+	writeFile(w, r, f)
+}
+
+// writeFile streams a document file with Range support and safe inline/attachment rules.
+func writeFile(w http.ResponseWriter, r *http.Request, f *documents.File) {
 	h := w.Header()
 	h.Set("Content-Type", f.Mime)
 	h.Set("ETag", f.ETag)

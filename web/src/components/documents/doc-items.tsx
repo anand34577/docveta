@@ -1,7 +1,8 @@
 import * as React from "react";
 import { Link } from "@tanstack/react-router";
 import { AlertCircle, FileImage, FileText, FileType2, Loader2, Lock, MessageSquare } from "lucide-react";
-import { cn, fileKind, formatDocDate } from "@/lib/utils";
+import { cn, fileKind, formatDocDate, spaceDot, spaceLabel } from "@/lib/utils";
+import { useCurrentUser } from "@/components/app-shell";
 import type { Document, Segment } from "@/lib/types";
 import { Checkbox, TagChip } from "@/components/ui/misc";
 
@@ -45,6 +46,15 @@ export function StatusBadge({ doc, className }: { doc: Document; className?: str
   );
 }
 
+/** Marks documents still in the Inbox (not yet reviewed). */
+export function NewBadge({ className }: { className?: string }) {
+  return (
+    <span className={cn("rounded bg-accent-soft px-1.5 text-[11px] font-medium leading-[18px] text-accent-soft-fg", className)} title="In your Inbox, not reviewed yet">
+      New
+    </span>
+  );
+}
+
 export function stageLabel(stage: string): string {
   switch (stage) {
     case "awaiting_ocr":
@@ -73,6 +83,19 @@ export function Snippet({ segments, className }: { segments?: Segment[]; classNa
         ),
       )}
     </p>
+  );
+}
+
+/** The space a document lives in, as a coloured dot and name. Only shown to people with more than one space. */
+export function SpaceTag({ doc, className }: { doc: Document; className?: string }) {
+  const me = useCurrentUser();
+  if (me.spaces.length < 2) return null;
+  const s = me.spaces.find((x) => x.id === doc.space.id);
+  return (
+    <span className={cn("inline-flex min-w-0 items-center gap-1.5 text-xs text-muted", className)} title={`In ${spaceLabel(s ?? doc.space)}`}>
+      <span className={cn("size-2 shrink-0 rounded-full", s?.kind === "personal" ? "bg-slate-400" : spaceDot(s?.color))} />
+      <span className="truncate">{spaceLabel(s ?? doc.space)}</span>
+    </span>
   );
 }
 
@@ -116,8 +139,9 @@ export function DocumentCard({ doc, selected, selecting, onToggle, query }: Item
             {[formatDocDate(doc.document_date), doc.correspondent?.name].filter(Boolean).join(" · ") || " "}
           </div>
           <Snippet segments={doc.snippet} />
-          <div className="mt-auto pt-1">
+          <div className="mt-auto space-y-1.5 pt-1">
             <TagList tags={doc.tags} max={2} />
+            <SpaceTag doc={doc} />
           </div>
         </div>
       </Link>
@@ -129,14 +153,14 @@ export function DocumentCard({ doc, selected, selecting, onToggle, query }: Item
         </div>
         <StatusBadge doc={doc} />
       </div>
-      {doc.inbox && doc.status === "ready" && <span className="absolute right-2.5 top-2.5 size-2.5 rounded-full bg-accent ring-2 ring-surface" title="In inbox" />}
+      {doc.inbox && doc.status === "ready" && <NewBadge className="absolute right-2 top-2 shadow-sm" />}
     </div>
   );
 }
 
 export function DocumentRow({ doc, selected, selecting, onToggle, query }: ItemProps) {
   return (
-    <div className={cn("group flex items-center gap-3 border-b border-border px-3 py-2.5 hover:bg-surface-2 sm:px-4", selected && "bg-accent-soft/50")}>
+    <div className={cn("group flex items-center gap-3 border-b border-border page-x py-2.5 hover:bg-surface-2", selected && "bg-accent-soft/50")}>
       <div className={cn("transition-opacity", selecting || selected ? "opacity-100" : "sm:opacity-0 sm:group-hover:opacity-100")}>
         <Checkbox checked={selected} onClick={(e) => onToggle(e)} aria-label={`Select ${doc.title}`} />
       </div>
@@ -150,8 +174,8 @@ export function DocumentRow({ doc, selected, selecting, onToggle, query }: ItemP
         <Thumbnail doc={doc} className="h-12 w-10 shrink-0 rounded border border-border" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            {doc.inbox && <span className="size-2 shrink-0 rounded-full bg-accent" title="In inbox" />}
             <span className="truncate text-sm font-medium">{doc.title}</span>
+            {doc.inbox && doc.status === "ready" && <NewBadge className="shrink-0" />}
             <StatusBadge doc={doc} className="shrink-0 shadow-none" />
           </div>
           {doc.snippet?.length ? (
@@ -166,6 +190,9 @@ export function DocumentRow({ doc, selected, selecting, onToggle, query }: ItemP
         <div className="hidden w-32 truncate text-sm text-muted xl:block">{doc.document_type?.name}</div>
         <div className="hidden w-48 lg:block">
           <TagList tags={doc.tags} max={2} />
+        </div>
+        <div className="hidden w-32 lg:block">
+          <SpaceTag doc={doc} />
         </div>
         <div className="hidden w-24 text-right text-sm tabular-nums text-muted sm:block">{formatDocDate(doc.document_date)}</div>
         <div className="hidden w-8 text-right text-xs text-subtle sm:block">

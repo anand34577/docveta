@@ -1,24 +1,28 @@
 import * as React from "react";
 import { useParams } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, KeyRound, Monitor, Plus, Shield, Smartphone, Trash2, User } from "lucide-react";
+import { Bell, Bookmark, KeyRound, Monitor, Plus, Shield, Smartphone, Trash2, User } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { keys, useChannels } from "@/lib/queries";
 import type { ApiToken, Channel, Session } from "@/lib/types";
 import { formatDateTime, setDateFormat, timeAgo } from "@/lib/utils";
-import { useCurrentUser } from "@/components/app-shell";
+import { ThemePicker, useCurrentUser } from "@/components/app-shell";
 import { SecretReveal, SettingsCard, SettingsLayout } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
 import { Field, Input, NativeSelect } from "@/components/ui/input";
 import { Badge, Checkbox, EmptyState, Switch } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { confirm } from "@/components/ui/confirm";
+import { TwoFactorCard } from "@/components/two-factor";
+import { QuietHours } from "@/components/quiet-hours";
+import { ViewsManager } from "@/components/views-manager";
 
 const sections = [
   { id: "profile", label: "Profile", icon: <User /> },
   { id: "security", label: "Security", icon: <Shield /> },
   { id: "notifications", label: "Notifications", icon: <Bell /> },
+  { id: "views", label: "Saved views", icon: <Bookmark /> },
   { id: "api", label: "API tokens", icon: <KeyRound /> },
 ];
 
@@ -30,6 +34,7 @@ export function SettingsPage() {
       {active === "profile" && <Profile />}
       {active === "security" && <Security />}
       {active === "notifications" && <Notifications />}
+      {active === "views" && <ViewsManager />}
       {active === "api" && <Tokens />}
     </SettingsLayout>
   );
@@ -55,8 +60,14 @@ function Profile() {
       setBusy(false);
     }
   };
-  const zones = React.useMemo(() => (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? [me.timezone], [me.timezone]);
+  // Browsers list some zones under old names (Chrome has Asia/Calcutta, not Asia/Kolkata):
+  // keep the saved zone selectable so the picker never shows the wrong one.
+  const zones = React.useMemo(() => {
+    const all = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];
+    return all.includes(me.timezone) ? all : [me.timezone, ...all];
+  }, [me.timezone]);
   return (
+    <>
     <SettingsCard title="Profile" description={me.email}>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Name" htmlFor="p-name" className="sm:col-span-2">
@@ -80,13 +91,19 @@ function Profile() {
           <NativeSelect id="p-tz" value={me.timezone} onChange={(e) => save({ timezone: e.target.value })}>
             {zones.map((z) => (
               <option key={z} value={z}>
-                {z}
+                {z.replace(/_/g, " ")}
               </option>
             ))}
           </NativeSelect>
         </Field>
       </div>
     </SettingsCard>
+    <SettingsCard title="Appearance" description="Auto follows your device's light or dark setting.">
+      <div className="max-w-xs">
+        <ThemePicker />
+      </div>
+    </SettingsCard>
+    </>
   );
 }
 
@@ -142,6 +159,8 @@ function Security() {
         </form>
       </SettingsCard>
 
+      <TwoFactorCard />
+
       <SettingsCard
         title="Signed-in devices"
         description="Sign out devices you don't recognise."
@@ -196,14 +215,18 @@ const eventLabels: Record<string, string> = {
   "worker.offline": "Processing worker offline (admins)",
   "worker.online": "Processing worker back online (admins)",
   "storage.low": "Low disk space (admins)",
+  "security.2fa_changed": "Two-step sign-in changed",
+  "import.failed": "A watched-folder file couldn't be imported",
+  "workflow.notice": "Workflow messages",
 };
 
-const channelTypes = {
+const channelTypes: Record<Channel["type"], { label: string; fields: readonly (readonly [string, string, string])[] }> = {
   gotify: { label: "Gotify", fields: [["url", "Server URL", "https://gotify.example.com"], ["token", "Application token", ""]] },
   ntfy: { label: "ntfy", fields: [["server", "Server (optional)", "https://ntfy.sh"], ["topic", "Topic", "my-docveta-alerts"], ["token", "Access token (optional)", ""]] },
   email: { label: "Email", fields: [["to", "Send to (optional)", "Defaults to your account email"]] },
   webhook: { label: "Webhook", fields: [["url", "URL", "https://example.com/hooks/docveta"], ["secret", "Signing secret (optional)", "Generated if empty"]] },
-} as const;
+  apprise: { label: "Apprise", fields: [["url", "Apprise API URL", "http://apprise:8000"], ["key", "Saved configuration key (optional)", ""], ["urls", "Or service URLs, comma-separated", "tgram://token/chat, discord://id/token"], ["tag", "Tag (optional)", ""]] },
+};
 
 export function Notifications({ system }: { system?: boolean }) {
   const channels = useChannels();
@@ -229,12 +252,13 @@ export function Notifications({ system }: { system?: boolean }) {
     qc.invalidateQueries({ queryKey: keys.channels });
   };
   return (
+    <>
     <SettingsCard
       title={system ? "Admin alert channels" : "Where to notify me"}
       description={
         system
           ? "Instance alerts (worker offline, low disk) go to these channels, in addition to admins' in-app notifications."
-          : "You always get notifications in Docveta. Add Gotify, ntfy, email or a webhook to get them on your phone or elsewhere."
+          : "You always get notifications in Docveta. Add Gotify, ntfy, Apprise, email or a webhook to get them on your phone or elsewhere."
       }
       actions={
         <Button size="sm" variant="primary" onClick={() => setEditing("new")}>
@@ -271,12 +295,14 @@ export function Notifications({ system }: { system?: boolean }) {
       )}
       {editing && <ChannelDialog channel={editing === "new" ? null : editing} system={system} eventTypes={channels.data?.event_types ?? []} onClose={() => setEditing(null)} />}
     </SettingsCard>
+    {!system && <QuietHours />}
+    </>
   );
 }
 
 function ChannelDialog({ channel, system, eventTypes, onClose }: { channel: Channel | null; system?: boolean; eventTypes: string[]; onClose: () => void }) {
   const qc = useQueryClient();
-  const [type, setType] = React.useState<keyof typeof channelTypes>(channel?.type ?? "gotify");
+  const [type, setType] = React.useState<Channel["type"]>(channel?.type ?? "gotify");
   const [name, setName] = React.useState(channel?.name ?? "");
   const [config, setConfig] = React.useState<Record<string, string>>(channel?.config ?? {});
   const [events, setEvents] = React.useState<string[]>(channel?.events ?? []);
@@ -305,8 +331,8 @@ function ChannelDialog({ channel, system, eventTypes, onClose }: { channel: Chan
       <DialogContent title={channel ? `Edit ${channel.name}` : "Add notification channel"}>
         <form onSubmit={save} className="space-y-4">
           {!channel && (
-            <div className="grid grid-cols-4 gap-2">
-              {(Object.keys(channelTypes) as (keyof typeof channelTypes)[]).map((t) => (
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+              {(Object.keys(channelTypes) as Channel["type"][]).map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -397,7 +423,7 @@ function Tokens() {
   return (
     <SettingsCard
       title="API tokens"
-      description="For scripts, scanners, Home Assistant and other apps. Use as: Authorization: Bearer <token>"
+      description="For scripts, scanners, Home Assistant, AI assistants (MCP at /mcp, read-only) and other apps. Use as: Authorization: Bearer <token>"
       actions={
         <Button size="sm" variant="primary" onClick={() => { setOpen(true); setSecret(null); setName(""); }}>
           <Plus /> New token

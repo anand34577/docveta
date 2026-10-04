@@ -37,13 +37,27 @@ import (
 
 const enrollKey = "0123456789abcdef0123456789abcdef"
 
-func TestIntegration(t *testing.T) {
+// env is a running Docveta (database schema, jobs, HTTP server) with a signed-in admin.
+type env struct {
+	ctx    context.Context
+	a      *App
+	srv    *httptest.Server
+	c      *client // signed in as the admin
+	family string  // id of the shared "Family" space
+	me     string  // admin user id
+}
+
+func newEnv(t *testing.T) *env { return newEnvWith(t, nil) }
+
+// newEnvWith is newEnv with a chance to adjust the configuration (storage, limits, ...).
+func newEnvWith(t *testing.T, adjust func(*config.Config)) *env {
+	t.Helper()
 	dbURL := os.Getenv("DOCVETA_TEST_DATABASE_URL")
 	if dbURL == "" {
 		t.Skip("set DOCVETA_TEST_DATABASE_URL to run integration tests")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	t.Cleanup(cancel)
 
 	// Isolated schema per run.
 	schema := fmt.Sprintf("docveta_it_%d", time.Now().UnixNano())
@@ -51,13 +65,17 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Extensions live in public so that several environments in one test share them.
+	if _, err := conn.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS citext SCHEMA public; CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		_, _ = conn.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
 		conn.Close(context.Background())
-	}()
+	})
 	u, _ := url.Parse(dbURL)
 	q := u.Query()
 	q.Set("search_path", schema+",public")
@@ -70,6 +88,9 @@ func TestIntegration(t *testing.T) {
 		MaxUploadBytes: 50 << 20, SessionIdle: time.Hour, SessionMax: time.Hour, TrashRetention: time.Hour,
 		PDFWorkers: 1, JobWorkers: 4, DevMode: true, WorkerEnrollKey: []byte(enrollKey),
 	}
+	if adjust != nil {
+		adjust(cfg)
+	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if testing.Verbose() {
 		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -78,14 +99,14 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	t.Cleanup(a.Close)
 	if err := a.startJobs(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer a.River.Stop(context.Background()) //nolint:errcheck
+	t.Cleanup(func() { a.River.Stop(context.Background()) }) //nolint:errcheck
 	srv.Config.Handler = a.Handler()
 	srv.Start()
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 	specRouter = loadSpec(t, srv.URL)
 
 	c := newClient(t, srv.URL)
@@ -107,6 +128,12 @@ func TestIntegration(t *testing.T) {
 	}
 	// Setup can't run twice.
 	c.do("POST", "/api/v1/setup", map[string]any{"email": "x@example.com", "display_name": "X", "password": "a-long-password"}, 409, nil)
+	return &env{ctx: ctx, a: a, srv: srv, c: c, family: family, me: me.ID}
+}
+
+func TestIntegration(t *testing.T) {
+	ev := newEnv(t)
+	ctx, a, srv, c, family := ev.ctx, ev.a, ev.srv, ev.c, ev.family
 
 	// Auto-tag rule: documents mentioning "invoice" get the tag.
 	var tag struct{ ID string }
@@ -429,13 +456,20 @@ func TestIntegration(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type docDTO struct {
-	ID           string  `json:"id"`
-	Status       string  `json:"status"`
-	Stage        string  `json:"processing_stage"`
-	Error        string  `json:"processing_error"`
-	PageCount    *int    `json:"page_count"`
-	HasThumbnail bool    `json:"has_thumbnail"`
-	HasArchive   bool    `json:"has_archive"`
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	Stage        string `json:"processing_stage"`
+	Error        string `json:"processing_error"`
+	PageCount    *int   `json:"page_count"`
+	HasThumbnail bool   `json:"has_thumbnail"`
+	HasArchive   bool   `json:"has_archive"`
+	HasDerived   bool   `json:"has_derived"`
+	Title        string `json:"title"`
+	Inbox        bool   `json:"inbox"`
+	Space        struct {
+		ID string `json:"id"`
+	} `json:"space"`
+	Source       string  `json:"source"`
 	DocumentDate *string `json:"document_date"`
 	Version      int     `json:"version"`
 	Tags         []struct {
@@ -644,3 +678,5 @@ func minimalPDF(text string) []byte {
 	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(off)+1, x)
 	return b.Bytes()
 }
+
+func newMultipart(w io.Writer) *multipart.Writer { return multipart.NewWriter(w) }

@@ -455,9 +455,10 @@ func (s *Service) tryLease(ctx context.Context, workerID uuid.UUID, capacity int
 			}
 			for i := range leased {
 				var sha []byte
-				if err := tx.QueryRow(ctx, `SELECT f.sha256, f.size_bytes FROM document_files f JOIN documents d ON d.id=f.document_id
-					WHERE f.document_id=$1 AND f.kind='original' AND f.version_no=d.current_version`, leased[i].DocumentID).
-					Scan(&sha, &leased[i].Input.Size); err != nil {
+				if err := tx.QueryRow(ctx, `SELECT f.sha256, f.size_bytes, f.mime_type FROM document_files f JOIN documents d ON d.id=f.document_id
+					WHERE f.document_id=$1 AND f.kind IN ('derived','original') AND f.version_no=d.current_version
+					ORDER BY (f.kind='derived') DESC LIMIT 1`, leased[i].DocumentID).
+					Scan(&sha, &leased[i].Input.Size, &leased[i].Input.Mime); err != nil {
 					return err
 				}
 				leased[i].Input.SHA256 = fmt.Sprintf("%x", sha)
@@ -576,8 +577,10 @@ func (s *Service) OpenTaskInput(ctx context.Context, p *auth.Principal, taskID, 
 		return nil, 0, "", err
 	}
 	var key, mime string
+	// The working copy (HEIC converted to JPEG, Office converted to PDF) wins over the original.
 	if err := s.pool.QueryRow(ctx, `SELECT f.blob_key, f.mime_type FROM document_files f JOIN documents d ON d.id=f.document_id
-		WHERE f.document_id=$1 AND f.kind='original' AND f.version_no=d.current_version`, t.DocumentID).Scan(&key, &mime); err != nil {
+		WHERE f.document_id=$1 AND f.kind IN ('derived','original') AND f.version_no=d.current_version
+		ORDER BY (f.kind='derived') DESC LIMIT 1`, t.DocumentID).Scan(&key, &mime); err != nil {
 		return nil, 0, "", err
 	}
 	r, size, err := s.store.Open(ctx, key)
@@ -958,4 +961,13 @@ func (s *Service) RetryTask(ctx context.Context, p *auth.Principal, id uuid.UUID
 		s.signal()
 	}
 	return err
+}
+
+// OCRAvailable reports whether an enabled worker that can read text has been seen
+// recently. Without one, scans and photos stay unsearchable, so the UI says so.
+func (s *Service) OCRAvailable(ctx context.Context) bool {
+	var ok bool
+	_ = s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workers WHERE enabled AND last_seen_at > now() - interval '10 minutes'
+		AND capabilities @> '[{"task_type":"ocr"}]')`).Scan(&ok)
+	return ok
 }

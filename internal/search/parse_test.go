@@ -93,3 +93,29 @@ func TestRelativeAdded(t *testing.T) {
 		t.Errorf(">1y: %v %v", from, to)
 	}
 }
+
+func TestParseCustomFilters(t *testing.T) {
+	now := time.Now()
+	known := map[string]bool{"amount": true, "due date": true}
+	p := ParseWith(`cf:Amount>1500 cf:"Due date"<=2026-12-31 amount:>=20 amount:7 cf:Status=Paid cf:Policy~LIC cf:Notes unknown:>5 electricity`, now, known)
+	want := []CustomFilter{
+		{"Amount", ">", "1500"}, {"Due date", "<=", "2026-12-31"}, {"amount", ">=", "20"}, {"amount", "=", "7"},
+		{"Status", "=", "Paid"}, {"Policy", "~", "LIC"}, {"Notes", "", ""},
+	}
+	if len(p.Custom) != len(want) {
+		t.Fatalf("got %+v", p.Custom)
+	}
+	for i, w := range want {
+		if p.Custom[i] != w {
+			t.Errorf("filter %d: got %+v, want %+v", i, p.Custom[i], w)
+		}
+	}
+	// "unknown:>5" isn't a field, so it stays free text; so does the plain word.
+	if q := textindex.TSQuery(p.Parts); q == "" {
+		t.Error("free text lost")
+	}
+	// Without the field list, a bare "amount:>5" is just text.
+	if p := Parse("amount:>5", now); len(p.Custom) != 0 {
+		t.Errorf("unknown key parsed as a filter: %+v", p.Custom)
+	}
+}

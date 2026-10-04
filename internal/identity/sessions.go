@@ -41,46 +41,50 @@ func (s *Service) PasswordLoginAllowed(ctx context.Context) bool {
 
 // Login verifies a password and creates a session. Timing is equalized for unknown
 // accounts, and attempts are rate limited per IP and per IP+email.
-func (s *Service) Login(ctx context.Context, email, password, userAgent string) (token string, u *User, err error) {
+func (s *Service) Login(ctx context.Context, email, password, userAgent string) (*LoginResult, error) {
 	ip := httpx.ClientIP(ctx)
 	email = strings.ToLower(strings.TrimSpace(email))
 	if ok, wait := s.loginIPLimiter.Allow(ip); !ok {
-		return "", nil, rateLimited(wait)
+		return nil, rateLimited(wait)
 	}
 	key := ip + "|" + email
 	if ok, wait := s.loginLimiter.Allow(key); !ok {
-		return "", nil, rateLimited(wait)
+		return nil, rateLimited(wait)
 	}
 	if !s.PasswordLoginAllowed(ctx) {
-		return "", nil, apperr.Forbidden("Password sign-in is disabled. Use single sign-on.")
+		return nil, apperr.Forbidden("Password sign-in is disabled. Use single sign-on.")
 	}
 	var id uuid.UUID
 	var hash *string
 	var status string
-	err = s.pool.QueryRow(ctx, `SELECT id, password_hash, status FROM users WHERE email=$1`, email).Scan(&id, &hash, &status)
+	err := s.pool.QueryRow(ctx, `SELECT id, password_hash, status FROM users WHERE email=$1`, email).Scan(&id, &hash, &status)
 	if db.IsNoRows(err) || (err == nil && hash == nil) {
 		crypto.DummyVerify(password)
 		s.audit.Record(ctx, nil, "auth.login_failed", "user", "", map[string]any{"email": email})
-		return "", nil, errBadCredentials
+		return nil, errBadCredentials
 	}
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	ok, err := crypto.VerifyPassword(password, *hash)
 	if err != nil || !ok {
 		s.audit.Record(ctx, nil, "auth.login_failed", "user", id.String(), map[string]any{"email": email})
-		return "", nil, errBadCredentials
+		return nil, errBadCredentials
 	}
 	if status != "active" {
-		return "", nil, apperr.Forbidden("This account is disabled. Ask an administrator.")
+		return nil, apperr.Forbidden("This account is disabled. Ask an administrator.")
 	}
 	s.loginLimiter.Reset(key)
-	token, err = s.CreateSession(ctx, id, userAgent, "password")
-	if err != nil {
-		return "", nil, err
+	if s.twoFactorEnabled(ctx, id) {
+		// Password is right; no session until the second factor is too.
+		return &LoginResult{Challenge: s.newChallenge(id)}, nil
 	}
-	u, err = s.GetUser(ctx, id)
-	return token, u, err
+	token, err := s.CreateSession(ctx, id, userAgent, "password")
+	if err != nil {
+		return nil, err
+	}
+	u, err := s.GetUser(ctx, id)
+	return &LoginResult{Token: token, User: u}, err
 }
 
 func rateLimited(wait time.Duration) error {

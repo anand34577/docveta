@@ -11,6 +11,16 @@ const PdfViewer = React.lazy(() => import("./pdf-viewer"));
 export function DocViewer({ doc, page, highlight }: { doc: Document; page?: number; highlight?: string[] }) {
   const kind = fileKind(doc.mime_type);
   const v = doc.version;
+  if (doc.has_derived) {
+    // A working copy exists: Office documents became a PDF, HEIC/AVIF pictures a JPEG.
+    const url = `/api/v1/documents/${doc.id}/file?kind=derived&v=${v}`;
+    if (kind === "image") return <ImageView src={url} alt={doc.title} />;
+    return (
+      <React.Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+        <PdfViewer url={url} initialPage={page} highlight={highlight} />
+      </React.Suspense>
+    );
+  }
   if (kind === "pdf" || (doc.has_archive && kind === "image" && !browserImage(doc.mime_type))) {
     const fileKindParam = doc.has_archive ? "archive" : "original";
     return (
@@ -20,11 +30,7 @@ export function DocViewer({ doc, page, highlight }: { doc: Document; page?: numb
     );
   }
   if (kind === "image" && browserImage(doc.mime_type)) {
-    return (
-      <div className="flex h-full items-start justify-center overflow-auto scrollbar-thin bg-surface-3 p-4">
-        <img src={`/api/v1/documents/${doc.id}/file?kind=original&v=${v}`} alt={doc.title} className="max-w-full rounded-md shadow-md" style={{ imageOrientation: "from-image" }} />
-      </div>
-    );
+    return <ImageView src={`/api/v1/documents/${doc.id}/file?kind=original&v=${v}`} alt={doc.title} />;
   }
   if (kind === "text") return <TextViewer id={doc.id} version={v} />;
   return (
@@ -42,6 +48,14 @@ export function DocViewer({ doc, page, highlight }: { doc: Document; page?: numb
     >
       {doc.has_archive ? "" : "This file type can't be shown in the browser."}
     </EmptyState>
+  );
+}
+
+function ImageView({ src, alt }: { src: string; alt: string }) {
+  return (
+    <div className="flex h-full items-start justify-center overflow-auto scrollbar-thin bg-surface-3 p-4">
+      <img src={src} alt={alt} className="max-w-full rounded-md shadow-md" style={{ imageOrientation: "from-image" }} />
+    </div>
   );
 }
 

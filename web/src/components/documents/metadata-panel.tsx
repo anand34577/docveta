@@ -1,18 +1,22 @@
 import * as React from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Check, Hash, Loader2, MapPin } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Hash, Loader2, MapPin } from "lucide-react";
 import { ApiError, errorMessage } from "@/lib/api";
 import { useUpdateDocument, type DocPatch } from "@/lib/queries";
 import type { Document } from "@/lib/types";
-import { formatBytes, formatDateTime } from "@/lib/utils";
+import { formatBytes, formatDateTime, spaceLabel } from "@/lib/utils";
 import { Field, Input, NativeSelect } from "@/components/ui/input";
 import { EntityPicker } from "@/components/ui/entity-picker";
 import { Button } from "@/components/ui/button";
+import { DateInput } from "@/components/ui/date-input";
 import { useCurrentUser } from "@/components/app-shell";
 import { api } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { keys } from "@/lib/queries";
 import { stageLabel } from "./doc-items";
+import { Suggestions } from "./suggestions";
+import { CustomFieldsEditor } from "./custom-fields";
+import { UnlockDialog } from "./unlock-dialog";
 
 const languages: [string, string][] = [
   ["en", "English"], ["hi", "Hindi"], ["mr", "Marathi"], ["bn", "Bengali"], ["gu", "Gujarati"], ["ta", "Tamil"], ["te", "Telugu"],
@@ -79,22 +83,30 @@ export function MetadataPanel({ doc }: { doc: Document }) {
 
   return (
     <div className="space-y-4">
-      {doc.status !== "ready" && <ProcessingNotice doc={doc} />}
+      {doc.status !== "ready" && <ProcessingNotice doc={doc} canEdit={canEdit} />}
+      {canEdit && <Suggestions docId={doc.id} count={doc.suggestion_count} />}
 
-      <div className="flex h-5 items-center justify-end text-xs text-subtle" aria-live="polite">
-        {state === "saving" && (
-          <span className="flex items-center gap-1">
-            <Loader2 className="size-3 animate-spin" /> Saving…
+      <Field
+        label={
+          <span className="flex items-center justify-between">
+            Title
+            <span className="flex items-center gap-1 text-xs font-normal text-subtle" aria-live="polite">
+              {state === "saving" && (
+                <>
+                  <Loader2 className="size-3 animate-spin" /> Saving…
+                </>
+              )}
+              {state === "saved" && (
+                <span className="flex items-center gap-1 text-success">
+                  <Check className="size-3" /> Saved
+                </span>
+              )}
+              {state === "idle" && canEdit && "Autosaves"}
+            </span>
           </span>
-        )}
-        {state === "saved" && (
-          <span className="flex items-center gap-1 text-success">
-            <Check className="size-3" /> Saved
-          </span>
-        )}
-      </div>
-
-      <Field label="Title" htmlFor="m-title">
+        }
+        htmlFor="m-title"
+      >
         <Input
           id="m-title"
           value={title}
@@ -105,13 +117,7 @@ export function MetadataPanel({ doc }: { doc: Document }) {
       </Field>
 
       <Field label="Date on the document" htmlFor="m-date">
-        <Input
-          id="m-date"
-          type="date"
-          value={doc.document_date ?? ""}
-          disabled={!canEdit}
-          onChange={(e) => save({ document_date: e.target.value || null })}
-        />
+        <DateInput id="m-date" value={doc.document_date} disabled={!canEdit} onChange={(v) => save({ document_date: v })} />
       </Field>
 
       <Field label="Who is it from?" htmlFor="m-corr">
@@ -151,9 +157,12 @@ export function MetadataPanel({ doc }: { doc: Document }) {
         />
       </Field>
 
+      <CustomFieldsEditor spaceId={doc.space.id} values={doc.custom_fields} canEdit={canEdit} onSave={(id, v) => save({ custom_fields: { [id]: v } })} />
+
       <details className="group rounded-lg border border-border">
-        <summary className="cursor-pointer select-none list-none px-3 py-2.5 text-sm font-medium text-muted hover:text-fg">
+        <summary className="flex cursor-pointer select-none list-none items-center justify-between px-3 py-2.5 text-sm font-medium text-muted hover:text-fg [&::-webkit-details-marker]:hidden">
           More details
+          <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
         </summary>
         <div className="space-y-4 border-t border-border p-3">
           <Field label="Space" htmlFor="m-space" hint="Moving keeps tags and correspondent by matching names in the new space.">
@@ -167,7 +176,7 @@ export function MetadataPanel({ doc }: { doc: Document }) {
                 .filter((s) => s.role !== "viewer" || s.id === doc.space.id)
                 .map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.kind === "personal" ? "Personal" : s.name}
+                    {spaceLabel(s)}
                   </option>
                 ))}
             </NativeSelect>
@@ -234,7 +243,8 @@ export function MetadataPanel({ doc }: { doc: Document }) {
   );
 }
 
-function ProcessingNotice({ doc }: { doc: Document }) {
+function ProcessingNotice({ doc, canEdit }: { doc: Document; canEdit: boolean }) {
+  const [unlocking, setUnlocking] = React.useState(false);
   if (doc.status === "processing") {
     return (
       <div className="flex items-start gap-2.5 rounded-lg bg-accent-soft px-3 py-2.5 text-sm text-accent-soft-fg">
@@ -252,7 +262,13 @@ function ProcessingNotice({ doc }: { doc: Document }) {
       <div>
         <div className="font-medium">{doc.status === "needs_password" ? "Password protected" : "Couldn't read this document"}</div>
         <div className="text-[13px] opacity-90">{doc.processing_error}</div>
+        {doc.status === "needs_password" && canEdit && (
+          <Button size="sm" className="mt-2" onClick={() => setUnlocking(true)}>
+            Enter password…
+          </Button>
+        )}
       </div>
+      {unlocking && <UnlockDialog doc={doc} onClose={() => setUnlocking(false)} />}
     </div>
   );
 }

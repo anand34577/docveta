@@ -19,6 +19,8 @@ export function LoginPage() {
   const [password, setPassword] = React.useState("");
   const [error, setError] = React.useState(search.error ?? "");
   const [busy, setBusy] = React.useState(false);
+  const [challenge, setChallenge] = React.useState<string | null>(null); // set after the password when a second step is needed
+  const [code, setCode] = React.useState("");
 
   React.useEffect(() => {
     if (status.data?.setup_needed) navigate({ to: "/setup" });
@@ -35,11 +37,20 @@ export function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      await api.post("/auth/login", { email, password });
+      if (challenge) {
+        await api.post("/auth/login/2fa", { challenge, code: code.replace(/\s/g, "") });
+      } else {
+        const r = await api.post<{ two_factor_required?: boolean; challenge?: string }>("/auth/login", { email, password });
+        if (r.two_factor_required && r.challenge) {
+          setChallenge(r.challenge);
+          return;
+        }
+      }
       await qc.invalidateQueries({ queryKey: keys.me });
       navigate({ to: redirect });
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 401 ? "Email or password is incorrect" : errorMessage(err));
+      if (challenge && err instanceof ApiError && err.status === 429) setChallenge(null);
+      setError(err instanceof ApiError && err.status === 401 ? (challenge ? "That code didn't work. Try again, or use a recovery code." : "Email or password is incorrect") : errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -60,7 +71,7 @@ export function LoginPage() {
           {error}
         </div>
       )}
-      {s?.oidc.enabled && (
+      {!challenge && s?.oidc.enabled && (
         <>
           <Button asChild size="lg" variant={s.password_login ? "secondary" : "primary"} className="w-full">
             <a href={`/api/v1/auth/oidc/start?return_to=${encodeURIComponent(redirect)}`}>
@@ -74,7 +85,20 @@ export function LoginPage() {
           )}
         </>
       )}
-      {s?.password_login !== false && (
+      {challenge ? (
+        <form onSubmit={submit} className="space-y-4">
+          <p className="text-sm text-muted">Open your authenticator app and enter the 6-digit code for Docveta. Lost your phone? Use a recovery code instead.</p>
+          <Field label="Code" htmlFor="code">
+            <Input id="code" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} autoFocus />
+          </Field>
+          <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy}>
+            Verify
+          </Button>
+          <button type="button" className="block w-full text-center text-xs text-subtle hover:text-fg" onClick={() => { setChallenge(null); setCode(""); setError(""); }}>
+            Back to sign in
+          </button>
+        </form>
+      ) : s?.password_login !== false && (
         <form onSubmit={submit} className="space-y-4">
           <Field label="Email" htmlFor="email">
             <Input id="email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />

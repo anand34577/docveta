@@ -1,12 +1,15 @@
 import * as React from "react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { BookmarkPlus, FileSearch, FileText, Trash2, Upload } from "lucide-react";
+import { BookmarkPlus, FileSearch, FileText, Settings, Trash2, Upload } from "lucide-react";
+import { confirm } from "@/components/ui/confirm";
+import { invalidateDocuments, useStats } from "@/lib/queries";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { keys } from "@/lib/queries";
-import type { DocQuery, Document, SavedView } from "@/lib/types";
+import type { DocQuery, Document, Facets, SavedView } from "@/lib/types";
 import { useUI } from "@/stores/ui";
+import { spaceLabel } from "@/lib/utils";
 import { PageHeader, useCurrentUser, useFilePicker } from "@/components/app-shell";
 import { FilterBar } from "@/components/documents/filters";
 import { DocumentResults } from "@/components/documents/doc-results";
@@ -44,22 +47,42 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
   const me = useCurrentUser();
   const layout = useUI((s) => s.layout);
   const pick = useFilePicker();
-  const [info, setInfo] = React.useState<{ total?: number; items: Document[] }>({ items: [] });
+  const [info, setInfo] = React.useState<{ total?: number; items: Document[]; facets?: Facets; mode?: string }>({ items: [] });
   const [saveOpen, setSaveOpen] = React.useState(false);
-  const onLoaded = React.useCallback((i: { total?: number; items: Document[] }) => setInfo(i), []);
+  const onLoaded = React.useCallback((i: { total?: number; items: Document[]; facets?: Facets; mode?: string }) => setInfo(i), []);
   const spaceName = query.space_id?.length === 1 ? me.spaces.find((s) => s.id === query.space_id![0]) : undefined;
   const filtered = !!(query.q || query.tag_id || query.correspondent_id || query.document_type_id || query.date_from || query.date_to || query.untagged || query.status);
 
-  const heading = title ?? (trash ? "Trash" : spaceName ? (spaceName.kind === "personal" ? "Personal" : spaceName.name) : "All documents");
+  const heading = title ?? (trash ? "Trash" : spaceName ? spaceLabel(spaceName) : "All documents");
+  const stats = useStats();
+  const qc = useQueryClient();
+  const days = stats.data?.trash_retention_days;
+  const emptyTrash = async () => {
+    if (!(await confirm({ title: "Empty the Trash?", body: `${info.total ?? "These"} document${info.total === 1 ? "" : "s"} will be deleted forever. This can't be undone.`, confirmLabel: "Delete forever", destructive: true }))) return;
+    try {
+      const r = await api.del<{ purged: number; skipped: number }>("/trash");
+      invalidateDocuments(qc);
+      toast.success(`Deleted ${r.purged} document${r.purged === 1 ? "" : "s"} forever`, { description: r.skipped ? `${r.skipped} couldn't be deleted (you may not own them).` : undefined });
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  };
 
   return (
     <div>
       <PageHeader
         title={heading}
-        description={trash ? "Documents here are deleted permanently after 30 days." : undefined}
+        eyebrow={title ? "Saved view" : !trash && spaceName ? "Space" : undefined}
+        description={trash ? `Documents here are deleted for good after ${days ?? 30} days. Restore anything you still need.` : undefined}
         actions={
           headerActions ??
-          (!trash && (
+          (trash ? (
+            (info.total ?? info.items.length) > 0 && (
+              <Button size="sm" variant="danger-ghost" onClick={emptyTrash}>
+                <Trash2 /> Empty Trash
+              </Button>
+            )
+          ) : (
             <>
               {filtered && (
                 <Button size="sm" variant="ghost" onClick={() => setSaveOpen(true)}>
@@ -68,14 +91,16 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
               )}
               {spaceName && spaceName.role === "owner" && (
                 <Button size="sm" variant="ghost" asChild>
-                  <a href={`/spaces/${spaceName.id}/general`}>Space settings</a>
+                  <Link to="/spaces/$id/$section" params={{ id: spaceName.id, section: "general" }}>
+                    <Settings /> Space settings
+                  </Link>
                 </Button>
               )}
             </>
           ))
         }
       />
-      <FilterBar query={query} onChange={onChange} total={info.total} hideSpace={trash} />
+      <FilterBar query={query} onChange={onChange} total={info.total} facets={info.facets} found={info.mode} hideSpace={trash} />
       <DocumentResults
         query={query}
         layout={layout}

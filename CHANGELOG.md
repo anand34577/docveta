@@ -5,6 +5,37 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-04
+
+### Added
+- **Android app** (`android/`): Kotlin + Jetpack Compose. Sign in with password (and two-step
+  code) or an access token; Inbox with swipe-to-review and Undo; search, filters and
+  meaning-based search; PDF/image viewer with pinch zoom; edit title, date, sender, type and
+  tags; notes; AI suggestions; share links; Ask your documents with cited pages; notifications;
+  Trash; app lock; "Share to Docveta" from other apps.
+- **Document scanner** in the app, without Google services: live page detection with an outline,
+  automatic capture when the page is held still, draggable corner crop with a magnifier,
+  perspective correction that recovers the page's true proportions, Enhanced / Grey / Black &
+  white looks, multi-page scans, one PDF or separate pictures. Uploads are resumable (tus) and
+  survive restarts and dropped connections.
+- Invitations by link, two-step sign-in (TOTP + recovery codes), share links, custom fields,
+  workflows, AI suggestions / meaning-based search / similar documents / Ask, MCP server,
+  Office documents (Gotenberg), watched folders, S3 storage, barcode batch scanning, PDF page
+  tools (rotate, reorder, delete, split, merge), versions, resumable uploads, quiet hours and
+  Apprise notifications, export/import, facet counts in filters.
+- Web UI for all of the above, plus: create-space dialog, upload space chooser, date inputs in
+  the account's date format, "Reviewed & next" with Undo, Empty Trash, saved-views manager,
+  keyboard shortcut help (`?`), notifications page, PDF thumbnails and turn, mobile
+  Preview/Details switch, space colours, bulk tags across spaces.
+
+### Changed
+- Every page loads on demand; the first screen is about 175 KB gzipped.
+- The change feed reports documents moved out of a space; live notifications are replayed after
+  a reconnect; HEIC/AVIF and multi-page TIFF are handled.
+
+### Fixed
+- Web resumable uploads treated a duplicate-document answer (409) as an offset mismatch.
+
 ## [0.4.1] - 2026-10-03
 
 ### Fixed

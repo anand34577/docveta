@@ -6,6 +6,8 @@
 //	docveta user create --email E --name N [--admin]   (prompts for password via DOCVETA_PASSWORD)
 //	docveta user reset-password --email E              (reads DOCVETA_PASSWORD)
 //	docveta doctor [--verify-blobs]    check configuration, database, storage and workers
+//	docveta export --dir D | --zip F [--with-password-hashes]   write everything to a folder or zip
+//	docveta import --dir D             read such an export (safe to run twice)
 //	docveta service install|uninstall|start|stop   (Windows) run Docveta as a Windows service
 //	docveta version
 //
@@ -179,8 +181,12 @@ func run(parent context.Context, args []string) error {
 		return userCmd(ctx, cfg, log, args)
 	case "doctor":
 		return doctor(ctx, cfg, args)
+	case "export":
+		return exportCmd(ctx, cfg, log, args)
+	case "import":
+		return importCmd(ctx, cfg, log, args)
 	}
-	return fmt.Errorf("unknown command %q (try: serve, migrate, user, doctor, version)", cmd)
+	return fmt.Errorf("unknown command %q (try: serve, migrate, user, doctor, export, import, version)", cmd)
 }
 
 func userCmd(ctx context.Context, cfg *config.Config, log *slog.Logger, args []string) error {

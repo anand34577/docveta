@@ -18,6 +18,10 @@ web UI (*Administration*).
 | `DOCVETA_TRUSTED_PROXIES` | — | Comma-separated IPs/CIDRs of reverse proxies (for real client IPs) |
 | `DOCVETA_MAX_UPLOAD_MB` | `500` | Largest accepted file |
 | `DOCVETA_TRASH_RETENTION` | `720h` | How long deleted documents stay in Trash |
+| `DOCVETA_GOTENBERG_URL` | — | Gotenberg address; turns on Word/Excel/PowerPoint documents (`docker compose --profile office up`) |
+| `DOCVETA_WATCH_ROOTS` | — | Comma-separated folders administrators may watch for new files |
+| `DOCVETA_STORAGE` | `fs` | `fs` (data folder) or `s3` |
+| `DOCVETA_S3_ENDPOINT` / `DOCVETA_S3_BUCKET` / `DOCVETA_S3_ACCESS_KEY` / `DOCVETA_S3_SECRET_KEY` | — | S3-compatible storage (MinIO, R2, AWS); keys can also come from `*_FILE` |
 | `DOCVETA_SESSION_IDLE` / `DOCVETA_SESSION_MAX` | `720h` / `2160h` | Session lifetimes |
 | `DOCVETA_PDF_WORKERS` | `2` | Parallel PDF inspections (memory: ~50–100 MB each) |
 | `DOCVETA_JOB_WORKERS` | `4` | Parallel background jobs |

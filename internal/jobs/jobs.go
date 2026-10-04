@@ -52,9 +52,50 @@ func (ClassifyArgs) Kind() string { return "classify" }
 
 type NotifyArgs struct {
 	Event Event `json:"event"`
+	// ExternalOnly re-sends a deferred event to push channels only (quiet hours ended);
+	// the in-app notification was already created.
+	ExternalOnly bool `json:"external_only,omitempty"`
 }
 
 func (NotifyArgs) Kind() string { return "notify" }
+
+// AIArgs runs the optional AI steps for a document after it is ready (suggestions,
+// embeddings). They never hold up processing.
+type AIArgs struct {
+	DocumentID uuid.UUID `json:"document_id"`
+	Classify   bool      `json:"classify"`
+	Embed      bool      `json:"embed"`
+}
+
+func (AIArgs) Kind() string { return "ai" }
+
+// SplitArgs splits a scanned batch at its separator sheets (1-based page numbers).
+type SplitArgs struct {
+	DocumentID uuid.UUID        `json:"document_id"`
+	Version    int              `json:"version"`
+	Separators []int            `json:"separators"`
+	ASN        map[string]int64 `json:"asn,omitempty"` // page number → archive number read from a label
+}
+
+func (SplitArgs) Kind() string { return "split" }
+
+// WorkflowArgs runs the workflows of a document's space for one trigger.
+type WorkflowArgs struct {
+	DocumentID uuid.UUID `json:"document_id"`
+	Trigger    string    `json:"trigger"` // added | processed | updated
+}
+
+func (WorkflowArgs) Kind() string { return "workflow" }
+
+// WorkflowScheduleArgs runs scheduled (daily) workflows that are due.
+type WorkflowScheduleArgs struct{}
+
+func (WorkflowScheduleArgs) Kind() string { return "workflow_schedule" }
+
+// FolderScanArgs scans the watched folders for new files.
+type FolderScanArgs struct{}
+
+func (FolderScanArgs) Kind() string { return "folder_scan" }
 
 type MaintenanceArgs struct{}
 
@@ -109,6 +150,14 @@ func (q *Queue) EmitTx(ctx context.Context, tx pgx.Tx, e Event) error {
 		e.At = time.Now()
 	}
 	return q.InsertTx(ctx, tx, NotifyArgs{Event: e}, &river.InsertOpts{Priority: PriorityNormal, MaxAttempts: 5})
+}
+
+// EmitAt delivers an event's push messages at a later time (quiet hours).
+func (q *Queue) EmitAt(ctx context.Context, e Event, at time.Time) error {
+	if e.At.IsZero() {
+		e.At = time.Now()
+	}
+	return q.Insert(ctx, NotifyArgs{Event: e, ExternalOnly: true}, &river.InsertOpts{Priority: PriorityNormal, MaxAttempts: 5, ScheduledAt: at})
 }
 
 // Emit enqueues a notification event outside a transaction.

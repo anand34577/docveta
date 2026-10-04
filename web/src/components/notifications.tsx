@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Bell, CheckCheck, CheckCircle2, Info, XCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -10,7 +10,7 @@ import type { Notification } from "@/lib/types";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/overlay";
 import { EmptyState } from "./ui/misc";
 
-const icons = {
+export const severityIcons = {
   info: <Info className="size-4 text-accent" />,
   success: <CheckCircle2 className="size-4 text-success" />,
   warning: <AlertTriangle className="size-4 text-warning" />,
@@ -25,9 +25,11 @@ export function useLiveEvents() {
     let es: EventSource | null = null;
     let closed = false;
     let retry: ReturnType<typeof setTimeout>;
+    let lastId = ""; // what we've seen, so a reconnect replays whatever arrived while we were offline
     const connect = () => {
-      es = new EventSource("/api/v1/events");
+      es = new EventSource("/api/v1/events" + (lastId ? `?last_event_id=${encodeURIComponent(lastId)}` : ""));
       es.addEventListener("notification", (ev) => {
+        if ((ev as MessageEvent).lastEventId) lastId = (ev as MessageEvent).lastEventId;
         const n = JSON.parse((ev as MessageEvent).data) as Notification;
         qc.invalidateQueries({ queryKey: keys.notifications });
         if (n.event_type.startsWith("document.")) invalidateDocuments(qc);
@@ -100,7 +102,7 @@ export function NotificationsButton() {
                 onClick={() => openItem(n)}
                 className={cn("flex w-full items-start gap-3 border-b border-border px-4 py-3 text-left last:border-0 hover:bg-surface-2", !n.read_at && "bg-accent-soft/40")}
               >
-                <span className="mt-0.5">{icons[n.severity] ?? icons.info}</span>
+                <span className="mt-0.5">{severityIcons[n.severity] ?? severityIcons.info}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium leading-snug">{n.title}</span>
                   {n.body && <span className="mt-0.5 line-clamp-2 block text-[13px] text-muted">{n.body}</span>}
@@ -110,6 +112,11 @@ export function NotificationsButton() {
               </button>
             ))
           )}
+        </div>
+        <div className="border-t border-border p-1.5">
+          <Link to="/notifications" onClick={() => setOpen(false)} className="block rounded-md px-3 py-2 text-center text-sm font-medium text-accent hover:bg-surface-2">
+            See all notifications
+          </Link>
         </div>
       </PopoverContent>
     </Popover>

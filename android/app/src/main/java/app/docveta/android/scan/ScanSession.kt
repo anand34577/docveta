@@ -1,0 +1,206 @@
+package app.docveta.android.scan
+
+import android.graphics.Bitmap
+import android.net.Uri
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import app.docveta.android.AppContainer
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** One scanned page: the upright photo on disk, where its corners are, and how it should look when done. */
+data class ScanPage(
+    val id: String,
+    val file: File,
+    val width: Int,
+    val height: Int,
+    val quad: Quad,
+    val detected: Boolean,
+    val filter: PageFilters.Kind = PageFilters.Kind.ENHANCED,
+    val turns: Int = 0,
+)
+
+/**
+ * A scan in progress: pages from the camera or gallery, each with its own crop, filter and
+ * turn, and finally one PDF (or several pictures) handed to the upload queue.
+ */
+class ScanSession(private val c: AppContainer) : ViewModel() {
+    var pages by mutableStateOf<List<ScanPage>>(emptyList())
+        private set
+    var title by mutableStateOf(defaultTitle())
+    var spaceId by mutableStateOf<String?>(null)
+    var asPdf by mutableStateOf(true)
+    var filterForNew by mutableStateOf(initialFilter())
+    var working by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+
+    private val dir = File(cacheDirOf(c), "scans").apply { mkdirs() }
+
+    private fun initialFilter() = runCatching { PageFilters.Kind.valueOf(c.session.scanFilter ?: "ENHANCED") }.getOrDefault(PageFilters.Kind.ENHANCED)
+
+    fun chooseFilterForNew(k: PageFilters.Kind) {
+        filterForNew = k
+        c.session.scanFilter = k.name
+    }
+
+    /** Adds a captured or imported photo: made upright, saved at a sensible size, page found. */
+    fun add(open: () -> java.io.InputStream, orientation: Int, onAdded: (ScanPage) -> Unit = {}) {
+        viewModelScope.launch {
+            working = true
+            try {
+                val page = withContext(Dispatchers.Default) {
+                    val bmp = ImageIO.decodeUpright(open, orientation, MAX_SOURCE)
+                    val id = UUID.randomUUID().toString()
+                    val f = File(dir, "$id.jpg")
+                    ImageIO.saveJpeg(bmp, f)
+                    val luma = ByteArray(bmp.width * bmp.height)
+                    val px = IntArray(bmp.width * bmp.height)
+                    bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                    for (i in px.indices) luma[i] = luminance(px[i]).toByte()
+                    val found = DocumentDetector.detect(luma, bmp.width, bmp.height)
+                    val p = ScanPage(id, f, bmp.width, bmp.height, found ?: Quad.inset(bmp.width.toFloat(), bmp.height.toFloat()), found != null, filterForNew)
+                    bmp.recycle()
+                    p
+                }
+                pages = pages + page
+                onAdded(page)
+            } catch (e: Exception) {
+                error = "Couldn't use that picture"
+            } finally {
+                working = false
+            }
+        }
+    }
+
+    fun addFile(file: File, onAdded: (ScanPage) -> Unit = {}) {
+        val orientation = ImageIO.orientationOf { file.inputStream() }
+        add({ file.inputStream() }, orientation) { onAdded(it); file.delete() }
+    }
+
+    fun addUri(uri: Uri, resolver: android.content.ContentResolver, onAdded: (ScanPage) -> Unit = {}) {
+        val orientation = ImageIO.orientationOf { resolver.openInputStream(uri)!! }
+        add({ resolver.openInputStream(uri)!! }, orientation, onAdded)
+    }
+
+    fun update(id: String, f: (ScanPage) -> ScanPage) {
+        pages = pages.map { if (it.id == id) f(it) else it }
+    }
+
+    fun remove(id: String) {
+        pages.firstOrNull { it.id == id }?.file?.delete()
+        pages = pages.filterNot { it.id == id }
+    }
+
+    fun move(id: String, delta: Int) {
+        val i = pages.indexOfFirst { it.id == id }
+        val j = i + delta
+        if (i < 0 || j !in pages.indices) return
+        pages = pages.toMutableList().also { val t = it[i]; it[i] = it[j]; it[j] = t }
+    }
+
+    /** Finds the page again (after the person moved the corners and wants a fresh guess). */
+    suspend fun redetect(id: String): Quad? {
+        val p = pages.firstOrNull { it.id == id } ?: return null
+        return withContext(Dispatchers.Default) {
+            val bmp = ImageIO.decodeUpright(p.file, MAX_SOURCE)
+            val px = IntArray(bmp.width * bmp.height)
+            bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+            val luma = ByteArray(px.size) { luminance(px[it]).toByte() }
+            val found = DocumentDetector.detect(luma, bmp.width, bmp.height)
+            bmp.recycle()
+            found
+        }
+    }
+
+    /** The page as it will come out, at preview size. */
+    suspend fun preview(p: ScanPage, maxSide: Int = 900): Bitmap = withContext(Dispatchers.Default) {
+        val bmp = ImageIO.decodeUpright(p.file, maxSide)
+        val k = bmp.width.toFloat() / p.width
+        val raster = ImageIO.toRaster(bmp)
+        bmp.recycle()
+        ImageIO.toBitmap(finish(raster, p.quad.scaled(k, k), p, maxSide))
+    }
+
+    private fun finish(src: Raster, quad: Quad, p: ScanPage, maxSide: Int): Raster {
+        val flat = Rectifier.warp(src, quad, maxSide)
+        return PageFilters.rotate(PageFilters.apply(flat, p.filter), p.turns)
+    }
+
+    /** Builds the file(s) to upload from every page. Returns the PDF, or one JPEG per page. */
+    suspend fun render(onProgress: (Int, Int) -> Unit = { _, _ -> }): List<Pair<File, String>> = withContext(Dispatchers.Default) {
+        val out = ArrayList<Pair<File, String>>()
+        val images = ArrayList<PdfPageImage>()
+        val pdf = asPdf || pages.size == 1
+        val base = title.trim().ifBlank { defaultTitle() }
+        pages.forEachIndexed { i, p ->
+            onProgress(i, pages.size)
+            val bmp = ImageIO.decodeUpright(p.file, MAX_SOURCE)
+            val raster = ImageIO.toRaster(bmp)
+            bmp.recycle()
+            val done = finish(raster, p.quad, p, 2339)
+            val finalBmp = ImageIO.toBitmap(done)
+            val jpg = ImageIO.jpeg(finalBmp, 85)
+            finalBmp.recycle()
+            if (pdf) images.add(PdfPageImage(jpg, done.w, done.h))
+            else {
+                val f = File(dir, "out-${UUID.randomUUID()}.jpg").also { it.writeBytes(jpg) }
+                out.add(f to "$base ${i + 1}.jpg")
+            }
+        }
+        if (pdf) {
+            val f = File(dir, "out-${UUID.randomUUID()}.pdf")
+            f.outputStream().use { PdfWriter.write(images, it, base) }
+            out.add(f to "$base.pdf")
+        }
+        onProgress(pages.size, pages.size)
+        out
+    }
+
+    /** Renders and puts the result in the upload queue. Calls [onDone] when queued. */
+    fun submit(onDone: () -> Unit) {
+        if (pages.isEmpty() || working) return
+        viewModelScope.launch {
+            working = true
+            try {
+                val files = render()
+                for ((f, name) in files) {
+                    c.uploads.enqueueFile(f, name, if (name.endsWith(".pdf")) "application/pdf" else "image/jpeg", spaceId, "scan", name.removeSuffix(".pdf").removeSuffix(".jpg"))
+                }
+                pages.forEach { it.file.delete() }
+                pages = emptyList()
+                title = defaultTitle()
+                onDone()
+            } catch (e: Exception) {
+                error = "Couldn't build the document: ${e.message}"
+            } finally {
+                working = false
+            }
+        }
+    }
+
+    fun discard() {
+        pages.forEach { it.file.delete() }
+        pages = emptyList()
+    }
+
+    override fun onCleared() {
+        // Leftovers of an abandoned scan are only cache; the system clears them, but don't wait.
+        pages.forEach { it.file.delete() }
+    }
+
+    companion object {
+        const val MAX_SOURCE = 3200
+        fun defaultTitle(): String = "Scan " + SimpleDateFormat("yyyy-MM-dd HH.mm", Locale.US).format(Date())
+        private fun cacheDirOf(c: AppContainer): File = c.cacheDir
+    }
+}

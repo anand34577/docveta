@@ -22,8 +22,8 @@ func ReindexMeta(ctx context.Context, q db.Querier, id uuid.UUID) error {
 	err := q.QueryRow(ctx, `SELECT d.title, d.original_filename, d.physical_location, d.language, c.name, t.name,
 		coalesce((SELECT array_agg(tg.name) FROM document_tags dt JOIN tags tg ON tg.id=dt.tag_id WHERE dt.document_id=d.id), '{}'),
 		coalesce((SELECT array_agg(n.body) FROM notes n WHERE n.document_id=d.id), '{}'),
-		coalesce((SELECT array_agg(coalesce(v.value_text, v.value_number::text, to_char(v.value_date,'YYYY-MM-DD'), v.value_json::text))
-			FROM custom_field_values v WHERE v.document_id=d.id), '{}')
+		coalesce((SELECT array_agg(x) FROM (SELECT coalesce(v.value_text, v.value_number::text, to_char(v.value_date,'YYYY-MM-DD'), v.value_json::text) AS x
+			FROM custom_field_values v WHERE v.document_id=d.id) q WHERE x IS NOT NULL), '{}')
 		FROM documents d LEFT JOIN correspondents c ON c.id=d.correspondent_id LEFT JOIN document_types t ON t.id=d.document_type_id
 		WHERE d.id=$1`, id).Scan(&title, &filename, &location, &lang, &corr, &typ, &tags, &notes, &fields)
 	if err != nil {

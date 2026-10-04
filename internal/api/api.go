@@ -11,37 +11,55 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/anand34577/docveta/internal/ai"
 	"github.com/anand34577/docveta/internal/apperr"
 	"github.com/anand34577/docveta/internal/audit"
 	"github.com/anand34577/docveta/internal/auth"
+	"github.com/anand34577/docveta/internal/customfields"
+	"github.com/anand34577/docveta/internal/docedit"
 	"github.com/anand34577/docveta/internal/documents"
+	"github.com/anand34577/docveta/internal/folders"
 	"github.com/anand34577/docveta/internal/identity"
+	"github.com/anand34577/docveta/internal/jobs"
 	"github.com/anand34577/docveta/internal/notify"
+	"github.com/anand34577/docveta/internal/office"
 	"github.com/anand34577/docveta/internal/pipeline"
 	"github.com/anand34577/docveta/internal/platform/config"
 	"github.com/anand34577/docveta/internal/platform/httpx"
 	"github.com/anand34577/docveta/internal/search"
+	"github.com/anand34577/docveta/internal/shares"
 	"github.com/anand34577/docveta/internal/spaces"
 	"github.com/anand34577/docveta/internal/storage"
 	"github.com/anand34577/docveta/internal/taxonomy"
+	"github.com/anand34577/docveta/internal/tus"
 	"github.com/anand34577/docveta/internal/views"
+	"github.com/anand34577/docveta/internal/workflows"
 )
 
 type Deps struct {
-	Cfg       *config.Config
-	Log       *slog.Logger
-	Pool      *pgxpool.Pool
-	Store     storage.Store
-	Identity  *identity.Service
-	Spaces    *spaces.Service
-	Taxonomy  *taxonomy.Service
-	Documents *documents.Service
-	Search    *search.Service
-	Pipeline  *pipeline.Service
-	Notify    *notify.Service
-	Views     *views.Service
-	Audit     *audit.Log
-	Version   string
+	Cfg          *config.Config
+	Log          *slog.Logger
+	Pool         *pgxpool.Pool
+	Store        storage.Store
+	Identity     *identity.Service
+	Spaces       *spaces.Service
+	Taxonomy     *taxonomy.Service
+	CustomFields *customfields.Service
+	Documents    *documents.Service
+	Docedit      *docedit.Service
+	Search       *search.Service
+	Pipeline     *pipeline.Service
+	Notify       *notify.Service
+	Views        *views.Service
+	Shares       *shares.Service
+	AI           *ai.Service
+	Office       *office.Converter
+	Folders      *folders.Service
+	Workflows    *workflows.Service
+	Uploads      *tus.Service
+	Queue        *jobs.Queue
+	Audit        *audit.Log
+	Version      string
 }
 
 type API struct {
@@ -76,10 +94,20 @@ func (a *API) Register(mux router) {
 		_, _ = w.Write(OpenAPISpec)
 	})
 	a.registerAuth(mux)
+	a.registerAuth2(mux)
 	a.registerSpaces(mux)
 	a.registerTaxonomy(mux)
+	a.registerCustomFields(mux)
 	a.registerDocuments(mux)
+	a.registerDocEdit(mux)
 	a.registerNotify(mux)
+	a.registerShares(mux)
+	a.registerAI(mux)
+	a.registerMCP(mux)
+	a.registerFolders(mux)
+	a.registerWorkflows(mux)
+	a.registerUploads(mux)
+	a.registerBarcodes(mux)
 	a.registerAdmin(mux)
 	a.registerWorker(mux)
 	notFound := func(w http.ResponseWriter, r *http.Request) { httpx.Error(w, r, apperr.NotFound("Endpoint")) }
@@ -188,6 +216,22 @@ func handle[T any](fn func(r *http.Request, p *auth.Principal) (T, error)) http.
 			status = http.StatusCreated
 		}
 		httpx.JSON(w, status, v)
+	}
+}
+
+// handleAction is like handle for POST actions on existing things (200, not 201 Created).
+func handleAction[T any](fn func(r *http.Request, p *auth.Principal) (T, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := user(w, r)
+		if p == nil {
+			return
+		}
+		v, err := fn(r, p)
+		if err != nil {
+			httpx.Error(w, r, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, v)
 	}
 }
 

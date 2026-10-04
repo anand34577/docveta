@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/anand34577/docveta/internal/customfields"
 	"github.com/anand34577/docveta/internal/platform/db"
 	"github.com/anand34577/docveta/internal/textindex"
 )
@@ -21,33 +22,36 @@ type Ref struct {
 }
 
 type Document struct {
-	ID               uuid.UUID  `json:"id"`
-	Space            Ref        `json:"space"`
-	Title            string     `json:"title"`
-	DocumentDate     *string    `json:"document_date"` // YYYY-MM-DD
-	AddedAt          time.Time  `json:"added_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	Correspondent    *Ref       `json:"correspondent"`
-	DocumentType     *Ref       `json:"document_type"`
-	Tags             []Ref      `json:"tags"`
-	Language         string     `json:"language"`
-	PageCount        *int       `json:"page_count"`
-	ASN              *int64     `json:"asn"`
-	PhysicalLocation string     `json:"physical_location"`
-	Inbox            bool       `json:"inbox"`
-	Status           string     `json:"status"`
-	ProcessingStage  string     `json:"processing_stage"`
-	ProcessingError  string     `json:"processing_error,omitempty"`
-	MimeType         string     `json:"mime_type"`
-	SizeBytes        int64      `json:"size_bytes"`
-	OriginalFilename string     `json:"original_filename"`
-	Source           string     `json:"source"`
-	Owner            *Ref       `json:"owner"`
-	HasArchive       bool       `json:"has_archive"`
-	HasThumbnail     bool       `json:"has_thumbnail"`
-	NoteCount        int        `json:"note_count"`
-	Version          int        `json:"version"`
-	DeletedAt        *time.Time `json:"deleted_at,omitempty"`
+	ID               uuid.UUID            `json:"id"`
+	Space            Ref                  `json:"space"`
+	Title            string               `json:"title"`
+	DocumentDate     *string              `json:"document_date"` // YYYY-MM-DD
+	AddedAt          time.Time            `json:"added_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	Correspondent    *Ref                 `json:"correspondent"`
+	DocumentType     *Ref                 `json:"document_type"`
+	Tags             []Ref                `json:"tags"`
+	Language         string               `json:"language"`
+	PageCount        *int                 `json:"page_count"`
+	ASN              *int64               `json:"asn"`
+	PhysicalLocation string               `json:"physical_location"`
+	Inbox            bool                 `json:"inbox"`
+	Status           string               `json:"status"`
+	ProcessingStage  string               `json:"processing_stage"`
+	ProcessingError  string               `json:"processing_error,omitempty"`
+	MimeType         string               `json:"mime_type"`
+	SizeBytes        int64                `json:"size_bytes"`
+	OriginalFilename string               `json:"original_filename"`
+	Source           string               `json:"source"`
+	Owner            *Ref                 `json:"owner"`
+	HasArchive       bool                 `json:"has_archive"`
+	HasThumbnail     bool                 `json:"has_thumbnail"`
+	HasDerived       bool                 `json:"has_derived"` // a browser-friendly working copy (HEIC converted to JPEG)
+	CustomFields     []customfields.Value `json:"custom_fields"`
+	SuggestionCount  int                  `json:"suggestion_count"` // open AI suggestions
+	NoteCount        int                  `json:"note_count"`
+	Version          int                  `json:"version"`
+	DeletedAt        *time.Time           `json:"deleted_at,omitempty"`
 
 	// Present in search results only.
 	Snippet     []textindex.Segment `json:"snippet,omitempty"`
@@ -62,7 +66,9 @@ const hydrateSQL = `SELECT d.id, d.space_id, s.name, s.color, d.title, to_char(d
 	d.mime_type, d.size_bytes, d.original_filename, d.source, d.owner_id, u.display_name,
 	EXISTS (SELECT 1 FROM document_files f WHERE f.document_id = d.id AND f.kind = 'archive' AND f.version_no = d.current_version),
 	EXISTS (SELECT 1 FROM document_files f WHERE f.document_id = d.id AND f.kind = 'thumbnail' AND f.version_no = d.current_version),
-	(SELECT count(*) FROM notes n WHERE n.document_id = d.id), d.version, d.deleted_at
+	EXISTS (SELECT 1 FROM document_files f WHERE f.document_id = d.id AND f.kind = 'derived' AND f.version_no = d.current_version),
+	(SELECT count(*) FROM notes n WHERE n.document_id = d.id), d.version, d.deleted_at,
+	(SELECT count(*) FROM suggestions sg WHERE sg.document_id = d.id AND sg.status = 'pending')
 	FROM documents d
 	JOIN spaces s ON s.id = d.space_id
 	LEFT JOIN correspondents c ON c.id = d.correspondent_id
@@ -78,7 +84,7 @@ func scanDocument(row pgx.Row) (*Document, error) {
 		&corrID, &corrName, &typeID, &typeName, &tags,
 		&d.Language, &d.PageCount, &d.ASN, &d.PhysicalLocation, &d.Inbox, &d.Status, &d.ProcessingStage, &d.ProcessingError,
 		&d.MimeType, &d.SizeBytes, &d.OriginalFilename, &d.Source, &ownerID, &ownerName,
-		&d.HasArchive, &d.HasThumbnail, &d.NoteCount, &d.Version, &d.DeletedAt)
+		&d.HasArchive, &d.HasThumbnail, &d.HasDerived, &d.NoteCount, &d.Version, &d.DeletedAt, &d.SuggestionCount)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +129,16 @@ func Hydrate(ctx context.Context, q db.Querier, ids []uuid.UUID) ([]*Document, e
 	for _, id := range ids {
 		if d, ok := byID[id]; ok {
 			out = append(out, d)
+		}
+	}
+	values, err := customfields.Load(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range out {
+		d.CustomFields = values[d.ID]
+		if d.CustomFields == nil {
+			d.CustomFields = []customfields.Value{}
 		}
 	}
 	return out, nil

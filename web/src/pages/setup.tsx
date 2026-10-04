@@ -7,19 +7,16 @@ import { keys, useStatus } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+import { LogoMark } from "@/components/app-shell";
 
 export function AuthFrame({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center bg-bg px-4 py-10">
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-bg bg-[radial-gradient(60rem_30rem_at_50%_-10%,var(--accent-soft),transparent)] px-4 py-10">
       <div className="mb-8 flex items-center gap-2.5">
-        <svg viewBox="0 0 32 32" className="size-9" aria-hidden>
-          <rect width="32" height="32" rx="8" className="fill-accent" />
-          <path d="M10 8h8l5 5v11a1 1 0 0 1-1 1H10a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" fill="white" />
-          <path d="M12.5 17h7M12.5 20h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="text-accent" />
-        </svg>
+        <LogoMark className="size-9" />
         <span className="text-xl font-semibold tracking-tight">Docveta</span>
       </div>
-      <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-6 shadow-md sm:p-8">
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-6 shadow-lg sm:p-8">
         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
         {subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}
         <div className="mt-6">{children}</div>

@@ -35,6 +35,7 @@ func (w *MaintenanceWorker) Work(ctx context.Context, _ *river.Job[jobs.Maintena
 		log.Error("cleanup sessions", "err", err)
 	}
 	a.FS.CleanTemp(24 * time.Hour)
+	a.Uploads.Cleanup(ctx)
 	if err := w.workerAlerts(ctx); err != nil {
 		log.Error("worker alerts", "err", err)
 	}

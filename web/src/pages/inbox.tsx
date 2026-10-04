@@ -1,12 +1,12 @@
 import * as React from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCheck, Inbox, PartyPopper } from "lucide-react";
+import { CheckCheck, PartyPopper, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { invalidateDocuments, useDocument, useDocuments } from "@/lib/queries";
-import { cn, formatDocDate } from "@/lib/utils";
-import { PageHeader } from "@/components/app-shell";
+import { cn, formatDocDate, spaceLabel } from "@/lib/utils";
+import { PageHeader, useCurrentUser } from "@/components/app-shell";
 import { StatusBadge, Thumbnail } from "@/components/documents/doc-items";
 import { DocumentDetail } from "./document";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ const inboxQuery = { inbox: true };
  * then mark as reviewed. Keyboard: J/K to move, E to mark reviewed.
  */
 export function InboxPage() {
+  const me = useCurrentUser();
   const res = useDocuments(inboxQuery, { refetchWhileProcessing: true });
   const items = React.useMemo(() => res.data?.pages.flatMap((p) => p.items) ?? [], [res.data]);
   const total = res.data?.pages[0]?.total ?? 0;
@@ -61,8 +62,25 @@ export function InboxPage() {
       } else if (e.key === "e" && selected) {
         e.preventDefault();
         try {
-          await api.patch(`/documents/${selected}`, { inbox: false });
+          const id = selected;
+          await api.patch(`/documents/${id}`, { inbox: false });
+          toast.success("Marked as reviewed", {
+            action: {
+              label: "Undo",
+              onClick: () => api.patch(`/documents/${id}`, { inbox: true }).then(() => invalidateDocuments(qc), (er) => toast.error(errorMessage(er))),
+            },
+          });
           afterReview();
+        } catch (err) {
+          toast.error(errorMessage(err));
+        }
+      } else if (e.key === "a" && selected && items.find((d) => d.id === selected)?.suggestion_count) {
+        e.preventDefault();
+        try {
+          await api.post(`/documents/${selected}/suggestions/accept`, {});
+          qc.invalidateQueries({ queryKey: ["document", selected, "suggestions"] });
+          invalidateDocuments(qc, selected);
+          toast.success("Suggestions accepted");
         } catch (err) {
           toast.error(errorMessage(err));
         }
@@ -86,10 +104,20 @@ export function InboxPage() {
 
   if (res.isLoading) {
     return (
-      <div className="space-y-2 p-6">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="h-16" />
-        ))}
+      <div className="flex lg:h-[calc(100dvh-3.5rem)]">
+        <div className="w-full space-y-px border-r border-border lg:w-[360px]">
+          <Skeleton className="m-4 h-7 w-32" />
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="flex gap-3 px-4 py-3">
+              <Skeleton className="h-16 w-12" />
+              <div className="flex-1 space-y-2 pt-1">
+                <Skeleton className="h-3.5 w-3/4" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="hidden flex-1 bg-surface-3/40 lg:block" />
       </div>
     );
   }
@@ -97,7 +125,16 @@ export function InboxPage() {
     return (
       <>
         <PageHeader title="Inbox" />
-        <EmptyState icon={<PartyPopper />} title="Inbox zero" className="min-h-[50vh]">
+        <EmptyState
+          icon={<PartyPopper />}
+          title="Inbox zero"
+          className="min-h-[50vh]"
+          action={
+            <Button asChild>
+              <Link to="/documents">Browse all documents</Link>
+            </Button>
+          }
+        >
           New documents appear here so you can check what Docveta filled in. Nothing to review right now.
         </EmptyState>
       </>
@@ -106,18 +143,16 @@ export function InboxPage() {
 
   return (
     <div className="flex lg:h-[calc(100dvh-3.5rem)]">
-      <div className="flex w-full flex-col border-r border-border lg:w-[360px] lg:shrink-0">
-        <div className="flex items-center justify-between gap-2 px-4 pb-3 pt-5">
-          <div>
-            <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-              <Inbox className="size-5 text-muted" /> Inbox
-              <span className="rounded-full bg-accent-soft px-2 text-sm text-accent-soft-fg">{total}</span>
+      <div className="flex w-full flex-col border-r border-border lg:w-[320px] lg:shrink-0 xl:w-[360px]">
+        <div className="flex min-h-14 items-center justify-between gap-2 border-b border-border px-4 py-2">
+          <div className="min-w-0">
+            <h1 className="flex items-center gap-2 text-[17px] font-semibold leading-tight tracking-tight">
+              Inbox
+              <span className="rounded-full bg-accent-soft px-2 text-sm tabular-nums text-accent-soft-fg">{total}</span>
             </h1>
-            <p className="mt-1 hidden text-xs text-subtle lg:block">
-              <Kbd>J</Kbd> <Kbd>K</Kbd> move · <Kbd>E</Kbd> reviewed · <Kbd>↵</Kbd> open
-            </p>
+            <p className="mt-0.5 text-xs text-muted">{isDesktop && index >= 0 ? `${index + 1} of ${total} · check and mark reviewed` : "Check what Docveta filled in"}</p>
           </div>
-          <Button size="sm" variant="ghost" onClick={reviewAll}>
+          <Button size="sm" variant="ghost" onClick={reviewAll} title="Mark everything in the Inbox as reviewed">
             <CheckCheck /> All reviewed
           </Button>
         </div>
@@ -134,18 +169,23 @@ export function InboxPage() {
                   }
                 }}
                 className={cn(
-                  "flex gap-3 border-b border-border px-4 py-3 hover:bg-surface-2",
-                  d.id === selected && isDesktop && "bg-accent-soft/60 hover:bg-accent-soft/60",
+                  "flex gap-3 border-b border-l-2 border-b-border border-l-transparent px-4 py-3 transition-colors hover:bg-surface-2",
+                  d.id === selected && isDesktop && "border-l-accent bg-accent-soft/50 hover:bg-accent-soft/50",
                 )}
               >
                 <Thumbnail doc={d} className="h-16 w-12 shrink-0 rounded border border-border" />
                 <div className="min-w-0 flex-1">
                   <div className="line-clamp-2 text-sm font-medium leading-snug">{d.title}</div>
                   <div className="mt-0.5 truncate text-xs text-muted">
-                    {[d.correspondent?.name, formatDocDate(d.document_date), d.space.name].filter(Boolean).join(" · ")}
+                    {[d.correspondent?.name, formatDocDate(d.document_date), spaceLabel(me.spaces.find((s) => s.id === d.space.id) ?? d.space)].filter(Boolean).join(" · ")}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1">
                     <StatusBadge doc={d} className="shadow-none" />
+                    {!!d.suggestion_count && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-medium text-accent-soft-fg" title="AI has suggestions to review">
+                        <Sparkles className="size-3" /> {d.suggestion_count}
+                      </span>
+                    )}
                     {d.tags.slice(0, 2).map((t) => (
                       <TagChip key={t.id} name={t.name} color={t.color} />
                     ))}
@@ -162,6 +202,12 @@ export function InboxPage() {
             </li>
           )}
         </ul>
+        {isDesktop && (
+          <p className="flex items-center gap-1.5 border-t border-border px-4 py-2.5 text-xs text-subtle">
+            <Kbd>J</Kbd>
+            <Kbd>K</Kbd> move <span className="mx-1">·</span> <Kbd>E</Kbd> reviewed <span className="mx-1">·</span> <Kbd>A</Kbd> accept AI <span className="mx-1">·</span> <Kbd>↵</Kbd> open
+          </p>
+        )}
       </div>
       {isDesktop && (
         <div className="min-w-0 flex-1">

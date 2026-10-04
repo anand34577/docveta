@@ -32,6 +32,9 @@ tags:
 - name: notifications
 - name: admin
 - name: worker
+- name: sharing
+- name: ai
+- name: workflows
 paths:
   /api/v1/admin/audit:
     get:
@@ -440,7 +443,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/User'
+                oneOf:
+                - $ref: '#/components/schemas/User'
+                - $ref: '#/components/schemas/TwoFactorChallenge'
         default: *id001
       description: Rate limited per IP and per IP+email; 429 responses carry `Retry-After`.
       requestBody:
@@ -905,6 +910,20 @@ paths:
       - name: trash
         in: query
         schema: *id007
+      - name: mode
+        in: query
+        schema:
+          type: string
+          enum:
+          - keyword
+          - semantic
+          - hybrid
+        description: Meaning-based search needs an AI provider with an embedding model
+      - name: facets
+        in: query
+        schema:
+          type: boolean
+        description: Include per-tag/correspondent/type/status counts for the current filters
     post:
       summary: Upload a document
       tags:
@@ -1171,6 +1190,7 @@ paths:
           enum:
           - original
           - archive
+          - derived
           - thumbnail
           - best
           default: original
@@ -1180,6 +1200,12 @@ paths:
           type: string
           enum:
           - '1'
+      - name: version
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+        description: Original file of an earlier version
   /api/v1/documents/{id}/history:
     get:
       summary: Change history
@@ -2153,8 +2179,8 @@ paths:
   /worker/v1/enroll:
     post:
       summary: Get a worker token with the enrollment key (Docker setups)
-      description: Only available when DOCVETA_WORKER_ENROLL_KEY_FILE is set. Creates the
-        worker called `name`, or gives it a new token if it exists.
+      description: Only available when DOCVETA_WORKER_ENROLL_KEY_FILE is set. Creates the worker called `name`, or gives it
+        a new token if it exists.
       tags:
       - worker
       security: []
@@ -2164,7 +2190,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name, key]
+              required:
+              - name
+              - key
               properties:
                 name:
                   type: string
@@ -2177,7 +2205,8 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [token]
+                required:
+                - token
                 properties:
                   token:
                     type: string
@@ -2409,6 +2438,1642 @@ paths:
           type: string
           format: uuid
       security: *id009
+  /api/v1/documents/{id}/unlock:
+    post:
+      summary: Remove the password of an encrypted PDF
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - password
+              properties:
+                password:
+                  type: string
+  /api/v1/documents/{id}/pages/edit:
+    post:
+      summary: Rotate, delete and reorder pages (new version)
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - pages
+              properties:
+                pages:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/PageOp'
+  /api/v1/documents/{id}/split:
+    post:
+      summary: Split a PDF into parts
+      tags:
+      - documents
+      responses:
+        default:
+          $ref: '#/components/responses/Problem'
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Document'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - ranges
+              properties:
+                ranges:
+                  type: array
+                  items:
+                    type: string
+                trash_original:
+                  type: boolean
+  /api/v1/documents/merge:
+    post:
+      summary: Merge PDFs into a new document
+      tags:
+      - documents
+      responses:
+        default:
+          $ref: '#/components/responses/Problem'
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - ids
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                title:
+                  type: string
+                trash_originals:
+                  type: boolean
+  /api/v1/documents/{id}/versions:
+    get:
+      summary: List versions of a document's file
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VersionInfo'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: 'Add a new version (multipart: optional note, then file)'
+      tags:
+      - documents
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                note:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+  /api/v1/documents/{id}/versions/{no}/restore:
+    post:
+      summary: Make an earlier version current again
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: 'no'
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/trash:
+    delete:
+      summary: Permanently delete everything in the Trash you may delete
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyTrashResult'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/me/notification-prefs:
+    get:
+      summary: Notification preferences (quiet hours)
+      tags:
+      - notifications
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPrefs'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      summary: Save notification preferences
+      tags:
+      - notifications
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPrefs'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationPrefs'
+  /api/v1/custom-fields:
+    get:
+      summary: List custom fields
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CustomField'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: space_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Create a custom field
+      tags:
+      - taxonomy
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomField'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomFieldInput'
+  /api/v1/custom-fields/{id}:
+    patch:
+      summary: Rename a field or change its choices
+      tags:
+      - taxonomy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomField'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomFieldInput'
+    delete:
+      summary: Delete a custom field and its values
+      tags:
+      - taxonomy
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/admin/invites:
+    get:
+      summary: List invitations
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Invite'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      summary: Create an invitation link
+      tags:
+      - admin
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteCreated'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewInvite'
+  /api/v1/admin/invites/{id}:
+    delete:
+      summary: Revoke a pending invitation
+      tags:
+      - admin
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/invites/{token}:
+    get:
+      summary: Look up an invitation (not signed in)
+      tags:
+      - auth
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitePreview'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+      security: []
+  /api/v1/invites/{token}/accept:
+    post:
+      summary: 'Accept an invitation: creates the account and signs in'
+      tags:
+      - auth
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptInvite'
+      security: []
+  /api/v1/auth/login/2fa:
+    post:
+      summary: Finish a sign-in with a second-factor code or recovery code
+      tags:
+      - auth
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - challenge
+              - code
+              properties:
+                challenge:
+                  type: string
+                code:
+                  type: string
+      security: []
+  /api/v1/me/2fa:
+    get:
+      summary: Two-factor sign-in status
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TwoFactorStatus'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/me/2fa/setup:
+    post:
+      summary: Start two-factor enrolment (secret and otpauth URI)
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - secret
+                - uri
+                properties:
+                  secret:
+                    type: string
+                  uri:
+                    type: string
+                  qr:
+                    type: string
+                    description: PNG data URL of the QR code
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/me/2fa/enable:
+    post:
+      summary: Confirm enrolment with a code; returns recovery codes
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodes'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - code
+              properties:
+                code:
+                  type: string
+  /api/v1/me/2fa/disable:
+    post:
+      summary: Turn two-factor sign-in off
+      tags:
+      - account
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - code
+              properties:
+                password:
+                  type: string
+                code:
+                  type: string
+  /api/v1/me/2fa/recovery-codes:
+    post:
+      summary: Replace the recovery codes
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodes'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - code
+              properties:
+                code:
+                  type: string
+  /api/v1/admin/users/{id}/2fa:
+    delete:
+      summary: Reset a user's two-factor sign-in
+      tags:
+      - admin
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/shares:
+    post:
+      summary: Create a share link for a document or saved view
+      tags:
+      - sharing
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShareCreated'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewShare'
+    get:
+      summary: List share links you created (or that belong to spaces you own)
+      tags:
+      - sharing
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Share'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: document_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: view_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+  /api/v1/shares/{id}:
+    delete:
+      summary: Turn a share link off
+      tags:
+      - sharing
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/public/shares/{token}:
+    get:
+      summary: What a share link shows (no account needed)
+      tags:
+      - sharing
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicShare'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+      security: []
+  /api/v1/public/shares/{token}/unlock:
+    post:
+      summary: Enter a share link's password (sets a cookie)
+      tags:
+      - sharing
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - password
+              properties:
+                password:
+                  type: string
+      security: []
+  /api/v1/public/shares/{token}/documents/{id}/file:
+    get:
+      summary: A shared document's file
+      tags:
+      - sharing
+      responses:
+        '200':
+          description: OK
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: kind
+        in: query
+        schema:
+          type: string
+      - name: download
+        in: query
+        schema:
+          type: string
+      security: []
+  /api/v1/admin/ai/providers:
+    get:
+      summary: List AI providers
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AIProvider'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      summary: Add an AI provider (any OpenAI-compatible server)
+      tags:
+      - admin
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProvider'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIProviderInput'
+  /api/v1/admin/ai/providers/{id}:
+    patch:
+      summary: Change an AI provider
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProvider'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIProviderInput'
+    delete:
+      summary: Remove an AI provider
+      tags:
+      - admin
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/admin/ai/providers/{id}/test:
+    post:
+      summary: Test the connection and list the server's models
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AITestResult'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/admin/ai/reindex:
+    post:
+      summary: Queue embeddings for documents that have none
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - queued
+                properties:
+                  queued:
+                    type: integer
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/documents/{id}/suggestions:
+    get:
+      summary: Open AI suggestions for a document
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AISuggestion'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/documents/{id}/suggestions/accept:
+    post:
+      summary: Accept suggestions (all open ones when ids is omitted)
+      tags:
+      - documents
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+  /api/v1/documents/{id}/suggestions/reject:
+    post:
+      summary: Reject suggestions (all open ones when ids is omitted)
+      tags:
+      - documents
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+  /api/v1/documents/{id}/ai:
+    post:
+      summary: Ask the AI to suggest organisation and index this document
+      tags:
+      - documents
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/documents/{id}/similar:
+    get:
+      summary: Documents similar to this one
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SimilarDoc'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+  /api/v1/spaces/{id}/ai-stats:
+    get:
+      summary: How often a space's AI suggestions are accepted
+      tags:
+      - spaces
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AISpaceStats'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/ai/ask:
+    post:
+      summary: 'Ask a question about your documents (server-sent events: citations, delta, done, error)'
+      tags:
+      - ai
+      responses:
+        '200':
+          description: OK
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskInput'
+  /api/v1/ai/conversations:
+    get:
+      summary: Your Ask conversations
+      tags:
+      - ai
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conversation'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/ai/conversations/{id}/messages:
+    get:
+      summary: Messages of a conversation
+      tags:
+      - ai
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ConversationMessage'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/ai/conversations/{id}:
+    delete:
+      summary: Delete a conversation
+      tags:
+      - ai
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /mcp:
+    post:
+      summary: Model Context Protocol endpoint (JSON-RPC 2.0); authenticate with a personal access token
+      tags:
+      - ai
+      description: 'Tools: search_documents, get_document, get_document_text, find_similar_documents, list_spaces, list_tags,
+        list_correspondents, list_document_types.'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: '#/components/responses/Problem'
+        '202':
+          description: A notification was accepted (no answer)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RPCRequest'
+    get:
+      summary: 'Not supported (405): there is no server-initiated stream'
+      tags:
+      - ai
+      responses:
+        '405':
+          description: Method not allowed
+          content:
+            text/plain:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/admin/settings/office:
+    get:
+      summary: Document converter (Gotenberg) settings
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OfficeInfo'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      summary: Set the converter address (empty = use DOCVETA_GOTENBERG_URL)
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OfficeInfo'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OfficeSettings'
+  /api/v1/admin/settings/office/test:
+    post:
+      summary: Check that the converter answers
+      tags:
+      - admin
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OfficeSettings'
+  /api/v1/admin/folders:
+    get:
+      summary: Watched folders and the places they may be in
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - roots
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WatchedFolder'
+                  roots:
+                    type: array
+                    items:
+                      type: string
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      summary: Watch a folder
+      tags:
+      - admin
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WatchedFolder'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WatchedFolderInput'
+  /api/v1/admin/folders/{id}:
+    patch:
+      summary: Change a watched folder
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WatchedFolder'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WatchedFolderInput'
+    delete:
+      summary: Stop watching a folder
+      tags:
+      - admin
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/admin/folders/{id}/scan:
+    post:
+      summary: Scan a folder now
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FolderScanResult'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/workflows:
+    get:
+      summary: List workflows
+      tags:
+      - workflows
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Workflow'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: space_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Create a workflow
+      tags:
+      - workflows
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowInput'
+  /api/v1/workflows/{id}:
+    patch:
+      summary: Change a workflow
+      tags:
+      - workflows
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowInput'
+    delete:
+      summary: Delete a workflow
+      tags:
+      - workflows
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/workflows/{id}/test:
+    post:
+      summary: 'Dry run: would it fire for this document, and what would it do?'
+      tags:
+      - workflows
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowTest'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - document_id
+              properties:
+                document_id:
+                  type: string
+                  format: uuid
+  /api/v1/workflows/{id}/runs:
+    get:
+      summary: What the workflow did recently
+      tags:
+      - workflows
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WorkflowRun'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/uploads:
+    options:
+      summary: 'tus: what the server supports'
+      tags:
+      - documents
+      description: Resumable uploads follow the tus 1.0.0 protocol (creation, termination, expiration).
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      security: []
+    post:
+      summary: 'tus: start a resumable upload'
+      tags:
+      - documents
+      description: 'Metadata keys (base64 values): space_id, filename, title, tag_ids, correspondent_id, document_type_id,
+        document_date, language, allow_duplicate, source.'
+      responses:
+        '201':
+          description: Created; the Location header is the upload URL
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: Tus-Resumable
+        in: header
+        schema:
+          type: string
+        required: true
+      - name: Upload-Length
+        in: header
+        schema:
+          type: integer
+        required: true
+      - name: Upload-Metadata
+        in: header
+        schema:
+          type: string
+  /api/v1/uploads/{id}:
+    head:
+      summary: 'tus: how much of the upload has arrived (Upload-Offset)'
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Tus-Resumable
+        in: header
+        schema:
+          type: string
+        required: true
+    patch:
+      summary: 'tus: send the next chunk'
+      tags:
+      - documents
+      description: When the last chunk arrives the file becomes a document; its id is in the Docveta-Document-Id response
+        header.
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Tus-Resumable
+        in: header
+        schema:
+          type: string
+        required: true
+      - name: Upload-Offset
+        in: header
+        schema:
+          type: integer
+        required: true
+      requestBody:
+        required: true
+        content:
+          application/offset+octet-stream:
+            schema:
+              type: string
+              format: binary
+    delete:
+      summary: 'tus: cancel an upload'
+      tags:
+      - documents
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Tus-Resumable
+        in: header
+        schema:
+          type: string
+        required: true
+  /api/v1/barcodes/separator.png:
+    get:
+      summary: A separator sheet to print and put between documents in a batch scan
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            image/png:
+              schema: &id011
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/barcodes/asn.png:
+    get:
+      summary: A printable archive-number label (barcode) for a paper original
+      tags:
+      - documents
+      responses:
+        '200':
+          description: OK
+          content:
+            image/png:
+              schema: *id011
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: n
+        in: query
+        schema:
+          type: integer
+        required: true
+  /api/v1/admin/export:
+    get:
+      summary: Download everything as a zip (documents, text, notes, files)
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/ai/status:
+    get:
+      summary: Which AI features are available
+      tags:
+      - ai
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIStatus'
+        default:
+          $ref: '#/components/responses/Problem'
 components:
   securitySchemes:
     sessionCookie:
@@ -2834,6 +4499,14 @@ components:
           type: string
         version:
           type: integer
+        has_derived:
+          type: boolean
+        custom_fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomValue'
+        suggestion_count:
+          type: integer
       required:
       - id
       - space
@@ -2860,6 +4533,9 @@ components:
       - has_thumbnail
       - note_count
       - version
+      - has_derived
+      - custom_fields
+      - suggestion_count
       type: object
     FailRequest:
       properties:
@@ -3049,6 +4725,14 @@ components:
         total:
           nullable: true
           type: integer
+        mode:
+          type: string
+          enum:
+          - keyword
+          - semantic
+          - hybrid
+        facets:
+          $ref: '#/components/schemas/Facets'
       required:
       - items
       - next_cursor
@@ -3497,6 +5181,16 @@ components:
           type: array
         untagged:
           type: boolean
+        custom:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomFilter'
+        mode:
+          type: string
+          enum:
+          - keyword
+          - semantic
+          - hybrid
       type: object
     Session:
       properties:
@@ -3569,6 +5263,10 @@ components:
           type: string
         role:
           type: string
+        split_on_separators:
+          type: boolean
+        read_asn_barcodes:
+          type: boolean
       required:
       - id
       - name
@@ -3582,6 +5280,8 @@ components:
       - member_count
       - document_count
       - created_at
+      - split_on_separators
+      - read_asn_barcodes
       type: object
     SpaceInput:
       properties:
@@ -3603,6 +5303,10 @@ components:
         name:
           nullable: true
           type: string
+        split_on_separators:
+          type: boolean
+        read_asn_barcodes:
+          type: boolean
       type: object
     Stats:
       properties:
@@ -3621,6 +5325,10 @@ components:
           type: integer
         trash:
           type: integer
+        ocr_available:
+          type: boolean
+        trash_retention_days:
+          type: integer
       required:
       - total
       - inbox
@@ -3629,6 +5337,8 @@ components:
       - trash
       - added_this_week
       - bytes
+      - ocr_available
+      - trash_retention_days
       type: object
     Status:
       properties:
@@ -3655,16 +5365,16 @@ components:
       - oidc
       type: object
     Suggestion:
-      properties:
-        id:
-          format: uuid
-          type: string
-        title:
-          type: string
+      type: object
       required:
       - id
       - title
-      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
     SystemInfo:
       properties:
         database_bytes:
@@ -3864,6 +5574,19 @@ components:
         title:
           type: string
           nullable: true
+        add_tag_names:
+          type: array
+          items:
+            type: string
+        remove_tag_names:
+          type: array
+          items:
+            type: string
+        custom_fields:
+          type: object
+          additionalProperties:
+            nullable: true
+          description: Custom field values by field id; null clears a value
       type: object
     User:
       properties:
@@ -3961,3 +5684,964 @@ components:
       - failed_24h
       - created_at
       type: object
+    VersionInfo:
+      type: object
+      properties:
+        version_no:
+          type: integer
+        note:
+          type: string
+        created_by:
+          allOf:
+          - $ref: '#/components/schemas/Ref'
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        size_bytes:
+          type: integer
+        mime_type:
+          type: string
+        current:
+          type: boolean
+      required:
+      - version_no
+      - note
+      - created_at
+      - size_bytes
+      - mime_type
+      - current
+    PageOp:
+      type: object
+      properties:
+        from:
+          type: integer
+        rotate:
+          type: integer
+    EmptyTrashResult:
+      type: object
+      properties:
+        purged:
+          type: integer
+        skipped:
+          type: integer
+      required:
+      - purged
+      - skipped
+    NotificationPrefs:
+      type: object
+      properties:
+        quiet_enabled:
+          type: boolean
+        quiet_start:
+          type: string
+        quiet_end:
+          type: string
+      required:
+      - quiet_enabled
+      - quiet_start
+      - quiet_end
+    CustomField:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        space_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        data_type:
+          type: string
+          enum:
+          - text
+          - longtext
+          - integer
+          - decimal
+          - monetary
+          - date
+          - boolean
+          - url
+          - select
+          - multiselect
+          - document
+        options:
+          type: object
+          additionalProperties: true
+        document_count:
+          type: integer
+      required:
+      - id
+      - space_id
+      - name
+      - data_type
+      - options
+      - document_count
+    CustomFieldInput:
+      type: object
+      properties:
+        space_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        data_type:
+          type: string
+        options:
+          type: object
+          additionalProperties: true
+    CustomValue:
+      type: object
+      properties:
+        field_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        data_type:
+          type: string
+        value:
+          nullable: true
+        currency:
+          type: string
+          nullable: true
+      required:
+      - field_id
+      - name
+      - data_type
+      - value
+    CustomFilter:
+      type: object
+      properties:
+        name:
+          type: string
+        op:
+          type: string
+        value:
+          type: string
+    InviteSpace:
+      type: object
+      properties:
+        space_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+          - owner
+          - editor
+          - viewer
+        name:
+          type: string
+          nullable: true
+    Invite:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          nullable: true
+        display_name:
+          type: string
+        is_admin:
+          type: boolean
+        spaces:
+          type: array
+          items:
+            $ref: '#/components/schemas/InviteSpace'
+        note:
+          type: string
+        invited_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum:
+          - pending
+          - accepted
+          - expired
+          - revoked
+      required:
+      - id
+      - display_name
+      - is_admin
+      - spaces
+      - note
+      - invited_by
+      - created_at
+      - expires_at
+      - status
+    NewInvite:
+      type: object
+      properties:
+        email:
+          type: string
+        display_name:
+          type: string
+        is_admin:
+          type: boolean
+        spaces:
+          type: array
+          items:
+            $ref: '#/components/schemas/InviteSpace'
+        note:
+          type: string
+        expires_in_days:
+          type: integer
+        send_email:
+          type: boolean
+    InviteCreated:
+      type: object
+      properties:
+        invite:
+          $ref: '#/components/schemas/Invite'
+        link:
+          type: string
+        email_sent:
+          type: boolean
+        email_error:
+          type: string
+          nullable: true
+      required:
+      - invite
+      - link
+      - email_sent
+    InvitePreview:
+      type: object
+      properties:
+        email:
+          type: string
+          nullable: true
+        display_name:
+          type: string
+        invited_by:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        password_login:
+          type: boolean
+      required:
+      - display_name
+      - invited_by
+      - expires_at
+      - password_login
+    AcceptInvite:
+      type: object
+      properties:
+        display_name:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+    TwoFactorStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        recovery_codes_left:
+          type: integer
+      required:
+      - enabled
+      - recovery_codes_left
+    TwoFactorChallenge:
+      type: object
+      properties:
+        two_factor_required:
+          type: boolean
+        challenge:
+          type: string
+      required:
+      - two_factor_required
+      - challenge
+    RecoveryCodes:
+      type: object
+      properties:
+        recovery_codes:
+          type: array
+          items:
+            type: string
+      required:
+      - recovery_codes
+    Share:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+          - document
+          - view
+        document_id:
+          type: string
+          format: uuid
+          nullable: true
+        view_id:
+          type: string
+          format: uuid
+          nullable: true
+        title:
+          type: string
+        allow_download:
+          type: boolean
+        has_password:
+          type: boolean
+        note:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        access_count:
+          type: integer
+        last_access_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+          - active
+          - expired
+          - revoked
+      required:
+      - id
+      - kind
+      - title
+      - allow_download
+      - has_password
+      - note
+      - access_count
+      - created_by
+      - created_at
+      - status
+    NewShare:
+      type: object
+      properties:
+        document_id:
+          type: string
+          format: uuid
+        view_id:
+          type: string
+          format: uuid
+        expires_in_days:
+          type: integer
+        password:
+          type: string
+        allow_download:
+          type: boolean
+        note:
+          type: string
+    ShareCreated:
+      type: object
+      properties:
+        share:
+          $ref: '#/components/schemas/Share'
+        link:
+          type: string
+      required:
+      - share
+      - link
+    PublicDoc:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        document_date:
+          type: string
+          nullable: true
+        mime_type:
+          type: string
+        page_count:
+          type: integer
+          nullable: true
+        size_bytes:
+          type: integer
+        has_archive:
+          type: boolean
+        has_thumbnail:
+          type: boolean
+        has_derived:
+          type: boolean
+      required:
+      - id
+      - title
+      - mime_type
+      - size_bytes
+      - has_archive
+      - has_thumbnail
+      - has_derived
+    PublicShare:
+      type: object
+      properties:
+        kind:
+          type: string
+        title:
+          type: string
+        requires_password:
+          type: boolean
+        allow_download:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicDoc'
+      required:
+      - kind
+      - title
+      - requires_password
+      - allow_download
+      - documents
+    AIProvider:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        base_url:
+          type: string
+        chat_model:
+          type: string
+        embedding_model:
+          type: string
+        is_local:
+          type: boolean
+        is_default:
+          type: boolean
+        enabled:
+          type: boolean
+        timeout_seconds:
+          type: integer
+        max_concurrency:
+          type: integer
+        has_api_key:
+          type: boolean
+        last_error:
+          type: string
+        last_ok_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - id
+      - name
+      - base_url
+      - chat_model
+      - embedding_model
+      - is_local
+      - is_default
+      - enabled
+      - timeout_seconds
+      - max_concurrency
+      - has_api_key
+      - last_error
+    AIProviderInput:
+      type: object
+      properties:
+        name:
+          type: string
+        base_url:
+          type: string
+        api_key:
+          type: string
+        chat_model:
+          type: string
+        embedding_model:
+          type: string
+        is_local:
+          type: boolean
+        is_default:
+          type: boolean
+        enabled:
+          type: boolean
+        timeout_seconds:
+          type: integer
+        max_concurrency:
+          type: integer
+    AITestResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        error:
+          type: string
+          nullable: true
+        models:
+          type: array
+          items:
+            type: string
+        chat_model_found:
+          type: boolean
+          nullable: true
+        embedding_model_found:
+          type: boolean
+          nullable: true
+      required:
+      - ok
+      - models
+    SimilarDoc:
+      type: object
+      properties:
+        document:
+          $ref: '#/components/schemas/Document'
+        score:
+          type: number
+        reason:
+          type: string
+          enum:
+          - meaning
+          - details
+      required:
+      - document
+      - score
+      - reason
+    AISpaceStats:
+      type: object
+      properties:
+        accepted:
+          type: integer
+        rejected:
+          type: integer
+        pending:
+          type: integer
+        accept_rate:
+          type: number
+      required:
+      - accepted
+      - rejected
+      - pending
+      - accept_rate
+    Citation:
+      type: object
+      properties:
+        n:
+          type: integer
+        document_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        page:
+          type: integer
+        snippet:
+          type: string
+      required:
+      - n
+      - document_id
+      - title
+      - page
+      - snippet
+    Conversation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - title
+      - updated_at
+    ConversationMessage:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+          - user
+          - assistant
+        content:
+          type: string
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Citation'
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - role
+      - content
+      - citations
+      - created_at
+    AskInput:
+      type: object
+      properties:
+        question:
+          type: string
+        conversation_id:
+          type: string
+          format: uuid
+        space_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+    RPCRequest:
+      type: object
+      properties:
+        jsonrpc:
+          type: string
+        id:
+          nullable: true
+        method:
+          type: string
+        params:
+          nullable: true
+    AISuggestion:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        field:
+          type: string
+          enum:
+          - tag
+          - correspondent
+          - document_type
+          - document_date
+          - title
+          - custom_field
+        value:
+          type: object
+          additionalProperties: true
+        confidence:
+          type: number
+        status:
+          type: string
+      required:
+      - id
+      - field
+      - value
+      - confidence
+      - status
+    OfficeInfo:
+      type: object
+      properties:
+        url:
+          type: string
+        from_env:
+          type: boolean
+        enabled:
+          type: boolean
+      required:
+      - url
+      - from_env
+      - enabled
+    OfficeSettings:
+      type: object
+      properties:
+        url:
+          type: string
+    WatchedFolder:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        path:
+          type: string
+        space_id:
+          type: string
+          format: uuid
+        enabled:
+          type: boolean
+        recursive:
+          type: boolean
+        subfolders:
+          type: string
+          enum:
+          - none
+          - tag
+          - space
+        tag_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        after_import:
+          type: string
+          enum:
+          - move
+          - delete
+        stable_seconds:
+          type: integer
+        last_scan_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error:
+          type: string
+        imported_count:
+          type: integer
+        failed_count:
+          type: integer
+      required:
+      - id
+      - path
+      - space_id
+      - enabled
+      - recursive
+      - subfolders
+      - tag_ids
+      - after_import
+      - stable_seconds
+      - last_error
+      - imported_count
+      - failed_count
+    WatchedFolderInput:
+      type: object
+      properties:
+        path:
+          type: string
+        space_id:
+          type: string
+          format: uuid
+        enabled:
+          type: boolean
+        recursive:
+          type: boolean
+        subfolders:
+          type: string
+        tag_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        after_import:
+          type: string
+        stable_seconds:
+          type: integer
+    FolderScanResult:
+      type: object
+      properties:
+        imported:
+          type: integer
+        failed:
+          type: integer
+        skipped:
+          type: integer
+      required:
+      - imported
+      - failed
+      - skipped
+    WorkflowAction:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - add_tags
+          - remove_tags
+          - set_correspondent
+          - set_document_type
+          - set_field
+          - set_inbox
+          - move_to_space
+          - notify
+          - webhook
+          - run_ai
+        names:
+          type: array
+          items:
+            type: string
+        name:
+          type: string
+        field_id:
+          type: string
+          format: uuid
+        value:
+          nullable: true
+        space_id:
+          type: string
+          format: uuid
+        to:
+          type: string
+          enum:
+          - owner
+          - space_owners
+          - space_members
+        title:
+          type: string
+        message:
+          type: string
+        url:
+          type: string
+      required:
+      - type
+    Workflow:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        space_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        enabled:
+          type: boolean
+        trigger:
+          type: string
+          enum:
+          - added
+          - processed
+          - updated
+          - schedule
+        schedule_time:
+          type: string
+        conditions:
+          type: object
+          additionalProperties: true
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowAction'
+        last_run_at:
+          type: string
+          format: date-time
+          nullable: true
+        run_count:
+          type: integer
+      required:
+      - id
+      - space_id
+      - name
+      - enabled
+      - trigger
+      - schedule_time
+      - conditions
+      - actions
+      - run_count
+    WorkflowInput:
+      type: object
+      properties:
+        space_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        enabled:
+          type: boolean
+        trigger:
+          type: string
+        schedule_time:
+          type: string
+        conditions:
+          type: object
+          additionalProperties: true
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowAction'
+    WorkflowRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        document_id:
+          type: string
+          format: uuid
+          nullable: true
+        document_title:
+          type: string
+        trigger:
+          type: string
+        status:
+          type: string
+          enum:
+          - done
+          - skipped
+          - failed
+        summary:
+          type: string
+        ran_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - document_title
+      - trigger
+      - status
+      - summary
+      - ran_at
+    WorkflowTest:
+      type: object
+      properties:
+        matches:
+          type: boolean
+        steps:
+          type: array
+          items:
+            type: string
+      required:
+      - matches
+      - steps
+    Facets:
+      type: object
+      required:
+      - tags
+      - correspondents
+      - types
+      - statuses
+      properties:
+        tags: &id012
+          type: object
+          additionalProperties:
+            type: integer
+        correspondents: *id012
+        types: *id012
+        statuses: *id012
+    AIStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        chat:
+          type: boolean
+        embeddings:
+          type: boolean
+      required:
+      - enabled
+      - chat
+      - embeddings

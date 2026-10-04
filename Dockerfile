@@ -16,7 +16,7 @@ RUN go mod download
 COPY . .
 COPY --from=web /src/internal/webui/dist ./internal/webui/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/docveta ./cmd/docveta
+    go build -tags nodynamic -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/docveta ./cmd/docveta
 # Empty folders owned by the runtime user: Docker volumes mounted there start out writable.
 RUN mkdir -p /out/data /out/workers
 

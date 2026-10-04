@@ -31,6 +31,30 @@ export function setDateFormat(f: string) {
   userDateFormat = dateFormats[f] || "dd/MM/yyyy";
 }
 
+/** Reads a date typed in the person's own format (also accepts YYYY-MM-DD). Returns YYYY-MM-DD, or null. */
+export function parseDocDate(text: string): string | null {
+  const t = text.trim();
+  let y: number, m: number, d: number;
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t);
+  if (iso) [y, m, d] = [+iso[1], +iso[2], +iso[3]];
+  else {
+    const named = /^(\d{1,2})\s+([A-Za-z]{3,9})\.?,?\s+(\d{4})$/.exec(t);
+    if (named) {
+      const mi = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(named[2].slice(0, 3).toLowerCase());
+      if (mi < 0) return null;
+      [y, m, d] = [+named[3], mi + 1, +named[1]];
+    } else {
+      const p = /^(\d{1,2})[./\-](\d{1,2})[./\-](\d{4})$/.exec(t);
+      if (!p) return null;
+      const us = userDateFormat.startsWith("MM");
+      [y, m, d] = [+p[3], us ? +p[1] : +p[2], us ? +p[2] : +p[1]];
+    }
+  }
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
 /** Formats a date-only string (YYYY-MM-DD) without timezone shifts. */
 export function formatDocDate(d: string | null | undefined): string {
   if (!d) return "";
@@ -52,6 +76,11 @@ export function timeAgo(iso: string): string {
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
   return ((parts[0]?.[0] || "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() || "?";
+}
+
+/** Display name of a space: everyone's own personal space is just "Personal". */
+export function spaceLabel(s: { kind?: string; name: string } | undefined): string {
+  return !s ? "" : s.kind === "personal" ? "Personal" : s.name;
 }
 
 export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -80,6 +109,9 @@ export const tagDot: Record<string, string> = {
 };
 
 export const colorNames = Object.keys(tagColors);
+
+/** Dot colour for a space (falls back to the accent). */
+export const spaceDot = (color?: string) => tagDot[color ?? ""] ?? "bg-accent";
 
 export function fileKind(mime: string): "pdf" | "image" | "text" | "other" {
   if (mime === "application/pdf") return "pdf";

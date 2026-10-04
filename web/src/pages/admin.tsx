@@ -1,7 +1,7 @@
 import * as React from "react";
-import { useParams } from "@tanstack/react-router";
+import { Link, useParams } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Bell, Cpu, KeyRound, Mail, Plus, RotateCw, ScrollText, Server, Trash2, Users } from "lucide-react";
+import { Activity, Bell, Brain, Cpu, Database, FileStack, FolderSync, KeyRound, Mail, Plus, RotateCw, ScrollText, Server, ShieldOff, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import type { AuditEntry, OIDCConfig, ProcessingSettings, QueueStats, SMTPConfig, SystemInfo, TaskView, User, Worker } from "@/lib/types";
@@ -15,13 +15,18 @@ import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { confirm } from "@/components/ui/confirm";
 import { Notifications } from "./settings";
 import { NotFound } from "./not-found";
+import { AIAdmin, DataAdmin, FoldersAdmin, InvitesPanel, OfficeAdmin } from "./admin-extras";
 
 const sections = [
   { id: "users", label: "Users", icon: <Users /> },
   { id: "processing", label: "Processing", icon: <Cpu /> },
+  { id: "ai", label: "AI", icon: <Brain /> },
+  { id: "folders", label: "Watched folders", icon: <FolderSync /> },
+  { id: "office", label: "Office documents", icon: <FileStack /> },
   { id: "authentication", label: "Single sign-on", icon: <KeyRound /> },
   { id: "email", label: "Email", icon: <Mail /> },
   { id: "alerts", label: "Alerts", icon: <Bell /> },
+  { id: "data", label: "Export & import", icon: <Database /> },
   { id: "system", label: "System", icon: <Server /> },
   { id: "audit", label: "Audit log", icon: <ScrollText /> },
 ];
@@ -34,6 +39,10 @@ export function AdminPage() {
   return (
     <SettingsLayout title="Administration" base="/admin" sections={sections} active={active}>
       {active === "users" && <UsersAdmin />}
+      {active === "ai" && <AIAdmin />}
+      {active === "folders" && <FoldersAdmin />}
+      {active === "office" && <OfficeAdmin />}
+      {active === "data" && <DataAdmin />}
       {active === "processing" && <ProcessingAdmin />}
       {active === "authentication" && <OIDCAdmin />}
       {active === "email" && <SMTPAdmin />}
@@ -63,6 +72,15 @@ function UsersAdmin() {
       toast.error(errorMessage(e));
     }
   };
+  const resetTwoFactor = async (u: User) => {
+    if (!(await confirm({ title: `Turn off two-step sign-in for ${u.display_name}?`, body: "Do this only if they lost their phone and recovery codes. They can set it up again themselves.", confirmLabel: "Turn off" }))) return;
+    try {
+      await api.del(`/admin/users/${u.id}/2fa`);
+      toast.success("Two-step sign-in turned off");
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  };
   const remove = async (u: User) => {
     if (!(await confirm({ title: `Delete ${u.display_name}?`, body: "Their personal space must be empty. Documents they added to shared spaces stay.", confirmLabel: "Delete user", destructive: true }))) return;
     try {
@@ -73,6 +91,8 @@ function UsersAdmin() {
     }
   };
   return (
+    <>
+    <InvitesPanel />
     <SettingsCard
       title="Users"
       description="Everyone gets a private personal space. Add people to shared spaces from the space's Members page."
@@ -108,6 +128,9 @@ function UsersAdmin() {
                   <Button size="sm" variant="ghost" onClick={() => patch(u, { status: u.status === "active" ? "disabled" : "active" })}>
                     {u.status === "active" ? "Disable" : "Enable"}
                   </Button>
+                  <Button size="icon-sm" variant="ghost" title="Turn off their two-step sign-in (if they lost their phone)" onClick={() => resetTwoFactor(u)} aria-label={`Reset two-step sign-in for ${u.display_name}`}>
+                    <ShieldOff />
+                  </Button>
                   <Button size="icon-sm" variant="ghost" onClick={() => remove(u)} aria-label={`Delete ${u.display_name}`}>
                     <Trash2 />
                   </Button>
@@ -119,6 +142,7 @@ function UsersAdmin() {
       )}
       {dialog && <UserDialog user={dialog === "new" ? null : dialog} onClose={() => setDialog(null)} onSaved={refresh} />}
     </SettingsCard>
+    </>
   );
 }
 
@@ -337,9 +361,9 @@ function ProcessingAdmin() {
                 {tasks.data!.items.map((t) => (
                   <tr key={t.id}>
                     <td className="max-w-56 px-5 py-2">
-                      <a href={`/documents/${t.document_id}`} className="block truncate hover:underline">
+                      <Link to="/documents/$id" params={{ id: t.document_id }} className="block truncate hover:underline">
                         {t.document_title}
-                      </a>
+                      </Link>
                       {t.last_error && <div className="truncate text-xs text-danger" title={t.last_error}>{t.last_error}</div>}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-muted">
