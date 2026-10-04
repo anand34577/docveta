@@ -5,16 +5,16 @@ You need Go 1.26+, Node 22+, and PostgreSQL 16+ to run it. Python 3.10+ for the 
 ```bash
 git clone https://github.com/anand34577/docveta && cd docveta
 cd web && npm ci && npm run build && cd ..     # builds the web app into internal/webui/dist
-go build -o docveta ./cmd/docveta                  # one binary with the web app inside
+go build -tags nodynamic -o docveta ./cmd/docveta                  # one binary with the web app inside
 ./docveta                                        # setup page on http://localhost:8080
 ```
 
-The build is pure Go (`CGO_ENABLED=0` works), so cross-compiling is one command:
+The build is pure Go (`CGO_ENABLED=0` works). `-tags nodynamic` keeps the HEIC/AVIF decoders from linking to the system loader (glibc), so the binary also runs on Alpine and in minimal containers. Cross-compiling is one command:
 
 ```bash
-GOOS=windows GOARCH=amd64 go build -o docveta.exe ./cmd/docveta
-GOOS=linux   GOARCH=arm64 go build -o docveta     ./cmd/docveta
-GOOS=darwin  GOARCH=arm64 go build -o docveta     ./cmd/docveta
+GOOS=windows GOARCH=amd64 go build -tags nodynamic -o docveta.exe ./cmd/docveta
+GOOS=linux   GOARCH=arm64 go build -tags nodynamic -o docveta     ./cmd/docveta
+GOOS=darwin  GOARCH=arm64 go build -tags nodynamic -o docveta     ./cmd/docveta
 ```
 
 ## Development

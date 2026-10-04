@@ -8,7 +8,7 @@ web:
 	cd web && npm ci && npm run build
 
 build: web
-	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/docveta ./cmd/docveta
+	CGO_ENABLED=0 go build -tags nodynamic -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/docveta ./cmd/docveta
 
 # Integration tests need a database: DOCVETA_TEST_DATABASE_URL=postgres://... make test
 test: test-go test-web test-workers
