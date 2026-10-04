@@ -1600,6 +1600,12 @@ func TestBatchScanning(t *testing.T) {
 	}]
 	e.waitFor("the batch to be split", func() bool {
 		c.do("GET", "/api/v1/documents?q=%22scanned+batch%22&sort=title", nil, 200, &docs)
+		// The original is retitled and the parts appear one after another: wait for all three final titles.
+		for _, d := range docs.Items {
+			if !strings.Contains(d.Title, " of 3)") {
+				return false
+			}
+		}
 		return len(docs.Items) == 3
 	})
 	pages := []int{2, 1, 1}
