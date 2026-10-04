@@ -5,6 +5,11 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-04
+
+### Fixed
+- Android: app bars no longer leave a gap under the status bar on some screens or sit under it on others. Every screen now handles the status and navigation bars exactly once (the shell used to pad all screens, and screens with their own app bar added the inset again).
+
 ## [0.5.1] - 2026-10-04
 
 ### Added

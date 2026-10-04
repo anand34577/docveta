@@ -59,6 +59,8 @@ import app.docveta.android.data.AiStatus
 import app.docveta.android.data.Me
 import app.docveta.android.data.Stats
 import app.docveta.android.scan.CropScreen
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import app.docveta.android.scan.ReviewScreen
 import app.docveta.android.scan.ScanEntry
 import app.docveta.android.scan.ScanSession
@@ -131,7 +133,7 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
         val uploads by c.uploads.items.collectAsStateWithLifecycle()
         val busy = uploads.count { it.active }
 
-        Scaffold(bottomBar = {
+        Scaffold(contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0), bottomBar = {
             if (inMain) Column {
                 AnimatedVisibility(busy > 0) {
                     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer).clickable { nav.navigate(Route.Uploads) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -144,10 +146,10 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
             }
         }) { pad ->
             NavHost(nav, Route.Inbox, Modifier.padding(pad)) {
-                composable(Route.Inbox) { InboxScreen(onOpen = { nav.navigate(Route.doc(it)) }, onScan = { nav.navigate(Route.Scan) }) }
-                composable(Route.Docs) { DocumentsScreen(onOpen = { nav.navigate(Route.doc(it)) }, onScan = { nav.navigate(Route.Scan) }) }
-                composable(Route.Ask) { AskScreen(onOpenDoc = { id, page -> nav.navigate(Route.doc(id, page)) }) }
-                composable(Route.More) { MoreScreen(onNavigate = { nav.navigate(it) }, uploadsActive = busy, onSignedOut = onSignedOut) }
+                composable(Route.Inbox) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { InboxScreen(onOpen = { nav.navigate(Route.doc(it)) }, onScan = { nav.navigate(Route.Scan) }) } }
+                composable(Route.Docs) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { DocumentsScreen(onOpen = { nav.navigate(Route.doc(it)) }, onScan = { nav.navigate(Route.Scan) }) } }
+                composable(Route.Ask) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { AskScreen(onOpenDoc = { id, page -> nav.navigate(Route.doc(id, page)) }) } }
+                composable(Route.More) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { MoreScreen(onNavigate = { nav.navigate(it) }, uploadsActive = busy, onSignedOut = onSignedOut) } }
                 composable(Route.Doc, arguments = listOf(navArgument("id") { type = NavType.StringType }, navArgument("page") { type = NavType.IntType; defaultValue = 0 })) {
                     DocumentScreen(it.arguments!!.getString("id")!!, startPage = (it.arguments!!.getInt("page") - 1).coerceAtLeast(0), onBack = { nav.popBackStack() })
                 }
@@ -157,10 +159,10 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
                         onUploaded = { nav.popBackStack(Route.Inbox, false); nav.navigate(Route.Uploads) }, onBack = { nav.popBackStack() })
                 }
                 composable(Route.Crop, arguments = listOf(navArgument("pageId") { type = NavType.StringType })) { CropScreen(scan, it.arguments!!.getString("pageId")!!, onBack = { nav.popBackStack() }) }
-                composable(Route.Uploads) { UploadsScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Route.doc(it)) }) }
-                composable(Route.Notifications) { NotificationsScreen(onBack = { nav.popBackStack() }, onOpenDoc = { nav.navigate(Route.doc(it)) }) }
-                composable(Route.Settings) { SettingsScreen(onBack = { nav.popBackStack() }, onSignedOut = onSignedOut) }
-                composable(Route.Trash) { TrashScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Route.doc(it)) }) }
+                composable(Route.Uploads) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().navigationBarsPadding()) { UploadsScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Route.doc(it)) }) } }
+                composable(Route.Notifications) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().navigationBarsPadding()) { NotificationsScreen(onBack = { nav.popBackStack() }, onOpenDoc = { nav.navigate(Route.doc(it)) }) } }
+                composable(Route.Settings) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().navigationBarsPadding()) { SettingsScreen(onBack = { nav.popBackStack() }, onSignedOut = onSignedOut) } }
+                composable(Route.Trash) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().navigationBarsPadding()) { TrashScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Route.doc(it)) }) } }
             }
         }
         if (shared.uris.isNotEmpty()) ShareTargetDialog(shared.uris, onDone = { shared.uris = emptyList(); nav.navigate(Route.Uploads) }, onCancel = { shared.uris = emptyList() })
