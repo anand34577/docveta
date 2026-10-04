@@ -1,10 +1,12 @@
 package app.docveta.android
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -36,16 +38,22 @@ import app.docveta.android.ui.LocalContainer
 import app.docveta.android.ui.MainShell
 import app.docveta.android.ui.ShareInbox
 
+private const val LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
+
 class MainActivity : FragmentActivity() {
     private val shared = ShareInbox()
     private var locked by mutableStateOf(false)
     private var leftAt = 0L
     private lateinit var container: AppContainer
+    private val askLocalNetwork = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         container = (application as DocvetaApp).container
+        // Android 17 blocks connections to local-network addresses (192.168.x.x, 10.x.x.x, .local)
+        // unless the person allows it; without this a server at home can't be reached.
+        if (Build.VERSION.SDK_INT >= 37 && checkSelfPermission(LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) askLocalNetwork.launch(LOCAL_NETWORK)
         locked = container.session.appLock && container.session.signedIn
         handle(intent)
         setContent {

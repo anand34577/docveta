@@ -8,6 +8,7 @@ All notable changes to Docveta. The format follows
 ## [0.5.2] - 2026-10-04
 
 ### Fixed
+- Android 17: the app could not connect to a server at a local address (192.168.x.x, 10.x.x.x, .local); it now declares and asks for the new local-network permission.
 - Android: app bars no longer leave a gap under the status bar on some screens or sit under it on others. Every screen now handles the status and navigation bars exactly once (the shell used to pad all screens, and screens with their own app bar added the inset again).
 
 ## [0.5.1] - 2026-10-04
