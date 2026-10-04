@@ -24,6 +24,7 @@ type Server struct {
 	AllowLocalTargets bool `json:"allow_local_targets"`
 }
 
+// serverCache keeps Server settings for a minute (they're read on every request).
 type serverCache struct {
 	mu   sync.Mutex
 	v    Server
@@ -31,10 +32,9 @@ type serverCache struct {
 	have bool
 }
 
-var cache serverCache
-
 // ServerSettings returns the instance settings (cached for a minute).
 func (s *Store) ServerSettings(ctx context.Context) Server {
+	cache := &s.server
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	if cache.have && time.Since(cache.at) < time.Minute {
@@ -54,6 +54,7 @@ func (s *Store) SetServerSettings(ctx context.Context, v Server, by uuid.UUID) e
 	if err := s.Set(ctx, serverKey, v, by); err != nil {
 		return err
 	}
+	cache := &s.server
 	cache.mu.Lock()
 	cache.v, cache.at, cache.have = v, time.Now(), true
 	cache.mu.Unlock()
