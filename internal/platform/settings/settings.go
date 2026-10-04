@@ -14,8 +14,9 @@ import (
 )
 
 type Store struct {
-	pool *pgxpool.Pool
-	keys *crypto.Keys
+	pool   *pgxpool.Pool
+	keys   *crypto.Keys
+	server serverCache
 }
 
 func New(pool *pgxpool.Pool, keys *crypto.Keys) *Store { return &Store{pool: pool, keys: keys} }

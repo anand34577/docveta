@@ -441,16 +441,27 @@ func TestIntegration(t *testing.T) {
 		t.Errorf("error not cleared after successful retry: %q", d.Error)
 	}
 
-	// --- SSRF guard: channels can't target the local network by default -------
+	// --- SSRF guard: only administrators' channels reach the local network by default ---
 	hook := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer hook.Close()
-	var ch struct{ ID string }
-	c.do("POST", "/api/v1/notification-channels", map[string]any{"name": "Local hook", "type": "webhook",
-		"config": map[string]any{"url": hook.URL}, "events": []string{"document.processed"}}, 201, &ch)
-	b := c.raw("POST", "/api/v1/notification-channels/"+ch.ID+"/test", nil, nil, 422)
-	if !strings.Contains(string(b), "DOCVETA_ALLOW_LOCAL_TARGETS") {
-		t.Errorf("local webhook target not blocked: %s", b)
+	newHook := func(cl *client) string {
+		var ch struct{ ID string }
+		cl.do("POST", "/api/v1/notification-channels", map[string]any{"name": "Local hook", "type": "webhook",
+			"config": map[string]any{"url": hook.URL}, "events": []string{"document.processed"}}, 201, &ch)
+		return ch.ID
 	}
+	kidHook := newHook(k2)
+	b := k2.raw("POST", "/api/v1/notification-channels/"+kidHook+"/test", nil, nil, 422)
+	if !strings.Contains(string(b), "local network") {
+		t.Errorf("a member's local webhook target wasn't blocked: %s", b)
+	}
+	// An administrator's own Gotify/ntfy/webhook at home works.
+	c.raw("POST", "/api/v1/notification-channels/"+newHook(c)+"/test", nil, nil, 204)
+	// And everyone's, once an administrator allows it.
+	c.do("PUT", "/api/v1/admin/settings/server", map[string]any{"public_url": "", "allow_local_targets": true}, 200, nil)
+	k2.raw("POST", "/api/v1/notification-channels/"+kidHook+"/test", nil, nil, 204)
+	c.do("PUT", "/api/v1/admin/settings/server", map[string]any{"public_url": "", "allow_local_targets": false}, 200, nil)
+	k2.do("PUT", "/api/v1/admin/settings/server", map[string]any{"allow_local_targets": true}, 403, nil)
 }
 
 // ---------------------------------------------------------------------------
