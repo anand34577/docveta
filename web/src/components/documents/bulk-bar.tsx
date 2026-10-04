@@ -1,16 +1,17 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCheck, Download, FolderInput, RotateCcw, Tag, Trash2, X } from "lucide-react";
+import { CheckCheck, Combine, Download, FolderInput, RotateCcw, Tag, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
-import { invalidateDocuments } from "@/lib/queries";
+import { invalidateDocuments, useTaxonomy } from "@/lib/queries";
 import { useSelection } from "@/stores/ui";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
-import { NativeSelect } from "@/components/ui/input";
-import { EntityPicker } from "@/components/ui/entity-picker";
+import { Field, Input, NativeSelect } from "@/components/ui/input";
+import { Checkbox, TagChip } from "@/components/ui/misc";
 import { confirm } from "@/components/ui/confirm";
 import { useCurrentUser } from "@/components/app-shell";
+import { spaceLabel } from "@/lib/utils";
 import type { Document } from "@/lib/types";
 
 interface BulkResult {
@@ -22,7 +23,7 @@ interface BulkResult {
 export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }) {
   const { ids, clear, set } = useSelection();
   const qc = useQueryClient();
-  const [dialog, setDialog] = React.useState<null | "tags" | "move">(null);
+  const [dialog, setDialog] = React.useState<null | "tags" | "move" | "merge">(null);
   const [busy, setBusy] = React.useState(false);
   const selected = items.filter((d) => ids.has(d.id));
   const n = ids.size;
@@ -51,8 +52,6 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
       setBusy(false);
     }
   };
-
-  const spaces = [...new Set(selected.map((d) => d.space.id))];
 
   return (
     <>
@@ -88,12 +87,17 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
             <Button size="sm" variant="ghost" loading={busy} onClick={() => run("update", { inbox: false }, "Marked as reviewed")}>
               <CheckCheck /> <span className="hidden sm:inline">Reviewed</span>
             </Button>
-            <Button size="sm" variant="ghost" disabled={spaces.length !== 1} onClick={() => setDialog("tags")} title={spaces.length !== 1 ? "Select documents from one space to tag them" : undefined}>
+            <Button size="sm" variant="ghost" onClick={() => setDialog("tags")}>
               <Tag /> <span className="hidden sm:inline">Tags</span>
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setDialog("move")}>
               <FolderInput /> <span className="hidden sm:inline">Move</span>
             </Button>
+            {n > 1 && selected.every((d) => d.mime_type === "application/pdf" || d.mime_type.startsWith("image/")) && (
+              <Button size="sm" variant="ghost" onClick={() => setDialog("merge")} title="Combine into one PDF, in the order selected">
+                <Combine /> <span className="hidden sm:inline">Merge</span>
+              </Button>
+            )}
             {n === 1 && (
               <Button size="sm" variant="ghost" asChild>
                 <a href={`/api/v1/documents/${[...ids][0]}/file?kind=original&download=1`}>
@@ -107,32 +111,109 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
           </>
         )}
       </div>
-      {dialog === "tags" && spaces.length === 1 && <TagsDialog spaceId={spaces[0]} busy={busy} onClose={() => setDialog(null)} onApply={(add, remove) => run("update", { add_tag_ids: add, remove_tag_ids: remove })} />}
+      {dialog === "tags" && <TagsDialog busy={busy} onClose={() => setDialog(null)} onApply={(add, remove) => run("update", { add_tag_names: add, remove_tag_names: remove })} />}
+      {dialog === "merge" && <MergeDialog ids={[...ids]} titleHint={selected[0]?.title ?? ""} onClose={() => setDialog(null)} onDone={() => { invalidateDocuments(qc); clear(); setDialog(null); }} />}
       {dialog === "move" && <MoveDialog busy={busy} onClose={() => setDialog(null)} onApply={(space) => run("update", { space_id: space }, "Moved")} />}
     </>
   );
 }
 
-function TagsDialog({ spaceId, busy, onClose, onApply }: { spaceId: string; busy: boolean; onClose: () => void; onApply: (add: string[], remove: string[]) => void }) {
+/** Tag names work across spaces: each document's own space gets the tag (created if missing). */
+function TagsDialog({ busy, onClose, onApply }: { busy: boolean; onClose: () => void; onApply: (add: string[], remove: string[]) => void }) {
   const [add, setAdd] = React.useState<string[]>([]);
   const [remove, setRemove] = React.useState<string[]>([]);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent title="Change tags" size="sm">
+      <DialogContent title="Change tags" description="Works across spaces: each document gets the tag in its own space." size="sm">
         <div className="space-y-4">
-          <div>
-            <div className="mb-1.5 text-[13px] font-medium">Add tags</div>
-            <EntityPicker kind="tags" spaceId={spaceId} multiple value={add} onChange={setAdd} placeholder="Choose tags to add" />
-          </div>
-          <div>
-            <div className="mb-1.5 text-[13px] font-medium">Remove tags</div>
-            <EntityPicker kind="tags" spaceId={spaceId} multiple allowCreate={false} value={remove} onChange={setRemove} placeholder="Choose tags to remove" />
-          </div>
+          <TagNames label="Add tags" value={add} onChange={setAdd} placeholder="Type a tag and press Enter" />
+          <TagNames label="Remove tags" value={remove} onChange={setRemove} placeholder="Type a tag to remove" />
         </div>
         <DialogFooter>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={busy} disabled={!add.length && !remove.length} onClick={() => onApply(add, remove)}>
             Apply
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function TagNames({ label, value, onChange, placeholder }: { label: string; value: string[]; onChange: (v: string[]) => void; placeholder: string }) {
+  const [text, setText] = React.useState("");
+  const all = useTaxonomy("tags");
+  const listId = React.useId();
+  const names = [...new Set((all.data ?? []).map((t) => t.name))].sort((x, y) => x.localeCompare(y));
+  const commit = () => {
+    const n = text.trim().replace(/,$/, "").trim();
+    if (n && !value.some((v) => v.toLowerCase() === n.toLowerCase())) onChange([...value, n]);
+    setText("");
+  };
+  return (
+    <div>
+      <div className="mb-1.5 text-[13px] font-medium">{label}</div>
+      {value.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1">
+          {value.map((v) => (
+            <TagChip key={v} name={v} onRemove={() => onChange(value.filter((x) => x !== v))} />
+          ))}
+        </div>
+      )}
+      <Input
+        list={listId}
+        value={text}
+        placeholder={placeholder}
+        onChange={(e) => (e.target.value.endsWith(",") ? (setText(e.target.value), setTimeout(commit)) : setText(e.target.value))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+        }}
+        onBlur={commit}
+      />
+      <datalist id={listId}>
+        {names.map((n) => (
+          <option key={n} value={n} />
+        ))}
+      </datalist>
+    </div>
+  );
+}
+
+/** Combine the selected documents into one new PDF, in the order they were selected. */
+function MergeDialog({ ids, titleHint, onClose, onDone }: { ids: string[]; titleHint: string; onClose: () => void; onDone: () => void }) {
+  const [title, setTitle] = React.useState(`${titleHint} (merged)`);
+  const [trash, setTrash] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const go = async () => {
+    setBusy(true);
+    try {
+      await api.post("/documents/merge", { ids, title: title.trim(), trash_originals: trash });
+      toast.success(`Merged ${ids.length} documents`);
+      onDone();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent title={`Merge ${ids.length} documents`} description="Creates one new PDF with all their pages, one after another." size="sm">
+        <div className="space-y-4">
+          <Field label="Title of the new document" htmlFor="merge-title">
+            <Input id="merge-title" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+          </Field>
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={trash} onCheckedChange={(v) => setTrash(v === true)} /> Move the originals to Trash afterwards
+          </label>
+        </div>
+        <DialogFooter>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={busy} disabled={!title.trim()} onClick={go}>
+            Merge
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -150,7 +231,7 @@ function MoveDialog({ busy, onClose, onApply }: { busy: boolean; onClose: () => 
         <NativeSelect value={space} onChange={(e) => setSpace(e.target.value)}>
           {writable.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.kind === "personal" ? "Personal" : s.name}
+              {spaceLabel(s)}
             </option>
           ))}
         </NativeSelect>

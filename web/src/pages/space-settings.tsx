@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileType, Merge, Pencil, Plus, Settings2, Tags, Trash2, UserPlus, Users, Wand2 } from "lucide-react";
+import { FileType, ListChecks, Merge, Pencil, Plus, ScanLine, Settings2, Sparkles, Tags, Trash2, UserPlus, Users, Wand2, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { keys, useDirectory, useTaxonomy } from "@/lib/queries";
@@ -15,6 +15,7 @@ import { Avatar, Badge, Checkbox, EmptyState, TagChip } from "@/components/ui/mi
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { confirm } from "@/components/ui/confirm";
 import { NotFound } from "./not-found";
+import { SpaceAI, SpaceColor, SpaceFields, SpaceScanning, SpaceWorkflows } from "./space-extras";
 
 const sections = [
   { id: "general", label: "General", icon: <Settings2 /> },
@@ -22,6 +23,10 @@ const sections = [
   { id: "tags", label: "Tags", icon: <Tags /> },
   { id: "correspondents", label: "Correspondents", icon: <UserPlus /> },
   { id: "document-types", label: "Document types", icon: <FileType /> },
+  { id: "fields", label: "Custom fields", icon: <ListChecks /> },
+  { id: "workflows", label: "Workflows", icon: <Workflow /> },
+  { id: "ai", label: "AI", icon: <Sparkles /> },
+  { id: "scanning", label: "Scanning", icon: <ScanLine /> },
 ];
 
 export function SpaceSettingsPage() {
@@ -40,6 +45,10 @@ export function SpaceSettingsPage() {
     >
       {section === "general" && <General space={space} />}
       {section === "members" && <Members space={space} />}
+      {section === "fields" && <SpaceFields space={space} />}
+      {section === "workflows" && <SpaceWorkflows space={space} />}
+      {section === "ai" && <SpaceAI space={space} />}
+      {section === "scanning" && <SpaceScanning space={space} />}
       {(section === "tags" || section === "correspondents" || section === "document-types") && <Vocabulary space={space} kind={section} />}
     </SettingsLayout>
   );
@@ -96,6 +105,7 @@ function General({ space }: { space: Space }) {
               <Input id="sp-name" value={name} onChange={(e) => setName(e.target.value)} disabled={!owner} />
             </Field>
           )}
+          <SpaceColor space={space} />
           <Field label="Description" htmlFor="sp-desc">
             <Textarea id="sp-desc" rows={2} value={desc} onChange={(e) => setDesc(e.target.value)} disabled={!owner} />
           </Field>

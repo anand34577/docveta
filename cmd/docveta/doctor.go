@@ -56,18 +56,22 @@ func doctor(ctx context.Context, cfg *config.Config, args []string) error {
 	}
 
 	// Storage
-	store, err := storage.NewFS(cfg.DataDir)
+	store, scratch, err := app.OpenStore(ctx, cfg)
 	if err != nil {
-		r.add("FAIL", "data directory: %v", err)
+		r.add("FAIL", "storage: %v", err)
+		store = nil
 	} else {
-		probe := filepath.Join(store.TempDir(), ".doctor-probe")
+		if cfg.Storage == "s3" {
+			r.add("OK", "documents are stored in the S3 bucket %q at %s", cfg.S3.Bucket, cfg.S3.Endpoint)
+		}
+		probe := filepath.Join(scratch.TempDir(), ".doctor-probe")
 		if err := os.WriteFile(probe, []byte("ok"), 0o600); err != nil {
 			r.add("FAIL", "data directory %s is not writable: %v", cfg.DataDir, err)
 		} else {
 			_ = os.Remove(probe)
 			r.add("OK", "data directory %s is writable", cfg.DataDir)
 		}
-		switch free := store.FreeBytes(); {
+		switch free := scratch.FreeBytes(); {
 		case free < 0:
 			r.add("WARN", "couldn't determine free disk space")
 		case free < 5<<30:
@@ -125,7 +129,7 @@ func doctor(ctx context.Context, cfg *config.Config, args []string) error {
 }
 
 // doctorData runs the checks that need an up-to-date schema.
-func doctorData(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, store *storage.FS, verifyBlobs bool, r *doctorReport) {
+func doctorData(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, store storage.Store, verifyBlobs bool, r *doctorReport) {
 	// A wrong DOCVETA_SECRET_KEY makes stored secrets (SMTP, OIDC) undecryptable.
 	var key string
 	if err := pool.QueryRow(ctx, `SELECT key FROM secret_settings LIMIT 1`).Scan(&key); err == nil {

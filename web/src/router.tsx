@@ -1,19 +1,26 @@
+import * as React from "react";
 import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
 import { AppLayout } from "@/components/app-shell";
-import { LoginPage } from "@/pages/login";
-import { SetupPage } from "@/pages/setup";
-import { HomePage } from "@/pages/home";
-import { InboxPage } from "@/pages/inbox";
-import { DocumentsPage } from "@/pages/documents";
-import { DocumentPage } from "@/pages/document";
-import { SavedViewPage } from "@/pages/saved-view";
 import { NotFound } from "@/pages/not-found";
 import type { DocQuery } from "@/lib/types";
 
 // Rarely used, heavier pages load on demand.
+// Every page loads on demand, so the first screen only downloads the shell and what it shows.
+const LoginPage = lazyRouteComponent(() => import("@/pages/login"), "LoginPage");
+const SetupPage = lazyRouteComponent(() => import("@/pages/setup"), "SetupPage");
+const InvitePage = lazyRouteComponent(() => import("@/pages/invite"), "InvitePage");
+const PublicSharePage = lazyRouteComponent(() => import("@/pages/public-share"), "PublicSharePage");
+const HomePage = lazyRouteComponent(() => import("@/pages/home"), "HomePage");
+const InboxPage = lazyRouteComponent(() => import("@/pages/inbox"), "InboxPage");
+const DocumentsPage = lazyRouteComponent(() => import("@/pages/documents"), "DocumentsPage");
+const DocumentPage = lazyRouteComponent(() => import("@/pages/document"), "DocumentPage");
+const SavedViewPage = lazyRouteComponent(() => import("@/pages/saved-view"), "SavedViewPage");
+const NotificationsPage = lazyRouteComponent(() => import("@/pages/notifications"), "NotificationsPage");
+const TrashDocuments = React.lazy(() => import("@/pages/documents").then((m) => ({ default: m.DocumentsPage })));
 const SettingsPage = lazyRouteComponent(() => import("@/pages/settings"), "SettingsPage");
 const SpaceSettingsPage = lazyRouteComponent(() => import("@/pages/space-settings"), "SpaceSettingsPage");
 const AdminPage = lazyRouteComponent(() => import("@/pages/admin"), "AdminPage");
+const AskPage = lazyRouteComponent(() => import("@/pages/ask"), "AskPage");
 
 const rootRoute = createRootRoute({ component: Outlet, notFoundComponent: NotFound });
 
@@ -26,6 +33,9 @@ export const loginRoute = createRoute({
   }),
   component: LoginPage,
 });
+
+const inviteRoute = createRoute({ getParentRoute: () => rootRoute, path: "/invite/$token", component: InvitePage });
+const shareRoute = createRoute({ getParentRoute: () => rootRoute, path: "/s/$token", component: PublicSharePage });
 
 const setupRoute = createRoute({ getParentRoute: () => rootRoute, path: "/setup", component: SetupPage });
 
@@ -51,6 +61,7 @@ export function parseDocQuery(s: Record<string, unknown>): DocQuery {
     untagged: s.untagged === true || s.untagged === "true" ? true : undefined,
     trash: s.trash === true || s.trash === "true" ? true : undefined,
     sort: typeof s.sort === "string" ? s.sort : undefined,
+    mode: s.mode === "semantic" || s.mode === "hybrid" ? s.mode : undefined,
   };
 }
 
@@ -76,7 +87,11 @@ export const viewRoute = createRoute({ getParentRoute: () => appRoute, path: "/v
 export const trashRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/trash",
-  component: () => <DocumentsPage trash />,
+  component: () => (
+    <React.Suspense fallback={null}>
+      <TrashDocuments trash />
+    </React.Suspense>
+  ),
 });
 
 export const settingsRoute = createRoute({
@@ -97,12 +112,17 @@ export const spaceSettingsRoute = createRoute({
   component: SpaceSettingsPage,
 });
 
+const askRoute = createRoute({ getParentRoute: () => appRoute, path: "/ask", component: AskPage });
+const notificationsRoute = createRoute({ getParentRoute: () => appRoute, path: "/notifications", component: NotificationsPage });
+
 export const adminRoute = createRoute({ getParentRoute: () => appRoute, path: "/admin/$section", component: AdminPage });
 const adminIndex = createRoute({ getParentRoute: () => appRoute, path: "/admin", component: AdminPage });
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
   setupRoute,
+  inviteRoute,
+  shareRoute,
   appRoute.addChildren([
     homeRoute,
     inboxRoute,
@@ -115,6 +135,8 @@ const routeTree = rootRoute.addChildren([
     spaceSettingsRoute,
     adminIndex,
     adminRoute,
+    askRoute,
+    notificationsRoute,
   ]),
 ]);
 

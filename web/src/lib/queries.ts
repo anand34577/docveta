@@ -1,7 +1,18 @@
 import { keepPreviousData, QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import type {
+  AIProvider,
+  AISuggestion,
   Channel,
+  Conversation,
+  CustomField,
+  Invite,
+  NotificationPrefs,
+  Share,
+  SimilarDoc,
+  VersionInfo,
+  WatchedFolder,
+  Workflow,
   DirectoryEntry,
   DocQuery,
   Document,
@@ -78,6 +89,8 @@ export function docParams(q: DocQuery, cursor?: string | null) {
     untagged: q.untagged,
     trash: q.trash,
     sort: q.sort,
+    mode: q.mode,
+    facets: cursor ? undefined : true, // counts for the filter menus come with the first page
     cursor: cursor ?? undefined,
     limit: 60,
   };
@@ -181,6 +194,7 @@ export type DocPatch = Partial<{
   physical_location: string;
   inbox: boolean;
   space_id: string;
+  custom_fields: Record<string, unknown>;
 }>;
 
 export function useUpdateDocument(id: string) {
@@ -202,5 +216,83 @@ export function useCreateTaxonomy(kind: TaxonomyKind) {
   return useMutation({
     mutationFn: (body: { space_id: string; name: string; color?: string }) => api.post<TaxonomyItem>(`/${kind}`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["taxonomy", kind] }),
+  });
+}
+
+/* ---------------------------------------------------------------- Newer features */
+
+export function useCustomFields(spaceId?: string) {
+  return useQuery({
+    queryKey: ["custom-fields", spaceId ?? "all"],
+    queryFn: () => api.get<{ items: CustomField[] }>("/custom-fields", { space_id: spaceId }).then((r) => r.items),
+    staleTime: 60_000,
+  });
+}
+
+export function useSuggestions(docId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["document", docId, "suggestions"],
+    queryFn: () => api.get<{ items: AISuggestion[] }>(`/documents/${docId}/suggestions`).then((r) => r.items),
+    enabled,
+  });
+}
+
+export function useSimilar(docId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["document", docId, "similar"],
+    queryFn: () => api.get<{ items: SimilarDoc[] }>(`/documents/${docId}/similar`).then((r) => r.items),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useVersions(docId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["document", docId, "versions"],
+    queryFn: () => api.get<{ items: VersionInfo[] }>(`/documents/${docId}/versions`).then((r) => r.items),
+    enabled,
+  });
+}
+
+export function useShares(docId?: string) {
+  return useQuery({
+    queryKey: ["shares", docId ?? "all"],
+    queryFn: () => api.get<{ items: Share[] }>("/shares", { document_id: docId }).then((r) => r.items),
+  });
+}
+
+export function useAIProviders() {
+  return useQuery({ queryKey: ["ai-providers"], queryFn: () => api.get<{ items: AIProvider[] }>("/admin/ai/providers").then((r) => r.items) });
+}
+
+export function useInvites() {
+  return useQuery({ queryKey: ["invites"], queryFn: () => api.get<{ items: Invite[] }>("/admin/invites").then((r) => r.items) });
+}
+
+export function useFolders() {
+  return useQuery({ queryKey: ["folders"], queryFn: () => api.get<{ items: WatchedFolder[]; roots: string[] }>("/admin/folders") });
+}
+
+export function useWorkflows(spaceId?: string) {
+  return useQuery({
+    queryKey: ["workflows", spaceId ?? "all"],
+    queryFn: () => api.get<{ items: Workflow[] }>("/workflows", { space_id: spaceId }).then((r) => r.items),
+  });
+}
+
+export function useConversations() {
+  return useQuery({ queryKey: ["conversations"], queryFn: () => api.get<{ items: Conversation[] }>("/ai/conversations").then((r) => r.items) });
+}
+
+export function useNotificationPrefs() {
+  return useQuery({ queryKey: ["notification-prefs"], queryFn: () => api.get<NotificationPrefs>("/me/notification-prefs") });
+}
+
+/** True when an AI provider is configured and enabled (cached: it rarely changes). */
+export function useAIEnabled() {
+  return useQuery({
+    queryKey: ["ai-enabled"],
+    queryFn: () => api.get<{ enabled: boolean; chat: boolean; embeddings: boolean }>("/ai/status").catch(() => ({ enabled: false, chat: false, embeddings: false })),
+    staleTime: 5 * 60_000,
   });
 }

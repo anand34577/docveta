@@ -16,6 +16,8 @@ export interface Space {
   kind: "personal" | "shared";
   description: string;
   color: string;
+  split_on_separators?: boolean;
+  read_asn_barcodes?: boolean;
   ai_policy: "off" | "local_only" | "any";
   ai_apply_mode: "suggest" | "auto";
   default_language: string;
@@ -93,6 +95,9 @@ export interface Document {
   has_thumbnail: boolean;
   note_count: number;
   version: number;
+  has_derived?: boolean;
+  custom_fields?: CustomValue[];
+  suggestion_count?: number;
   deleted_at?: string | null;
   snippet?: Segment[];
   matched_page?: number;
@@ -102,6 +107,8 @@ export interface DocumentList {
   items: Document[];
   total?: number;
   next_cursor: string | null;
+  mode?: "keyword" | "semantic" | "hybrid";
+  facets?: Facets;
 }
 
 export interface TaxonomyItem {
@@ -152,6 +159,8 @@ export interface Stats {
   trash: number;
   added_this_week: number;
   bytes: number;
+  ocr_available?: boolean;
+  trash_retention_days?: number;
 }
 
 export interface SavedView {
@@ -181,6 +190,7 @@ export interface DocQuery {
   untagged?: boolean;
   trash?: boolean;
   sort?: string;
+  mode?: "keyword" | "semantic" | "hybrid";
 }
 
 export interface Notification {
@@ -198,7 +208,7 @@ export interface Channel {
   id: UUID;
   system: boolean;
   name: string;
-  type: "gotify" | "email" | "ntfy" | "webhook";
+  type: "gotify" | "email" | "ntfy" | "webhook" | "apprise";
   config: Record<string, string>;
   events: string[];
   enabled: boolean;
@@ -348,4 +358,226 @@ export interface AuditEntry {
   ip: string;
   user_agent: string;
   details: Record<string, unknown>;
+}
+
+/* ---- Custom fields, AI, sharing, invitations, workflows, folders ---- */
+
+export type FieldType = "text" | "longtext" | "integer" | "decimal" | "monetary" | "date" | "boolean" | "url" | "select" | "multiselect" | "document";
+
+export interface CustomField {
+  id: UUID;
+  space_id: UUID;
+  name: string;
+  data_type: FieldType;
+  options: { choices?: string[]; currency?: string } & Record<string, unknown>;
+  document_count: number;
+}
+
+export interface CustomValue {
+  field_id: UUID;
+  name: string;
+  data_type: FieldType;
+  value: unknown;
+  currency?: string | null;
+}
+
+export interface AISuggestion {
+  id: UUID;
+  field: "tag" | "correspondent" | "document_type" | "document_date" | "title" | "custom_field";
+  value: Record<string, unknown>;
+  confidence: number;
+  status: string;
+}
+
+export interface AIProvider {
+  id: UUID;
+  name: string;
+  base_url: string;
+  chat_model: string;
+  embedding_model: string;
+  is_local: boolean;
+  is_default: boolean;
+  enabled: boolean;
+  timeout_seconds: number;
+  max_concurrency: number;
+  has_api_key: boolean;
+  last_error: string;
+  last_ok_at?: string | null;
+}
+
+export interface AITestResult {
+  ok: boolean;
+  error?: string | null;
+  models: string[];
+  chat_model_found?: boolean | null;
+  embedding_model_found?: boolean | null;
+}
+
+export interface SimilarDoc {
+  document: Document;
+  score: number;
+  reason: "meaning" | "details";
+}
+
+export interface Citation {
+  n: number;
+  document_id: UUID;
+  title: string;
+  page: number;
+  snippet: string;
+}
+
+export interface Conversation {
+  id: UUID;
+  title: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  id: UUID;
+  role: "user" | "assistant";
+  content: string;
+  citations: Citation[];
+  created_at: string;
+}
+
+export interface VersionInfo {
+  version_no: number;
+  note: string;
+  created_by?: Ref | null;
+  created_at: string;
+  size_bytes: number;
+  mime_type: string;
+  current: boolean;
+}
+
+export interface Share {
+  id: UUID;
+  kind: "document" | "view";
+  document_id?: UUID | null;
+  view_id?: UUID | null;
+  title: string;
+  allow_download: boolean;
+  has_password: boolean;
+  note: string;
+  expires_at?: string | null;
+  access_count: number;
+  last_access_at?: string | null;
+  created_by: string;
+  created_at: string;
+  status: "active" | "expired" | "revoked";
+}
+
+export interface PublicDoc {
+  id: UUID;
+  title: string;
+  document_date?: string | null;
+  mime_type: string;
+  page_count?: number | null;
+  size_bytes: number;
+  has_archive: boolean;
+  has_thumbnail: boolean;
+  has_derived: boolean;
+}
+
+export interface PublicShare {
+  kind: string;
+  title: string;
+  requires_password: boolean;
+  allow_download: boolean;
+  expires_at?: string | null;
+  documents: PublicDoc[];
+}
+
+export interface InviteSpace {
+  space_id: UUID;
+  role: SpaceRole;
+  name?: string | null;
+}
+
+export interface Invite {
+  id: UUID;
+  email?: string | null;
+  display_name: string;
+  is_admin: boolean;
+  spaces: InviteSpace[];
+  note: string;
+  invited_by: string;
+  created_at: string;
+  expires_at: string;
+  accepted_at?: string | null;
+  status: "pending" | "accepted" | "expired" | "revoked";
+}
+
+export interface InvitePreview {
+  email?: string | null;
+  display_name: string;
+  invited_by: string;
+  expires_at: string;
+  password_login: boolean;
+}
+
+export interface WatchedFolder {
+  id: UUID;
+  path: string;
+  space_id: UUID;
+  enabled: boolean;
+  recursive: boolean;
+  subfolders: "none" | "tag" | "space";
+  tag_ids: UUID[];
+  after_import: "move" | "delete";
+  stable_seconds: number;
+  last_scan_at?: string | null;
+  last_error: string;
+  imported_count: number;
+  failed_count: number;
+}
+
+export interface WorkflowAction {
+  type: "add_tags" | "remove_tags" | "set_correspondent" | "set_document_type" | "set_field" | "set_inbox" | "move_to_space" | "notify" | "webhook" | "run_ai";
+  names?: string[];
+  name?: string;
+  field_id?: UUID;
+  value?: unknown;
+  space_id?: UUID;
+  to?: "owner" | "space_owners" | "space_members";
+  title?: string;
+  message?: string;
+  url?: string;
+}
+
+export interface Workflow {
+  id: UUID;
+  space_id: UUID;
+  name: string;
+  enabled: boolean;
+  trigger: "added" | "processed" | "updated" | "schedule";
+  schedule_time: string;
+  conditions: Record<string, unknown>;
+  actions: WorkflowAction[];
+  last_run_at?: string | null;
+  run_count: number;
+}
+
+export interface WorkflowRun {
+  id: UUID;
+  document_id?: UUID | null;
+  document_title: string;
+  trigger: string;
+  status: "done" | "skipped" | "failed";
+  summary: string;
+  ran_at: string;
+}
+
+export interface Facets {
+  tags: Record<string, number>;
+  correspondents: Record<string, number>;
+  types: Record<string, number>;
+  statuses: Record<string, number>;
+}
+
+export interface NotificationPrefs {
+  quiet_enabled: boolean;
+  quiet_start: string;
+  quiet_end: string;
 }

@@ -3,9 +3,11 @@ import { Command } from "cmdk";
 import { Dialog as D } from "radix-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, FileText, Home, Inbox, Moon, Search, Settings, Sun, Trash2, Upload } from "lucide-react";
+import { ArrowRight, FileText, FolderOpen, Home, Inbox, Moon, Search, Settings, Sun, Tag, Trash2, Upload } from "lucide-react";
 import { api } from "@/lib/api";
-import { useSavedViews } from "@/lib/queries";
+import { useSavedViews, useTaxonomy } from "@/lib/queries";
+import { useCurrentUser } from "./app-shell";
+import { spaceLabel } from "@/lib/utils";
 import { useUI } from "@/stores/ui";
 import { useFilePicker } from "./app-shell";
 
@@ -31,6 +33,11 @@ export function CommandPalette() {
   const navigate = useNavigate();
   const pick = useFilePicker();
   const views = useSavedViews();
+  const me = useCurrentUser();
+  const tags = useTaxonomy("tags");
+  const needle = dq.toLowerCase();
+  const spaceHits = needle ? me.spaces.filter((s) => spaceLabel(s).toLowerCase().includes(needle)).slice(0, 4) : [];
+  const tagHits = needle ? [...new Map((tags.data ?? []).filter((t) => t.name.toLowerCase().includes(needle)).map((t) => [t.name.toLowerCase(), t])).values()].slice(0, 5) : [];
   const results = useQuery({
     queryKey: ["suggest", dq],
     queryFn: ({ signal }) => api.get<{ items: Suggestion[] }>("/documents/suggest", { q: dq, limit: 8 }, signal).then((r) => r.items),
@@ -78,6 +85,18 @@ export function CommandPalette() {
                       <span className="flex-1 truncate">{r.title}</span>
                     </Command.Item>
                   ))}
+                  {spaceHits.map((s) => (
+                    <Command.Item key={s.id} value={`space-${s.id}`} className={item} onSelect={() => go(() => navigate({ to: "/documents", search: { space_id: [s.id] } }))}>
+                      <FolderOpen />
+                      <span className="flex-1 truncate">Open space {spaceLabel(s)}</span>
+                    </Command.Item>
+                  ))}
+                  {tagHits.map((t) => (
+                    <Command.Item key={t.id} value={`tag-${t.id}`} className={item} onSelect={() => go(() => navigate({ to: "/documents", search: { tag_id: [t.id] } }))}>
+                      <Tag />
+                      <span className="flex-1 truncate">Documents tagged {t.name}</span>
+                    </Command.Item>
+                  ))}
                   <Command.Item
                     value="search-all"
                     className={item}
@@ -106,6 +125,11 @@ export function CommandPalette() {
                     {(views.data ?? []).map((v) => (
                       <Command.Item key={v.id} value={`view-${v.id}`} className={item} onSelect={() => go(() => navigate({ to: "/views/$id", params: { id: v.id } }))}>
                         <FileText /> {v.name}
+                      </Command.Item>
+                    ))}
+                    {me.spaces.map((s) => (
+                      <Command.Item key={s.id} value={`space-${s.id}`} className={item} onSelect={() => go(() => navigate({ to: "/documents", search: { space_id: [s.id] } }))}>
+                        <FolderOpen /> {spaceLabel(s)}
                       </Command.Item>
                     ))}
                     <Command.Item value="trash" className={item} onSelect={() => go(() => navigate({ to: "/trash" }))}>

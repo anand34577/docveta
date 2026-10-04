@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +24,15 @@ import (
 	"github.com/anand34577/docveta/internal/storage"
 )
 
+// OfficeConverter turns Office documents into PDF (implemented by package office).
+type OfficeConverter interface {
+	Enabled(ctx context.Context) bool
+	Convert(ctx context.Context, r io.Reader, ext string) ([]byte, error)
+}
+
 type Service struct {
+	// Office is optional; without it Office documents are rejected at processing time.
+	Office   OfficeConverter
 	pool     *pgxpool.Pool
 	store    storage.Store
 	pdf      *PDF
@@ -139,11 +148,31 @@ func (s *Service) preprocess(ctx context.Context, a jobs.PreprocessArgs) error {
 		thumbW      int
 		thumbH      int
 		thumbFailed bool
+		derived     []byte        // a working copy: HEIC/AVIF as JPEG, Office documents as PDF
+		derivedMime               = documents.MimeJPEG
+		pdfSrc      io.ReadSeeker = r // what the PDF case reads (the converted copy for Office documents)
+		pdfSize                   = size
+		mime                      = d.Mime
 	)
 
+	// Word, Excel, PowerPoint and OpenDocument files become PDF first; from there on they
+	// are processed like any PDF, and the original stays untouched.
+	if documents.IsOffice(d.Mime) {
+		if s.Office == nil || !s.Office.Enabled(ctx) {
+			return s.fail(ctx, d, "Office documents need the document converter (Gotenberg). Ask an administrator to set it up, then process this document again.")
+		}
+		pdf, err := s.Office.Convert(ctx, r, documents.ExtFor(d.Mime))
+		if err != nil {
+			s.log.Warn("office conversion failed", "document", d.ID, "err", err)
+			return s.fail(ctx, d, "This document couldn't be converted to PDF ("+err.Error()+"). You can still download the original.")
+		}
+		derived, derivedMime, mime = pdf, documents.MimePDF, documents.MimePDF
+		pdfSrc, pdfSize = bytes.NewReader(pdf), int64(len(pdf))
+	}
+
 	switch {
-	case d.Mime == documents.MimePDF:
-		info, err := s.pdf.Inspect(r, size, "", maxTextPages)
+	case mime == documents.MimePDF:
+		info, err := s.pdf.Inspect(pdfSrc, pdfSize, "", maxTextPages)
 		if errors.Is(err, ErrPassword) {
 			return s.setStatus(ctx, s.pool, d.ID, "needs_password", "needs_password",
 				"This PDF is password protected. Docveta can't read it until it's unlocked.")
@@ -153,6 +182,9 @@ func (s *Service) preprocess(ctx context.Context, a jobs.PreprocessArgs) error {
 			return s.fail(ctx, d, "This PDF appears to be damaged and couldn't be read. You can still download it.")
 		}
 		pageCount = info.PageCount
+		if _, handled := s.batchBarcodes(ctx, d, pdfSrc, pdfSize); handled {
+			return nil // the batch is being split into separate documents
+		}
 		for i, t := range info.Texts {
 			if !forceOCR && cfg.SkipOCRWithText && HasUsableText(t) {
 				embedded[i+1] = t
@@ -176,10 +208,27 @@ func (s *Service) preprocess(ctx context.Context, a jobs.PreprocessArgs) error {
 		pageCount = 1
 		ocrAll = true
 		if d.Mime == documents.MimeTIFF {
-			pageCount = 0 // multi-page TIFF: worker reports pages
+			pageCount = 0 // unknown unless we can count the directories below
+			if ra, ok := r.(io.ReaderAt); ok {
+				if n, err := documents.TIFFPages(ra, size); err == nil {
+					pageCount = n
+				}
+			}
 		}
 	case documents.NeedsWorkerConversion(d.Mime):
 		ocrAll = true
+		pageCount = 1
+		img, jpg, err := modernToJPEG(r, d.Mime)
+		if err != nil {
+			// Leave it to a worker with the "convert" capability, or show a placeholder.
+			s.log.Warn("heic/avif decode failed", "document", d.ID, "err", err)
+			pageCount = 0
+			thumbFailed = true
+		} else {
+			derived = jpg
+			thumb, thumbW, thumbH, err = Thumbnail(img, 1)
+			thumbFailed = err != nil
+		}
 	case d.Mime == documents.MimeText:
 		b, err := io.ReadAll(io.LimitReader(r, 8<<20))
 		if err != nil {
@@ -225,6 +274,20 @@ func (s *Service) preprocess(ctx context.Context, a jobs.PreprocessArgs) error {
 				uuid.Must(uuid.NewV7()), d.ID, version, key, sum, len(thumb), thumbW, thumbH); err != nil {
 				return err
 			}
+		}
+		if derived != nil {
+			key, sum, err := storage.PutBytes(s.store, derived)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO document_files (id, document_id, kind, version_no, blob_key, sha256, mime_type, size_bytes)
+				VALUES ($1,$2,'derived',$3,$4,$5,$6,$7)
+				ON CONFLICT (document_id, kind, version_no) DO UPDATE SET blob_key=excluded.blob_key, sha256=excluded.sha256,
+					mime_type=excluded.mime_type, size_bytes=excluded.size_bytes, created_at=now()`,
+				uuid.Must(uuid.NewV7()), d.ID, version, key, sum, derivedMime, len(derived)); err != nil {
+				return err
+			}
+			d.Mime = derivedMime // OCR tasks and routing see the converted copy
 		}
 		var pc any
 		if pageCount > 0 {

@@ -37,6 +37,16 @@ func (a *API) registerNotify(mux router) {
 		}
 		return a.Notify.MarkRead(r.Context(), p, in.IDs)
 	}))
+	mux.HandleFunc("GET /api/v1/me/notification-prefs", handle(func(r *http.Request, p *auth.Principal) (notify.Prefs, error) {
+		return a.Notify.Prefs(r.Context(), p.UserID)
+	}))
+	mux.HandleFunc("PUT /api/v1/me/notification-prefs", handleAction(func(r *http.Request, p *auth.Principal) (notify.Prefs, error) {
+		in, err := decode[notify.Prefs](r)
+		if err != nil {
+			return notify.Prefs{}, err
+		}
+		return a.Notify.SetPrefs(r.Context(), p, in)
+	}))
 	mux.HandleFunc("GET /api/v1/notification-channels", handle(func(r *http.Request, p *auth.Principal) (map[string]any, error) {
 		c, err := a.Notify.Channels(r.Context(), p)
 		return map[string]any{"items": c, "event_types": notify.EventTypes}, err
@@ -89,6 +99,19 @@ func (a *API) registerNotify(mux router) {
 		ch, unsubscribe := a.Notify.Hub.Subscribe(p.UserID)
 		defer unsubscribe()
 		fmt.Fprint(w, "retry: 5000\n\n")
+		// Browsers send Last-Event-ID when they reconnect: replay what was missed while offline.
+		lastID := r.Header.Get("Last-Event-ID")
+		if lastID == "" {
+			lastID = r.URL.Query().Get("last_event_id") // the web app reconnects by hand and passes it here
+		}
+		if last, err := uuid.Parse(lastID); err == nil {
+			if missed, err := a.Notify.Since(r.Context(), p.UserID, last); err == nil {
+				for _, n := range missed {
+					data, _ := json.Marshal(n)
+					fmt.Fprintf(w, "id: %s\nevent: notification\ndata: %s\n\n", n.ID, data)
+				}
+			}
+		}
 		_ = rc.Flush()
 		ping := time.NewTicker(25 * time.Second)
 		defer ping.Stop()
@@ -102,7 +125,7 @@ func (a *API) registerNotify(mux router) {
 				}
 			case m := <-ch:
 				data, _ := json.Marshal(m.Data)
-				if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", m.Event, data); err != nil {
+				if _, err := fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", m.ID, m.Event, data); err != nil {
 					return
 				}
 			}

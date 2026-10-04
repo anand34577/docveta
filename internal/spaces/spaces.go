@@ -57,10 +57,13 @@ type Space struct {
 	AIPolicy        string    `json:"ai_policy"`
 	AIApplyMode     string    `json:"ai_apply_mode"`
 	DefaultLanguage string    `json:"default_language"`
-	Role            Role      `json:"role"` // the caller's role
-	MemberCount     int       `json:"member_count"`
-	DocumentCount   int       `json:"document_count"`
-	CreatedAt       time.Time `json:"created_at"`
+	// Batch scanning: split a scanned batch at separator sheets; read ASN labels.
+	SplitOnSeparators bool      `json:"split_on_separators"`
+	ReadASNBarcodes   bool      `json:"read_asn_barcodes"`
+	Role              Role      `json:"role"` // the caller's role
+	MemberCount       int       `json:"member_count"`
+	DocumentCount     int       `json:"document_count"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type Member struct {
@@ -142,13 +145,13 @@ func (s *Service) VisibleSpaceIDs(ctx context.Context, userID uuid.UUID) ([]uuid
 // ---------------------------------------------------------------------------
 
 const spaceCols = `s.id, s.name, s.kind, s.description, s.color, s.ai_policy, s.ai_apply_mode, s.default_language,
-	m.role, (SELECT count(*) FROM space_members x WHERE x.space_id=s.id),
+	s.split_on_separators, s.read_asn_barcodes, m.role, (SELECT count(*) FROM space_members x WHERE x.space_id=s.id),
 	(SELECT count(*) FROM documents d WHERE d.space_id=s.id AND d.deleted_at IS NULL), s.created_at`
 
 func scanSpace(row pgx.Row) (*Space, error) {
 	var sp Space
 	err := row.Scan(&sp.ID, &sp.Name, &sp.Kind, &sp.Description, &sp.Color, &sp.AIPolicy, &sp.AIApplyMode,
-		&sp.DefaultLanguage, &sp.Role, &sp.MemberCount, &sp.DocumentCount, &sp.CreatedAt)
+		&sp.DefaultLanguage, &sp.SplitOnSeparators, &sp.ReadASNBarcodes, &sp.Role, &sp.MemberCount, &sp.DocumentCount, &sp.CreatedAt)
 	return &sp, err
 }
 
@@ -191,6 +194,9 @@ type Input struct {
 	AIPolicy        *string `json:"ai_policy"`
 	AIApplyMode     *string `json:"ai_apply_mode"`
 	DefaultLanguage *string `json:"default_language"`
+
+	SplitOnSeparators *bool `json:"split_on_separators"`
+	ReadASNBarcodes   *bool `json:"read_asn_barcodes"`
 }
 
 func (in *Input) validate(create bool) error {
@@ -263,8 +269,9 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id uuid.UUID, i
 	}
 	_, err := s.pool.Exec(ctx, `UPDATE spaces SET
 		name=coalesce($2,name), description=coalesce($3,description), color=coalesce($4,color),
-		ai_policy=coalesce($5,ai_policy), ai_apply_mode=coalesce($6,ai_apply_mode), default_language=coalesce($7,default_language)
-		WHERE id=$1`, id, in.Name, in.Description, in.Color, in.AIPolicy, in.AIApplyMode, in.DefaultLanguage)
+		ai_policy=coalesce($5,ai_policy), ai_apply_mode=coalesce($6,ai_apply_mode), default_language=coalesce($7,default_language),
+		split_on_separators=coalesce($8,split_on_separators), read_asn_barcodes=coalesce($9,read_asn_barcodes)
+		WHERE id=$1`, id, in.Name, in.Description, in.Color, in.AIPolicy, in.AIApplyMode, in.DefaultLanguage, in.SplitOnSeparators, in.ReadASNBarcodes)
 	if err != nil {
 		return nil, err
 	}

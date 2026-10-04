@@ -217,8 +217,12 @@ func (s *Service) finalize(ctx context.Context, runID uuid.UUID) error {
 			}
 			if cfg.Archive && hasBoxes && (d.Mime == documents.MimePDF || documents.IsImage(d.Mime) || documents.NeedsWorkerConversion(d.Mime)) {
 				payload, _ := json.Marshal(map[string]any{"ocr_result_key": resultKey})
+				// The archive worker receives the working copy (e.g. HEIC converted to JPEG), so route by its type.
+				workMime := d.Mime
+				_ = tx.QueryRow(ctx, `SELECT mime_type FROM document_files WHERE document_id=$1 AND kind='derived' AND version_no=$2`,
+					docID, d.CurrentVersion).Scan(&workMime)
 				if _, err := tx.Exec(ctx, `INSERT INTO processing_tasks (id, document_id, ocr_run_id, type, mime_type, payload, priority, max_attempts)
-					VALUES ($1,$2,$3,'archive',$4,$5,$6,$7)`, uuid.Must(uuid.NewV7()), docID, runID, d.Mime, payload, jobs.PriorityBulk, cfg.MaxAttempts); err != nil {
+					VALUES ($1,$2,$3,'archive',$4,$5,$6,$7)`, uuid.Must(uuid.NewV7()), docID, runID, workMime, payload, jobs.PriorityBulk, cfg.MaxAttempts); err != nil {
 					return err
 				}
 				defer s.signal()
@@ -435,6 +439,23 @@ func (s *Service) classify(ctx context.Context, a jobs.ClassifyArgs) error {
 		if status == "processing" {
 			if _, err := tx.Exec(ctx, `UPDATE documents SET status='ready', processing_stage='done' WHERE id=$1`, a.DocumentID); err != nil {
 				return err
+			}
+			var wf bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflows WHERE space_id=$1 AND enabled AND trigger='processed')`, spaceID).Scan(&wf); err == nil && wf {
+				if err := s.queue.InsertTx(ctx, tx, jobs.WorkflowArgs{DocumentID: a.DocumentID, Trigger: "processed"},
+					&river.InsertOpts{Priority: jobs.PriorityNormal, MaxAttempts: 3}); err != nil {
+					return err
+				}
+			}
+			// Optional AI step (suggestions, embeddings): only when a provider is set up and the
+			// space allows it, and always after the document is already usable.
+			var ai bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM ai_providers WHERE enabled) AND
+				(SELECT ai_policy <> 'off' FROM spaces WHERE id=$1)`, spaceID).Scan(&ai); err == nil && ai {
+				if err := s.queue.InsertTx(ctx, tx, jobs.AIArgs{DocumentID: a.DocumentID, Classify: true, Embed: true},
+					&river.InsertOpts{Priority: jobs.PriorityBackground, MaxAttempts: 2}); err != nil {
+					return err
+				}
 			}
 		}
 		if ownerID != nil {

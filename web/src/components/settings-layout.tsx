@@ -19,18 +19,18 @@ export function SettingsLayout({ title, description, base, sections, active, chi
   children: React.ReactNode;
 }) {
   return (
-    <div className="mx-auto max-w-5xl px-4 pb-16 pt-6 sm:px-6 sm:pt-8">
+    <div className="mx-auto max-w-5xl page-x pb-16 pt-6 sm:pt-8">
       <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
       {description && <p className="mt-1 text-sm text-muted">{description}</p>}
       <div className="mt-6 flex flex-col gap-6 md:flex-row">
-        <nav className="-mx-4 flex gap-1 overflow-x-auto px-4 md:mx-0 md:w-52 md:shrink-0 md:flex-col md:px-0" aria-label="Sections">
+        <nav className="-mx-4 flex gap-1 overflow-x-auto scrollbar-thin border-b border-border px-4 pb-2 sm:-mx-6 sm:px-6 md:mx-0 md:w-52 md:shrink-0 md:flex-col md:border-0 md:px-0 md:pb-0" aria-label="Sections">
           {sections.map((s) => (
             <Link
               key={s.id}
               to={`${base}/${s.id}` as "/"}
               className={cn(
                 "flex shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-fg [&_svg]:size-4",
-                active === s.id && "bg-surface-2 font-medium text-fg",
+                active === s.id && "bg-surface-2 font-medium text-fg md:shadow-[inset_2px_0_0_var(--accent)]",
               )}
             >
               {s.icon}

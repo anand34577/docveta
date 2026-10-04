@@ -21,6 +21,7 @@ import (
 
 	"github.com/anand34577/docveta/internal/apperr"
 	"github.com/anand34577/docveta/internal/auth"
+	"github.com/anand34577/docveta/internal/customfields"
 	"github.com/anand34577/docveta/internal/jobs"
 	"github.com/anand34577/docveta/internal/opt"
 	"github.com/anand34577/docveta/internal/platform/db"
@@ -204,6 +205,10 @@ func (s *Service) Ingest(ctx context.Context, p *auth.Principal, in IngestInput,
 			VALUES ($1,$2,'original',1,$3,$4,$5,$6)`, uuid.Must(uuid.NewV7()), id, blobKey, sum, mime, n); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, `INSERT INTO document_versions (document_id, version_no, note, created_by) VALUES ($1,1,'Uploaded',$2)`,
+			id, ownerOf(p)); err != nil {
+			return err
+		}
 		for _, t := range dedupe(in.TagIDs) {
 			if _, err := tx.Exec(ctx, `INSERT INTO document_tags (document_id, tag_id) VALUES ($1,$2)`, id, t); err != nil {
 				return err
@@ -223,13 +228,25 @@ func (s *Service) Ingest(ctx context.Context, p *auth.Principal, in IngestInput,
 		if err := ReindexMeta(ctx, tx, id); err != nil {
 			return err
 		}
-		return s.queue.InsertTx(ctx, tx, jobs.PreprocessArgs{DocumentID: id, Version: 1, Priority: priority},
-			&river.InsertOpts{Priority: priority, MaxAttempts: 5})
+		if err := s.queue.InsertTx(ctx, tx, jobs.PreprocessArgs{DocumentID: id, Version: 1, Priority: priority},
+			&river.InsertOpts{Priority: priority, MaxAttempts: 5}); err != nil {
+			return err
+		}
+		return s.enqueueWorkflows(ctx, tx, in.SpaceID, id, "added")
 	})
 	if err != nil {
 		return nil, err
 	}
 	return s.get(ctx, id)
+}
+
+// enqueueWorkflows schedules the workflows of a space for a trigger, if there are any.
+func (s *Service) enqueueWorkflows(ctx context.Context, tx pgx.Tx, spaceID, docID uuid.UUID, trigger string) error {
+	var any bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflows WHERE space_id=$1 AND enabled AND trigger=$2)`, spaceID, trigger).Scan(&any); err != nil || !any {
+		return err
+	}
+	return s.queue.InsertTx(ctx, tx, jobs.WorkflowArgs{DocumentID: docID, Trigger: trigger}, &river.InsertOpts{Priority: jobs.PriorityNormal, MaxAttempts: 3})
 }
 
 func ownerOf(p *auth.Principal) *uuid.UUID {
@@ -344,9 +361,11 @@ func (s *Service) Get(ctx context.Context, p *auth.Principal, id uuid.UUID) (*Do
 }
 
 type ListResult struct {
-	Items      []*Document `json:"items"`
-	Total      *int        `json:"total,omitempty"`
-	NextCursor *string     `json:"next_cursor"`
+	Mode       string         `json:"mode,omitempty"` // how the results were found: keyword | semantic | hybrid
+	Items      []*Document    `json:"items"`
+	Total      *int           `json:"total,omitempty"`
+	NextCursor *string        `json:"next_cursor"`
+	Facets     *search.Facets `json:"facets,omitempty"`
 }
 
 // List runs a search and hydrates the results.
@@ -370,7 +389,7 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, q search.Query) (
 			d.MatchedPage = res.Hits[i].MatchedPage
 		}
 	}
-	return &ListResult{Items: docs, Total: res.Total, NextCursor: res.NextCursor}, nil
+	return &ListResult{Items: docs, Total: res.Total, NextCursor: res.NextCursor, Facets: res.Facets}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -378,18 +397,24 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, q search.Query) (
 // ---------------------------------------------------------------------------
 
 type UpdateInput struct {
-	Title            opt.Field[string]      `json:"title"`
-	DocumentDate     opt.Field[string]      `json:"document_date"`
-	CorrespondentID  opt.Field[uuid.UUID]   `json:"correspondent_id"`
-	DocumentTypeID   opt.Field[uuid.UUID]   `json:"document_type_id"`
-	TagIDs           opt.Field[[]uuid.UUID] `json:"tag_ids"`
-	AddTagIDs        []uuid.UUID            `json:"add_tag_ids"`
-	RemoveTagIDs     []uuid.UUID            `json:"remove_tag_ids"`
-	Language         opt.Field[string]      `json:"language"`
-	ASN              opt.Field[int64]       `json:"asn"`
-	PhysicalLocation opt.Field[string]      `json:"physical_location"`
-	Inbox            opt.Field[bool]        `json:"inbox"`
-	SpaceID          opt.Field[uuid.UUID]   `json:"space_id"`
+	Title           opt.Field[string]      `json:"title"`
+	DocumentDate    opt.Field[string]      `json:"document_date"`
+	CorrespondentID opt.Field[uuid.UUID]   `json:"correspondent_id"`
+	DocumentTypeID  opt.Field[uuid.UUID]   `json:"document_type_id"`
+	TagIDs          opt.Field[[]uuid.UUID] `json:"tag_ids"`
+	AddTagIDs       []uuid.UUID            `json:"add_tag_ids"`
+	RemoveTagIDs    []uuid.UUID            `json:"remove_tag_ids"`
+	// By name, so one bulk action can tag documents from different spaces: each document's
+	// own space gets the tag (created if missing) or loses the same-named one.
+	AddTagNames    []string `json:"add_tag_names"`
+	RemoveTagNames []string `json:"remove_tag_names"`
+	// CustomFields sets custom field values by field id; null clears one.
+	CustomFields     map[string]json.RawMessage `json:"custom_fields"`
+	Language         opt.Field[string]          `json:"language"`
+	ASN              opt.Field[int64]           `json:"asn"`
+	PhysicalLocation opt.Field[string]          `json:"physical_location"`
+	Inbox            opt.Field[bool]            `json:"inbox"`
+	SpaceID          opt.Field[uuid.UUID]       `json:"space_id"`
 }
 
 var langRe = regexp.MustCompile(`^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$`)
@@ -568,6 +593,31 @@ func (s *Service) updateTx(ctx context.Context, tx pgx.Tx, p *auth.Principal, id
 	if err := v.Err(); err != nil {
 		return err
 	}
+	for _, name := range in.AddTagNames {
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		tid, err := taxonomy.EnsureByName(ctx, tx, taxonomy.Tags, targetSpace, truncate(name, 100))
+		if err != nil {
+			return err
+		}
+		in.AddTagIDs = append(in.AddTagIDs, tid)
+	}
+	if len(in.RemoveTagNames) > 0 {
+		lower := make([]string, len(in.RemoveTagNames))
+		for i, n := range in.RemoveTagNames {
+			lower[i] = strings.ToLower(strings.TrimSpace(n))
+		}
+		rows, err := tx.Query(ctx, `SELECT id FROM tags WHERE space_id=$1 AND lower(name) = ANY($2)`, targetSpace, lower)
+		if err != nil {
+			return err
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+		if err != nil {
+			return err
+		}
+		in.RemoveTagIDs = append(in.RemoveTagIDs, ids...)
+	}
 
 	tagsChanged := false
 	if in.TagIDs.Set {
@@ -608,7 +658,19 @@ func (s *Service) updateTx(ctx context.Context, tx pgx.Tx, p *auth.Principal, id
 		changes["remove_tag_ids"] = in.RemoveTagIDs
 		tagsChanged = true
 	}
-	if len(sets) == 0 && !tagsChanged {
+	if moving {
+		if err := customfields.RemapOnMove(ctx, tx, id, targetSpace); err != nil {
+			return err
+		}
+	}
+	cfChanges, err := customfields.SetValues(ctx, tx, id, targetSpace, in.CustomFields, "user")
+	if err != nil {
+		return err
+	}
+	if len(cfChanges) > 0 {
+		changes["custom_fields"] = cfChanges
+	}
+	if len(sets) == 0 && !tagsChanged && len(cfChanges) == 0 && !moving {
 		return nil
 	}
 	sets = append(sets, "version=version+1")
@@ -630,7 +692,12 @@ func (s *Service) updateTx(ctx context.Context, tx pgx.Tx, p *auth.Principal, id
 		return err
 	}
 	if _, ok := changes["language"]; ok {
-		return ReindexContent(ctx, tx, id)
+		if err := ReindexContent(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	if p.Kind != auth.KindSystem { // changes made by workflows and other automation never trigger workflows
+		return s.enqueueWorkflows(ctx, tx, targetSpace, id, "updated")
 	}
 	return nil
 }
@@ -1052,6 +1119,9 @@ type Stats struct {
 	Trash      int   `json:"trash"`
 	AddedWeek  int   `json:"added_this_week"`
 	Bytes      int64 `json:"bytes"`
+	// Filled in by the API layer.
+	OCRAvailable       bool `json:"ocr_available"`
+	TrashRetentionDays int  `json:"trash_retention_days"`
 }
 
 func (s *Service) Stats(ctx context.Context, p *auth.Principal) (*Stats, error) {
@@ -1070,4 +1140,38 @@ func (s *Service) Stats(ctx context.Context, p *auth.Principal) (*Stats, error) 
 		coalesce(sum(size_bytes) FILTER (WHERE deleted_at IS NULL), 0)
 		FROM documents WHERE space_id = ANY($1)`, ids).Scan(&st.Total, &st.Inbox, &st.Processing, &st.Failed, &st.Trash, &st.AddedWeek, &st.Bytes)
 	return &st, err
+}
+
+type EmptyTrashResult struct {
+	Purged  int `json:"purged"`
+	Skipped int `json:"skipped"`
+}
+
+// EmptyTrash permanently deletes every trashed document the caller is allowed to purge
+// (their own uploads, or anything in spaces they own). Others are skipped, not failed.
+func (s *Service) EmptyTrash(ctx context.Context, p *auth.Principal) (*EmptyTrashResult, error) {
+	ids, err := s.spaces.VisibleSpaceIDs(ctx, p.UserID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id FROM documents WHERE space_id = ANY($1) AND deleted_at IS NOT NULL`, ids)
+	if err != nil {
+		return nil, err
+	}
+	docs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, err
+	}
+	res := &EmptyTrashResult{}
+	for _, id := range docs {
+		if err := s.Purge(ctx, p, id); err != nil {
+			if ae, ok := apperr.As(err); ok && ae.Kind != apperr.KindInternal {
+				res.Skipped++
+				continue
+			}
+			return res, err
+		}
+		res.Purged++
+	}
+	return res, nil
 }

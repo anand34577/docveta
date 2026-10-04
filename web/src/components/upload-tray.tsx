@@ -1,12 +1,64 @@
 import * as React from "react";
 import { Link } from "@tanstack/react-router";
 import { AlertCircle, CheckCircle2, ChevronDown, Copy, FileUp, RotateCw, X } from "lucide-react";
-import { useUploads } from "@/stores/uploads";
-import { useUI } from "@/stores/ui";
-import { cn, formatBytes } from "@/lib/utils";
+import { shouldAsk, useUploads } from "@/stores/uploads";
+import { cn, formatBytes, spaceDot, spaceLabel } from "@/lib/utils";
+import { Dialog, DialogContent, DialogFooter } from "./ui/overlay";
+import { Checkbox } from "./ui/misc";
 import { Button } from "./ui/button";
-import { NativeSelect } from "./ui/input";
 import { useCurrentUser } from "./app-shell";
+
+/** Asks which space new files go to (only when there is a choice). */
+export function UploadChooser() {
+  const { pending, choose, cancelChoice } = useUploads();
+  const me = useCurrentUser();
+  const writable = me.spaces.filter((s) => s.role !== "viewer");
+  const [space, setSpace] = React.useState("");
+  const [always, setAlways] = React.useState(false);
+  React.useEffect(() => {
+    if (!pending) return;
+    let last: string | null = null;
+    try {
+      last = localStorage.getItem("docveta.uploadSpace");
+    } catch {
+      /* private mode */
+    }
+    setSpace(writable.find((s) => s.id === last)?.id ?? writable.find((s) => s.kind === "personal")?.id ?? writable[0]?.id ?? "");
+    setAlways(!shouldAsk());
+  }, [pending]);
+  if (!pending) return null;
+  const n = pending.files.length;
+  return (
+    <Dialog open onOpenChange={(o) => !o && cancelChoice()}>
+      <DialogContent size="sm" title={`Upload ${n === 1 ? "1 file" : `${n} files`} to…`} description={n === 1 ? pending.files[0].name : `${pending.files[0].name} and ${n - 1} more`}>
+        <div role="radiogroup" aria-label="Space" className="space-y-1.5">
+          {writable.map((s) => (
+            <button
+              key={s.id}
+              role="radio"
+              aria-checked={space === s.id}
+              onClick={() => setSpace(s.id)}
+              className={cn("flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors", space === s.id ? "border-accent bg-accent-soft/60 font-medium" : "border-border hover:bg-surface-2")}
+            >
+              <span className={cn("size-2.5 rounded-full", spaceDot(s.color))} />
+              <span className="flex-1">{spaceLabel(s)}</span>
+              <span className="text-xs text-subtle">{s.kind === "personal" ? "only you" : `${s.member_count} members`}</span>
+            </button>
+          ))}
+        </div>
+        <label className="mt-4 flex items-center gap-2 text-sm text-muted">
+          <Checkbox checked={always} onCheckedChange={(v) => setAlways(v === true)} /> Don't ask again, always use this space
+        </label>
+        <DialogFooter>
+          <Button onClick={cancelChoice}>Cancel</Button>
+          <Button variant="primary" disabled={!space} onClick={() => choose(space, always)}>
+            Upload
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /** Floating panel showing upload progress; collapses when everything is done. */
 export function UploadTray() {
@@ -99,11 +151,7 @@ export function UploadTray() {
 /** Full-window drop zone shown while dragging files over the app. */
 export function DropOverlay() {
   const [dragging, setDragging] = React.useState(false);
-  const add = useUploads((s) => s.add);
-  const me = useCurrentUser();
-  const { uploadSpaceId, setUploadSpaceId } = useUI();
-  const writable = me.spaces.filter((s) => s.role !== "viewer");
-  const target = writable.find((s) => s.id === uploadSpaceId) ?? writable[0];
+  const request = useUploads((s) => s.request);
   const depth = React.useRef(0);
 
   React.useEffect(() => {
@@ -127,7 +175,7 @@ export function DropOverlay() {
       depth.current = 0;
       setDragging(false);
       const files = Array.from(e.dataTransfer?.files ?? []);
-      if (files.length && target) add(files, target.id);
+      if (files.length) request(files);
     };
     window.addEventListener("dragenter", enter);
     window.addEventListener("dragleave", leave);
@@ -139,7 +187,7 @@ export function DropOverlay() {
       window.removeEventListener("dragover", over);
       window.removeEventListener("drop", drop);
     };
-  }, [add, target]);
+  }, [request]);
 
   if (!dragging) return null;
   return (
@@ -147,20 +195,7 @@ export function DropOverlay() {
       <div className="pointer-events-auto flex w-full max-w-md flex-col items-center rounded-2xl border-2 border-dashed border-accent bg-surface/95 px-8 py-10 text-center shadow-lg">
         <FileUp className="size-10 text-accent" />
         <div className="mt-3 text-lg font-semibold">Drop to upload</div>
-        {writable.length > 1 ? (
-          <label className="mt-3 flex items-center gap-2 text-sm text-muted">
-            into
-            <NativeSelect className="w-auto" value={target?.id} onChange={(e) => setUploadSpaceId(e.target.value)}>
-              {writable.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.kind === "personal" ? "Personal" : s.name}
-                </option>
-              ))}
-            </NativeSelect>
-          </label>
-        ) : (
-          <div className="mt-1 text-sm text-muted">PDFs, photos and scans</div>
-        )}
+        <div className="mt-1 text-sm text-muted">PDFs, photos, scans and Office files</div>
       </div>
     </div>
   );

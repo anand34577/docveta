@@ -205,6 +205,11 @@ func Changes(ctx context.Context, q db.Querier, sp *spaces.Service, p *auth.Prin
 				WHERE space_id = ANY($1) AND change_seq > $2
 			UNION ALL SELECT change_seq, entity_type, entity_id, space_id, true, NULL FROM tombstones
 				WHERE (space_id = ANY($1) OR space_id IS NULL) AND change_seq > $2
+			-- Documents moved out of a space the client can see. If the client can see the new space too,
+			-- the document's own change entry covers it (a delete would arrive after the update and win).
+			UNION ALL SELECT r.change_seq, r.entity_type, r.entity_id, r.space_id, true, NULL FROM space_removals r
+				WHERE r.space_id = ANY($1) AND r.change_seq > $2
+				  AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = r.entity_id AND d.space_id = ANY($1))
 		) c ORDER BY change_seq LIMIT $3`, ids, since, limit+1)
 	if err != nil {
 		return nil, err

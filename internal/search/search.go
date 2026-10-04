@@ -23,27 +23,31 @@ import (
 // Query combines the free-text query (with inline filters) and structured filters
 // coming from UI chips / API parameters. Both are ANDed.
 type Query struct {
-	Q                string      `json:"q,omitempty"`
-	SpaceIDs         []uuid.UUID `json:"space_ids,omitempty"`
-	TagIDs           []uuid.UUID `json:"tag_ids,omitempty"`     // documents must have all
-	AnyTagIDs        []uuid.UUID `json:"any_tag_ids,omitempty"` // documents must have at least one
-	NotTagIDs        []uuid.UUID `json:"not_tag_ids,omitempty"`
-	CorrespondentIDs []uuid.UUID `json:"correspondent_ids,omitempty"`
-	TypeIDs          []uuid.UUID `json:"type_ids,omitempty"`
-	DateFrom         *string     `json:"date_from,omitempty"`
-	DateTo           *string     `json:"date_to,omitempty"`
-	AddedFrom        *time.Time  `json:"added_from,omitempty"`
-	AddedTo          *time.Time  `json:"added_to,omitempty"`
-	Inbox            *bool       `json:"inbox,omitempty"`
-	Statuses         []string    `json:"statuses,omitempty"`
-	Untagged         bool        `json:"untagged,omitempty"`
-	NoCorrespondent  bool        `json:"no_correspondent,omitempty"`
-	NoType           bool        `json:"no_type,omitempty"`
-	Trash            bool        `json:"trash,omitempty"`
-	Sort             string      `json:"sort,omitempty"` // relevance|added|-added|date|-date|title|-title|updated
-	Cursor           string      `json:"cursor,omitempty"`
-	Limit            int         `json:"limit,omitempty"`
-	WithTotal        bool        `json:"-"`
+	Q                string         `json:"q,omitempty"`
+	SpaceIDs         []uuid.UUID    `json:"space_ids,omitempty"`
+	TagIDs           []uuid.UUID    `json:"tag_ids,omitempty"`     // documents must have all
+	AnyTagIDs        []uuid.UUID    `json:"any_tag_ids,omitempty"` // documents must have at least one
+	NotTagIDs        []uuid.UUID    `json:"not_tag_ids,omitempty"`
+	CorrespondentIDs []uuid.UUID    `json:"correspondent_ids,omitempty"`
+	TypeIDs          []uuid.UUID    `json:"type_ids,omitempty"`
+	DateFrom         *string        `json:"date_from,omitempty"`
+	DateTo           *string        `json:"date_to,omitempty"`
+	AddedFrom        *time.Time     `json:"added_from,omitempty"`
+	AddedTo          *time.Time     `json:"added_to,omitempty"`
+	Inbox            *bool          `json:"inbox,omitempty"`
+	Statuses         []string       `json:"statuses,omitempty"`
+	Untagged         bool           `json:"untagged,omitempty"`
+	Custom           []CustomFilter `json:"custom,omitempty"` // custom field comparisons, ANDed
+	Mode             string         `json:"mode,omitempty"`   // keyword (default) | semantic | hybrid
+	IDs              []uuid.UUID    `json:"-"`                // restrict to these documents (used by meaning-based search)
+	NoCorrespondent  bool           `json:"no_correspondent,omitempty"`
+	NoType           bool           `json:"no_type,omitempty"`
+	Trash            bool           `json:"trash,omitempty"`
+	Sort             string         `json:"sort,omitempty"` // relevance|added|-added|date|-date|title|-title|updated|cf:<field id> (prefix - for descending)
+	Cursor           string         `json:"cursor,omitempty"`
+	Limit            int            `json:"limit,omitempty"`
+	WithTotal        bool           `json:"-"`
+	WithFacets       bool           `json:"-"` // also count matching documents per tag, correspondent, type and status
 }
 
 type Hit struct {
@@ -57,6 +61,15 @@ type Result struct {
 	Hits       []Hit   `json:"hits"`
 	Total      *int    `json:"total,omitempty"`
 	NextCursor *string `json:"next_cursor"`
+	Facets     *Facets `json:"facets,omitempty"`
+}
+
+// Facets are document counts under the current filters, keyed by the id (or status name).
+type Facets struct {
+	Tags           map[string]int `json:"tags"`
+	Correspondents map[string]int `json:"correspondents"`
+	Types          map[string]int `json:"types"`
+	Statuses       map[string]int `json:"statuses"`
 }
 
 type Service struct {
@@ -141,6 +154,23 @@ func (s *Service) Search(ctx context.Context, p *auth.Principal, q Query) (*Resu
 	if err != nil {
 		return nil, err
 	}
+	return s.run(ctx, visible, q)
+}
+
+// Matches reports whether one document satisfies a query, regardless of any user (used
+// by workflow conditions). Only the document's own space is considered.
+func (s *Service) Matches(ctx context.Context, spaceID, docID uuid.UUID, q Query) (bool, error) {
+	q.SpaceIDs, q.IDs, q.Limit, q.Cursor, q.WithTotal, q.Trash, q.Sort, q.Mode = []uuid.UUID{spaceID}, []uuid.UUID{docID}, 1, "", false, false, "-added", ""
+	res, err := s.run(ctx, []uuid.UUID{spaceID}, q)
+	if err != nil {
+		return false, err
+	}
+	return len(res.Hits) > 0, nil
+}
+
+// run executes a query within the given visible spaces.
+func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Result, error) {
+	var err error
 	spaceIDs := visible
 	if len(q.SpaceIDs) > 0 {
 		spaceIDs = nil
@@ -153,7 +183,13 @@ func (s *Service) Search(ctx context.Context, p *auth.Principal, q Query) (*Resu
 	if q.Limit <= 0 || q.Limit > 200 {
 		q.Limit = 50
 	}
-	parsed := Parse(q.Q, s.now())
+	var known map[string]bool
+	if strings.Contains(q.Q, ":") {
+		if known, err = s.fieldNames(ctx, visible); err != nil {
+			return nil, err
+		}
+	}
+	parsed := ParseWith(q.Q, s.now(), known)
 	if len(parsed.Spaces) > 0 {
 		rows, err := s.pool.Query(ctx, `SELECT id FROM spaces WHERE id = ANY($1) AND lower(name) = ANY($2)`, spaceIDs, lowerAll(parsed.Spaces))
 		if err != nil {
@@ -169,6 +205,9 @@ func (s *Service) Search(ctx context.Context, p *auth.Principal, q Query) (*Resu
 
 	b := &builder{}
 	b.where("d.space_id = ANY(" + b.arg(spaceIDs) + ")")
+	if len(q.IDs) > 0 {
+		b.where("d.id = ANY(" + b.arg(q.IDs) + ")")
+	}
 	if q.Trash {
 		b.where("d.deleted_at IS NOT NULL")
 	} else {
@@ -226,6 +265,11 @@ func (s *Service) Search(ctx context.Context, p *auth.Principal, q Query) (*Resu
 	}
 	if q.NoType {
 		b.where("d.document_type_id IS NULL")
+	}
+
+	// Custom fields
+	for _, f := range append(slices.Clone(q.Custom), parsed.Custom...) {
+		b.where(customCond(b, f))
 	}
 
 	// Dates
@@ -288,7 +332,7 @@ func (s *Service) Search(ctx context.Context, p *auth.Principal, q Query) (*Resu
 	if sort == "relevance" && !hasText {
 		sort = "-added"
 	}
-	var keyExpr, dir string
+	var keyExpr, dir, cfOrder string
 	switch strings.TrimPrefix(sort, "-") {
 	case "relevance":
 	case "added":
@@ -300,7 +344,14 @@ func (s *Service) Search(ctx context.Context, p *auth.Principal, q Query) (*Resu
 	case "updated":
 		keyExpr = "to_char(d.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US')"
 	default:
-		return nil, apperr.Invalid("sort", "Unknown sort order")
+		base := strings.TrimPrefix(sort, "-")
+		if !strings.HasPrefix(base, "cf:") {
+			return nil, apperr.Invalid("sort", "Unknown sort order")
+		}
+		var err error
+		if cfOrder, err = s.customOrder(ctx, strings.TrimPrefix(base, "cf:"), spaceIDs); err != nil {
+			return nil, err
+		}
 	}
 	dir = "ASC"
 	if strings.HasPrefix(sort, "-") {
@@ -319,6 +370,9 @@ func (s *Service) Search(ctx context.Context, p *auth.Principal, q Query) (*Resu
 	var order, pageCond string
 	if sort == "relevance" {
 		order = "rank DESC, d.id DESC"
+	} else if cfOrder != "" {
+		// Custom field values have no cheap keyset key, so these sorts page by offset.
+		order = cfOrder + " " + dir + " NULLS LAST, d.id " + dir
 	} else {
 		order = keyExpr + " " + dir + ", d.id " + dir
 		if cur.Key != nil {
@@ -362,7 +416,7 @@ func (s *Service) Search(ctx context.Context, p *auth.Principal, q Query) (*Resu
 	if len(res) > q.Limit {
 		res = res[:q.Limit]
 		last := res[len(res)-1]
-		if sort == "relevance" {
+		if sort == "relevance" || cfOrder != "" {
 			out.NextCursor = encodeCursor(cursor{Offset: cur.Offset + q.Limit})
 		} else {
 			k := last.key
@@ -379,6 +433,11 @@ func (s *Service) Search(ctx context.Context, p *auth.Principal, q Query) (*Resu
 			return nil, err
 		}
 		out.Total = &n
+	}
+	if q.WithFacets && q.Cursor == "" {
+		if out.Facets, err = s.facets(ctx, where, countArgs); err != nil {
+			return nil, err
+		}
 	}
 	if hasText && len(out.Hits) > 0 {
 		if err := s.addSnippets(ctx, out, tsq, parsed); err != nil {
@@ -478,4 +537,36 @@ func (s *Service) Suggest(ctx context.Context, p *auth.Principal, text string, l
 		err := r.Scan(&x.ID, &x.Title)
 		return x, err
 	})
+}
+
+// facets counts the matching documents per tag, correspondent, type and status in one round trip.
+func (s *Service) facets(ctx context.Context, where string, args []any) (*Facets, error) {
+	rows, err := s.pool.Query(ctx, `WITH m AS MATERIALIZED (SELECT d.id, d.correspondent_id, d.document_type_id, d.status FROM documents d WHERE `+where+`)
+		SELECT 'tag', dt.tag_id::text, count(*) FROM m JOIN document_tags dt ON dt.document_id = m.id GROUP BY 2
+		UNION ALL SELECT 'correspondent', correspondent_id::text, count(*) FROM m WHERE correspondent_id IS NOT NULL GROUP BY 2
+		UNION ALL SELECT 'type', document_type_id::text, count(*) FROM m WHERE document_type_id IS NOT NULL GROUP BY 2
+		UNION ALL SELECT 'status', status, count(*) FROM m GROUP BY 2`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("facets: %w", err)
+	}
+	defer rows.Close()
+	f := &Facets{Tags: map[string]int{}, Correspondents: map[string]int{}, Types: map[string]int{}, Statuses: map[string]int{}}
+	for rows.Next() {
+		var kind, key string
+		var n int
+		if err := rows.Scan(&kind, &key, &n); err != nil {
+			return nil, err
+		}
+		switch kind {
+		case "tag":
+			f.Tags[key] = n
+		case "correspondent":
+			f.Correspondents[key] = n
+		case "type":
+			f.Types[key] = n
+		default:
+			f.Statuses[key] = n
+		}
+	}
+	return f, rows.Err()
 }

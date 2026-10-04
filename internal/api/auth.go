@@ -74,7 +74,7 @@ func (a *API) registerAuth(mux router) {
 			httpx.Error(w, r, err)
 			return
 		}
-		token, u, err := a.Identity.Login(r.Context(), in.Email, in.Password, r.UserAgent())
+		res, err := a.Identity.Login(r.Context(), in.Email, in.Password, r.UserAgent())
 		if err != nil {
 			if ae, ok := apperr.As(err); ok && ae.Kind == apperr.KindRateLimited {
 				if s, ok := ae.Extra["retry_after_seconds"].(int); ok {
@@ -84,8 +84,13 @@ func (a *API) registerAuth(mux router) {
 			httpx.Error(w, r, err)
 			return
 		}
-		a.setSessionCookie(w, token)
-		httpx.JSON(w, http.StatusOK, u)
+		if res.Challenge != "" {
+			// The password was right but the account needs a second factor: no session yet.
+			httpx.JSON(w, http.StatusOK, map[string]any{"two_factor_required": true, "challenge": res.Challenge})
+			return
+		}
+		a.setSessionCookie(w, res.Token)
+		httpx.JSON(w, http.StatusOK, res.User)
 	})
 
 	mux.HandleFunc("POST /api/v1/auth/logout", func(w http.ResponseWriter, r *http.Request) {

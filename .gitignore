@@ -43,3 +43,10 @@ Claude-Account-*.cmd
 /workers/onnx/dist/
 /dist/
 /build/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.iml

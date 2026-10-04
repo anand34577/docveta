@@ -58,6 +58,8 @@ type Service struct {
 
 	loginLimiter   *ratelimit.Limiter // per IP+email
 	loginIPLimiter *ratelimit.Limiter // per IP
+	totpLimiter    *ratelimit.Limiter // second-factor attempts per user
+	inviteLimiter  *ratelimit.Limiter // invitation lookups per IP
 
 	// OnEvent is called after security events (set by the notify wiring).
 	OnEvent func(ctx context.Context, e Event)
@@ -68,6 +70,8 @@ func NewService(pool *pgxpool.Pool, cfg *config.Config, keys *crypto.Keys, st *s
 		pool: pool, cfg: cfg, keys: keys, settings: st, audit: al, log: log,
 		loginLimiter:   ratelimit.New(10, 15*time.Minute),
 		loginIPLimiter: ratelimit.New(60, 15*time.Minute),
+		totpLimiter:    ratelimit.New(8, 5*time.Minute),
+		inviteLimiter:  ratelimit.New(60, 15*time.Minute),
 	}
 }
 

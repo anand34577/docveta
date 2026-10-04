@@ -16,13 +16,18 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 
+	"github.com/anand34577/docveta/internal/ai"
 	"github.com/anand34577/docveta/internal/api"
 	"github.com/anand34577/docveta/internal/audit"
 	"github.com/anand34577/docveta/internal/auth"
+	"github.com/anand34577/docveta/internal/customfields"
+	"github.com/anand34577/docveta/internal/docedit"
 	"github.com/anand34577/docveta/internal/documents"
+	"github.com/anand34577/docveta/internal/folders"
 	"github.com/anand34577/docveta/internal/identity"
 	"github.com/anand34577/docveta/internal/jobs"
 	"github.com/anand34577/docveta/internal/notify"
+	"github.com/anand34577/docveta/internal/office"
 	"github.com/anand34577/docveta/internal/pipeline"
 	"github.com/anand34577/docveta/internal/platform/config"
 	"github.com/anand34577/docveta/internal/platform/crypto"
@@ -30,11 +35,14 @@ import (
 	"github.com/anand34577/docveta/internal/platform/httpx"
 	"github.com/anand34577/docveta/internal/platform/settings"
 	"github.com/anand34577/docveta/internal/search"
+	"github.com/anand34577/docveta/internal/shares"
 	"github.com/anand34577/docveta/internal/spaces"
 	"github.com/anand34577/docveta/internal/storage"
 	"github.com/anand34577/docveta/internal/taxonomy"
+	"github.com/anand34577/docveta/internal/tus"
 	"github.com/anand34577/docveta/internal/views"
 	"github.com/anand34577/docveta/internal/webui"
+	"github.com/anand34577/docveta/internal/workflows"
 )
 
 type App struct {
@@ -49,15 +57,23 @@ type App struct {
 	Queue    *jobs.Queue
 	River    *river.Client[pgx.Tx]
 
-	Audit     *audit.Log
-	Identity  *identity.Service
-	Spaces    *spaces.Service
-	Taxonomy  *taxonomy.Service
-	Search    *search.Service
-	Documents *documents.Service
-	Pipeline  *pipeline.Service
-	Notify    *notify.Service
-	Views     *views.Service
+	Audit        *audit.Log
+	Identity     *identity.Service
+	Spaces       *spaces.Service
+	Taxonomy     *taxonomy.Service
+	CustomFields *customfields.Service
+	Search       *search.Service
+	Documents    *documents.Service
+	Docedit      *docedit.Service
+	Pipeline     *pipeline.Service
+	Notify       *notify.Service
+	Views        *views.Service
+	Shares       *shares.Service
+	AI           *ai.Service
+	Office       *office.Converter
+	Folders      *folders.Service
+	Workflows    *workflows.Service
+	Uploads      *tus.Service
 
 	Version string
 }
@@ -86,10 +102,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, version stri
 	if a.Keys, err = crypto.NewKeys(cfg.SecretKey); err != nil {
 		return nil, err
 	}
-	if a.FS, err = storage.NewFS(cfg.DataDir); err != nil {
+	if a.Store, a.FS, err = OpenStore(ctx, cfg); err != nil {
 		return nil, err
 	}
-	a.Store = a.FS
 	a.Settings = settings.New(a.Pool, a.Keys)
 	a.Queue = &jobs.Queue{}
 
@@ -97,10 +112,18 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, version stri
 	a.Spaces = spaces.NewService(a.Pool)
 	a.Identity = identity.NewService(a.Pool, cfg, a.Keys, a.Settings, a.Audit, log)
 	a.Taxonomy = taxonomy.NewService(a.Pool, a.Spaces)
+	a.CustomFields = customfields.NewService(a.Pool, a.Spaces)
 	a.Search = search.NewService(a.Pool, a.Spaces)
 	a.Documents = documents.NewService(a.Pool, a.Store, a.Spaces, a.Search, a.Queue, log, cfg.MaxUploadBytes)
+	a.Office = office.New(a.Settings, cfg.GotenbergURL)
+	if a.Uploads, err = tus.NewService(a.Pool, a.Documents, a.Spaces, cfg.DataDir, cfg.MaxUploadBytes); err != nil {
+		return nil, err
+	}
+	a.Documents.OfficeEnabled = func() bool { return a.Office.Enabled(context.Background()) }
 	a.Notify = notify.NewService(a.Pool, a.Keys, a.Settings, cfg, log)
 	a.Views = views.NewService(a.Pool, a.Spaces)
+	a.AI = ai.NewService(a.Pool, a.Keys, a.Spaces, a.Audit)
+	a.Shares = shares.NewService(a.Pool, a.Spaces, a.Documents, a.Search, a.Keys, a.Audit)
 	return a, nil
 }
 
@@ -135,9 +158,16 @@ func (a *App) startJobs(ctx context.Context) error {
 		return err
 	}
 	a.Pipeline = pipeline.NewService(a.Pool, a.Store, a.PDF, a.Queue, a.Settings, a.Log)
+	a.Docedit = docedit.NewService(a.Documents, a.PDF)
+	a.Workflows = workflows.NewService(a.Pool, a.Spaces, a.Search, a.Documents, a.Queue, a.Log)
+	a.Workflows.Webhook = notify.PostJSON
+	a.Folders = folders.NewService(a.Pool, a.Documents, a.Queue, a.Audit, a.Log, a.Cfg.DataDir, a.Cfg.WatchRoots)
+	a.Pipeline.Office = a.Office
 	pipeline.ServerVersion = a.Version
 
 	taxonomy.ReindexHook = a.Pipeline.EnqueueReindex
+	a.Notify.Defer = a.Queue.EmitAt
+	a.CustomFields.Reindex = a.Pipeline.EnqueueReindex
 	a.Identity.OnEvent = func(ctx context.Context, e identity.Event) {
 		_ = a.Queue.Emit(ctx, jobs.Event{Type: e.Type, Title: e.Title, Body: e.Body, Severity: "warning",
 			Recipients: []uuid.UUID{e.UserID}, Link: "/settings/security"})
@@ -150,6 +180,11 @@ func (a *App) startJobs(ctx context.Context) error {
 	river.AddWorker(workers, &pipeline.ReindexWorker{S: a.Pipeline})
 	river.AddWorker(workers, &pipeline.LeaseReaperWorker{S: a.Pipeline})
 	river.AddWorker(workers, &notify.Worker{S: a.Notify})
+	river.AddWorker(workers, &ai.Worker{S: a.AI})
+	river.AddWorker(workers, &folders.ScanWorker{S: a.Folders})
+	river.AddWorker(workers, &docedit.SplitWorker{S: a.Docedit})
+	river.AddWorker(workers, &workflows.RunWorker{S: a.Workflows})
+	river.AddWorker(workers, &workflows.ScheduleWorker{S: a.Workflows})
 	river.AddWorker(workers, &MaintenanceWorker{A: a})
 
 	a.River, err = river.NewClient(riverpgxv5.New(a.Pool), &river.Config{
@@ -162,6 +197,16 @@ func (a *App) startJobs(ctx context.Context) error {
 					return jobs.LeaseReaperArgs{}, &river.InsertOpts{MaxAttempts: 1}
 				},
 				&river.PeriodicJobOpts{RunOnStart: true}),
+			river.NewPeriodicJob(river.PeriodicInterval(15*time.Second),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return jobs.FolderScanArgs{}, &river.InsertOpts{MaxAttempts: 1, UniqueOpts: river.UniqueOpts{ByPeriod: 10 * time.Second}}
+				},
+				&river.PeriodicJobOpts{RunOnStart: false}),
+			river.NewPeriodicJob(river.PeriodicInterval(15*time.Minute),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return jobs.WorkflowScheduleArgs{}, &river.InsertOpts{MaxAttempts: 1}
+				},
+				&river.PeriodicJobOpts{RunOnStart: false}),
 			river.NewPeriodicJob(river.PeriodicInterval(10*time.Minute),
 				func() (river.JobArgs, *river.InsertOpts) {
 					return jobs.MaintenanceArgs{}, &river.InsertOpts{MaxAttempts: 1}
@@ -182,8 +227,8 @@ func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	m := newMetrics(a)
 	ap := api.New(api.Deps{
-		Cfg: a.Cfg, Log: a.Log, Pool: a.Pool, Store: a.Store, Identity: a.Identity, Spaces: a.Spaces, Taxonomy: a.Taxonomy,
-		Documents: a.Documents, Search: a.Search, Pipeline: a.Pipeline, Notify: a.Notify, Views: a.Views, Audit: a.Audit, Version: a.Version,
+		Cfg: a.Cfg, Log: a.Log, Pool: a.Pool, Store: a.Store, Identity: a.Identity, Spaces: a.Spaces, Taxonomy: a.Taxonomy, CustomFields: a.CustomFields,
+		Documents: a.Documents, Docedit: a.Docedit, Search: a.Search, Pipeline: a.Pipeline, Notify: a.Notify, Views: a.Views, Shares: a.Shares, AI: a.AI, Queue: a.Queue, Office: a.Office, Folders: a.Folders, Workflows: a.Workflows, Uploads: a.Uploads, Audit: a.Audit, Version: a.Version,
 	})
 	ap.Register(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
@@ -248,4 +293,23 @@ func (a *App) Close() {
 	if a.Pool != nil {
 		a.Pool.Close()
 	}
+}
+
+// OpenStore opens the blob store chosen by DOCVETA_STORAGE. The local FS is always
+// returned too: it is the scratch area for uploads in progress, and the store itself
+// for the default filesystem setup.
+func OpenStore(ctx context.Context, cfg *config.Config) (storage.Store, *storage.FS, error) {
+	fsStore, err := storage.NewFS(cfg.DataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cfg.Storage != "s3" {
+		return fsStore, fsStore, nil
+	}
+	s3, err := storage.NewS3(ctx, storage.S3Config{Endpoint: cfg.S3.Endpoint, Bucket: cfg.S3.Bucket, Region: cfg.S3.Region, AccessKey: cfg.S3.AccessKey,
+		SecretKey: cfg.S3.SecretKey, Prefix: cfg.S3.Prefix, Insecure: cfg.S3.Insecure, PathStyle: cfg.S3.PathStyle}, fsStore)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s3, fsStore, nil
 }

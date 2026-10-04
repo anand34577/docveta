@@ -15,6 +15,12 @@ import (
 	"time"
 )
 
+// S3 holds the settings of S3-compatible storage (DOCVETA_S3_*).
+type S3 struct {
+	Endpoint, Bucket, Region, AccessKey, SecretKey, Prefix string
+	Insecure, PathStyle                                    bool
+}
+
 type Config struct {
 	BaseURL     *url.URL
 	ListenAddr  string
@@ -41,6 +47,14 @@ type Config struct {
 	LocalOCR string
 	// Interactive is true when running in a terminal (not as a service or container).
 	Interactive bool
+	// GotenbergURL enables Office document support (DOCVETA_GOTENBERG_URL). Administrators
+	// can also set it in the web app.
+	GotenbergURL string
+	// Storage selects where documents are kept: "fs" (the data folder, default) or "s3".
+	Storage string
+	S3      S3
+	// WatchRoots limits where watched folders may be (DOCVETA_WATCH_ROOTS); default <data>/watch.
+	WatchRoots []string
 }
 
 func Load() (*Config, error) {
@@ -71,7 +85,14 @@ func Load() (*Config, error) {
 		JobWorkers:        envInt("DOCVETA_JOB_WORKERS", 4),
 		AllowLocalTargets: envBool("DOCVETA_ALLOW_LOCAL_TARGETS", false),
 		LocalOCR:          env("DOCVETA_LOCAL_OCR", "auto"),
-		Interactive:       interactive,
+		GotenbergURL:      env("DOCVETA_GOTENBERG_URL", ""),
+		WatchRoots:        splitList(os.Getenv("DOCVETA_WATCH_ROOTS")),
+		Storage:           strings.ToLower(env("DOCVETA_STORAGE", "fs")),
+		S3: S3{
+			Endpoint: env("DOCVETA_S3_ENDPOINT", ""), Bucket: env("DOCVETA_S3_BUCKET", ""), Region: env("DOCVETA_S3_REGION", ""),
+			Prefix: env("DOCVETA_S3_PREFIX", ""), Insecure: envBool("DOCVETA_S3_INSECURE", false), PathStyle: envBool("DOCVETA_S3_PATH_STYLE", false),
+		},
+		Interactive: interactive,
 	}
 	var errs []error
 
@@ -117,6 +138,23 @@ func Load() (*Config, error) {
 		errs = append(errs, errors.New("DOCVETA_SECRET_KEY must be at least 32 characters (or remove it and Docveta generates one). Back it up: it encrypts stored secrets"))
 	}
 	c.SecretKey = []byte(secret)
+
+	switch c.Storage {
+	case "fs":
+	case "s3":
+		var err error
+		if c.S3.AccessKey, err = secretFromEnv("DOCVETA_S3_ACCESS_KEY"); err != nil {
+			errs = append(errs, err)
+		}
+		if c.S3.SecretKey, err = secretFromEnv("DOCVETA_S3_SECRET_KEY"); err != nil {
+			errs = append(errs, err)
+		}
+		if c.S3.Endpoint == "" || c.S3.Bucket == "" {
+			errs = append(errs, errors.New("DOCVETA_STORAGE=s3 needs DOCVETA_S3_ENDPOINT and DOCVETA_S3_BUCKET"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("DOCVETA_STORAGE must be fs or s3 (got %q)", c.Storage))
+	}
 
 	// Docker: the database password lives in a generated file, not in the URL or .env.
 	if f := os.Getenv("DOCVETA_DATABASE_PASSWORD_FILE"); f != "" && c.DatabaseURL != "" {
@@ -187,4 +225,17 @@ func splitList(s string) []string {
 func isTerminal() bool {
 	fi, err := os.Stdout.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// secretFromEnv reads a credential from NAME or, preferably, from the file named by NAME_FILE
+// (Docker secrets), so it needn't appear in the environment.
+func secretFromEnv(name string) (string, error) {
+	if f := os.Getenv(name + "_FILE"); f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return "", fmt.Errorf("%s_FILE: %w", name, err)
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	return os.Getenv(name), nil
 }

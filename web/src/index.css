@@ -15,6 +15,7 @@
   --surface: oklch(1 0 0);
   --surface-2: oklch(0.965 0.003 270);
   --surface-3: oklch(0.94 0.004 270);
+  --sidebar: oklch(0.972 0.004 270);
   --border: oklch(0.912 0.005 270);
   --border-strong: oklch(0.85 0.007 270);
   --fg: oklch(0.22 0.012 270);
@@ -33,9 +34,9 @@
   --warning-soft: oklch(0.97 0.035 85);
   --ring: oklch(0.52 0.19 268 / 0.45);
   --overlay: oklch(0.2 0.01 270 / 0.45);
-  --shadow-sm: 0 1px 2px oklch(0.2 0.01 270 / 0.06);
-  --shadow-md: 0 4px 16px -4px oklch(0.2 0.01 270 / 0.12), 0 1px 3px oklch(0.2 0.01 270 / 0.06);
-  --shadow-lg: 0 16px 48px -12px oklch(0.2 0.01 270 / 0.25);
+  --shadow-sm: 0 1px 2px oklch(0.2 0.01 270 / 0.05);
+  --shadow-md: 0 6px 20px -6px oklch(0.2 0.01 270 / 0.14), 0 1px 3px oklch(0.2 0.01 270 / 0.05);
+  --shadow-lg: 0 20px 56px -16px oklch(0.2 0.01 270 / 0.28);
   color-scheme: light;
 }
 
@@ -44,6 +45,7 @@
   --surface: oklch(0.205 0.007 270);
   --surface-2: oklch(0.235 0.008 270);
   --surface-3: oklch(0.27 0.009 270);
+  --sidebar: oklch(0.185 0.006 270);
   --border: oklch(0.3 0.01 270);
   --border-strong: oklch(0.38 0.012 270);
   --fg: oklch(0.95 0.004 270);
@@ -76,6 +78,7 @@
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
+  --color-sidebar: var(--sidebar);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
   --color-fg: var(--fg);
@@ -97,8 +100,8 @@
 
   --radius-sm: 6px;
   --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 
   --shadow-sm: var(--shadow-sm);
   --shadow-md: var(--shadow-md);
@@ -153,6 +156,13 @@
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Horizontal page gutter shared by every page, so headers, filters and content line up. */
+@utility page-x {
+  padding-inline: 1rem;
+  @media (width >= 40rem) { padding-inline: 1.5rem; }
+  @media (width >= 64rem) { padding-inline: 2rem; }
 }
 
 /* Thin, unobtrusive scrollbars */

@@ -57,6 +57,16 @@ type WebhookConfig struct {
 	Secret string `json:"secret"`
 }
 
+// AppriseConfig sends through an Apprise API server (https://github.com/caronc/apprise-api),
+// which fans out to 100+ services. Use Key for a saved configuration, or URLs for
+// stateless delivery to one or more Apprise service URLs.
+type AppriseConfig struct {
+	URL  string `json:"url"`
+	Key  string `json:"key,omitempty"`
+	URLs string `json:"urls,omitempty"` // comma-separated Apprise URLs (stateless mode)
+	Tag  string `json:"tag,omitempty"`
+}
+
 type EmailConfig struct {
 	To string `json:"to"` // empty = the channel owner's account email
 }
@@ -145,6 +155,41 @@ func sendNtfy(ctx context.Context, c NtfyConfig, m Message) error {
 	return do(req)
 }
 
+func appriseType(sev string) string {
+	switch sev {
+	case "error":
+		return "failure"
+	case "warning":
+		return "warning"
+	case "success":
+		return "success"
+	}
+	return "info"
+}
+
+func sendApprise(ctx context.Context, c AppriseConfig, m Message) error {
+	payload := map[string]any{"title": m.Title, "body": m.Body, "type": appriseType(m.Severity)}
+	if m.URL != "" {
+		payload["body"] = m.Body + "\n" + m.URL
+	}
+	if c.Tag != "" {
+		payload["tag"] = c.Tag
+	}
+	endpoint := strings.TrimRight(c.URL, "/") + "/notify"
+	if c.Key != "" {
+		endpoint += "/" + url.PathEscape(c.Key)
+	} else {
+		payload["urls"] = c.URLs
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return do(req)
+}
+
 // sendWebhook posts the event as JSON with an HMAC-SHA256 signature header:
 // Docveta-Signature: t=<unix>,v1=<hex(hmac(secret, "<t>.<body>"))>
 func sendWebhook(ctx context.Context, c WebhookConfig, m Message) error {
@@ -168,6 +213,24 @@ func sendWebhook(ctx context.Context, c WebhookConfig, m Message) error {
 	req.Header.Set("User-Agent", "Docveta-Webhook/1")
 	req.Header.Set("Docveta-Event", m.Event.Type)
 	req.Header.Set("Docveta-Signature", "t="+ts+",v1="+hex.EncodeToString(mac.Sum(nil)))
+	return do(req)
+}
+
+// PostJSON posts a JSON document to a user-defined address (workflow webhooks). Like
+// notification channels it refuses local network addresses unless an administrator allows them.
+func PostJSON(ctx context.Context, rawURL string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Docveta-Workflow/1")
 	return do(req)
 }
 

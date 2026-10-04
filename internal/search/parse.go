@@ -29,6 +29,89 @@ type Parsed struct {
 	Languages      []string
 	ASN            *int64
 	Untagged       bool
+	Custom         []CustomFilter
+	// FilterTokens are the filter terms of the query (tag:x, from:"A B", ...), re-quoted, so
+	// the same filters can be applied without the free text (meaning-based search).
+	FilterTokens []string
+}
+
+// isFilter reports whether a token is a filter (not free text), mirroring ParseWith.
+func isFilter(t token, fields map[string]bool) bool {
+	if strings.EqualFold(t.text, "untagged") && !t.quoted {
+		return true
+	}
+	key, val, ok := strings.Cut(t.text, ":")
+	if !ok || t.startQuote || val == "" {
+		return false
+	}
+	switch strings.ToLower(key) {
+	case "tag", "tags", "from", "correspondent", "corr", "type", "space", "date", "created", "added", "lang", "language":
+		return true
+	case "is":
+		switch strings.ToLower(val) {
+		case "inbox", "processing", "failed", "ready", "locked", "encrypted":
+			return true
+		}
+		return false
+	case "asn":
+		_, ok := parseInt(val)
+		return ok
+	case "cf", "field":
+		_, ok := parseCustom("", val)
+		return ok
+	}
+	if fields[strings.ToLower(strings.TrimSpace(key))] {
+		_, ok := parseCustom(strings.TrimSpace(key), val)
+		return ok
+	}
+	return false
+}
+
+// requote turns a lexed filter token back into query text.
+func requote(t token) string {
+	s := t.text
+	if key, val, ok := strings.Cut(s, ":"); ok {
+		s = key + `:"` + val + `"`
+	}
+	if t.negate {
+		s = "-" + s
+	}
+	return s
+}
+
+// CustomFilter compares a custom field: cf:Amount>1500, cf:"Due date"<2026-12-31,
+// cf:Status=Paid, cf:Policy~LIC (contains). Without an operator it means "has a value".
+// A field's own name also works as the key when it's known: amount:>1500.
+type CustomFilter struct {
+	Name  string `json:"name"`
+	Op    string `json:"op"` // = != > >= < <= ~ or "" (has a value)
+	Value string `json:"value"`
+}
+
+func parseCustom(name, expr string) (CustomFilter, bool) {
+	for i, r := range expr {
+		if !strings.ContainsRune("=!<>~", r) {
+			continue
+		}
+		op := string(r)
+		rest := expr[i+1:]
+		if (r == '>' || r == '<' || r == '!') && strings.HasPrefix(rest, "=") {
+			op, rest = op+"=", rest[1:]
+		}
+		if op == "!" {
+			return CustomFilter{}, false
+		}
+		if name == "" { // cf:Name<op>value
+			name = strings.TrimSpace(expr[:i])
+		} else if strings.TrimSpace(expr[:i]) != "" {
+			return CustomFilter{}, false // amount:abc>5 isn't a filter
+		}
+		return CustomFilter{Name: name, Op: op, Value: strings.TrimSpace(rest)}, name != ""
+	}
+	if name == "" {
+		return CustomFilter{Name: strings.TrimSpace(expr)}, strings.TrimSpace(expr) != ""
+	}
+	return CustomFilter{Name: name, Op: "=", Value: strings.TrimSpace(expr)}, true
 }
 
 type token struct {
@@ -83,11 +166,18 @@ func lex(q string) []token {
 //	electricity "due date" -draft tag:utilities -tag:old from:bescom type:bill
 //	space:family date:2026 date:2026-01..2026-06 added:>30d is:inbox is:processing
 //	lang:hi asn:123 untagged
-func Parse(q string, now time.Time) Parsed {
+func Parse(q string, now time.Time) Parsed { return ParseWith(q, now, nil) }
+
+// ParseWith is Parse that also recognises the given custom field names (lower case) as
+// filter keys, e.g. amount:>1500.
+func ParseWith(q string, now time.Time, fields map[string]bool) Parsed {
 	var p Parsed
 	var free []string
 	toks := lex(q)
 	for i, t := range toks {
+		if isFilter(t, fields) {
+			p.FilterTokens = append(p.FilterTokens, requote(t))
+		}
 		key, val, hasKey := strings.Cut(t.text, ":")
 		if hasKey && !t.startQuote && val != "" {
 			k := strings.ToLower(key)
@@ -133,6 +223,18 @@ func Parse(q string, now time.Time) Parsed {
 					p.ASN = &n
 				}
 				continue
+			case "cf", "field":
+				if f, ok := parseCustom("", val); ok {
+					p.Custom = append(p.Custom, f)
+					continue
+				}
+			default:
+				if fields[strings.ToLower(strings.TrimSpace(key))] {
+					if f, ok := parseCustom(strings.TrimSpace(key), val); ok {
+						p.Custom = append(p.Custom, f)
+						continue
+					}
+				}
 			}
 		}
 		if strings.EqualFold(t.text, "untagged") && !t.quoted {

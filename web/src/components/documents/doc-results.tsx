@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDocuments } from "@/lib/queries";
-import type { DocQuery, Document } from "@/lib/types";
+import type { DocQuery, Document, Facets } from "@/lib/types";
 import { useSelection } from "@/stores/ui";
 import { Skeleton, Spinner } from "@/components/ui/misc";
 import { DocumentCard, DocumentRow } from "./doc-items";
@@ -10,7 +10,7 @@ interface Props {
   query: DocQuery;
   layout: "grid" | "list";
   empty: React.ReactNode;
-  onLoaded?: (info: { total?: number; items: Document[] }) => void;
+  onLoaded?: (info: { total?: number; items: Document[]; facets?: Facets; mode?: string }) => void;
 }
 
 /** Width of an element that may mount later (the results list appears after loading). */
@@ -34,13 +34,15 @@ export function DocumentResults({ query, layout, empty, onLoaded }: Props) {
   const res = useDocuments(query, { refetchWhileProcessing: true });
   const items = React.useMemo(() => res.data?.pages.flatMap((p) => p.items) ?? [], [res.data]);
   const total = res.data?.pages[0]?.total;
+  const facets = res.data?.pages[0]?.facets;
+  const mode = res.data?.pages[0]?.mode;
   const { ids, toggle, set } = useSelection();
   const selecting = ids.size > 0;
   const lastClicked = React.useRef<number | null>(null);
 
   React.useEffect(() => {
-    onLoaded?.({ total, items });
-  }, [total, items, onLoaded]);
+    onLoaded?.({ total, items, facets, mode });
+  }, [total, items, facets, mode, onLoaded]);
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const [listEl, setListEl] = React.useState<HTMLDivElement | null>(null);
@@ -88,13 +90,13 @@ export function DocumentResults({ query, layout, empty, onLoaded }: Props) {
 
   if (res.isLoading) {
     return layout === "grid" ? (
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4 px-4 sm:px-6">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4 page-x">
         {Array.from({ length: 12 }).map((_, i) => (
           <Skeleton key={i} className="aspect-[3/4.2] rounded-xl" />
         ))}
       </div>
     ) : (
-      <div className="space-y-2 px-4 sm:px-6">
+      <div className="space-y-2 page-x">
         {Array.from({ length: 10 }).map((_, i) => (
           <Skeleton key={i} className="h-14" />
         ))}
@@ -102,12 +104,12 @@ export function DocumentResults({ query, layout, empty, onLoaded }: Props) {
     );
   }
   if (res.isError) {
-    return <div className="px-6 py-10 text-center text-sm text-danger">{(res.error as Error).message}</div>;
+    return <div className="page-x py-10 text-center text-sm text-danger" role="alert">{(res.error as Error).message}</div>;
   }
   if (items.length === 0) return <>{empty}</>;
 
   return (
-    <div ref={setList} className={layout === "grid" ? "px-4 sm:px-6" : "border-t border-border"}>
+    <div ref={setList} className={layout === "grid" ? "page-x" : "border-t border-border"}>
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {vItems.map((row) => {
           const start = row.index * cols;

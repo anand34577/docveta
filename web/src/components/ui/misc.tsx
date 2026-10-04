@@ -21,9 +21,20 @@ export function TagChip({ name, color = "slate", className, onRemove }: { name: 
     <span className={cn("inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium", tagColors[color] ?? tagColors.slate, className)}>
       <span className="truncate">{name}</span>
       {onRemove && (
-        <button type="button" onClick={onRemove} className="-mr-0.5 rounded opacity-60 hover:opacity-100" aria-label={`Remove ${name}`}>
+        // Not a <button>: chips sit inside the entity picker's trigger button, and buttons can't nest.
+        // Keyboard users remove tags from the picker's list instead.
+        <span
+          role="button"
+          aria-label={`Remove ${name}`}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onRemove();
+          }}
+          className="-mr-0.5 cursor-pointer rounded px-0.5 opacity-60 hover:opacity-100"
+        >
           ×
-        </button>
+        </span>
       )}
     </span>
   );
