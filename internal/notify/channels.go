@@ -292,7 +292,11 @@ func sendEmail(ctx context.Context, c SMTPConfig, password, to string, m Message
 		}
 	}
 	if c.Username != "" {
-		if err := cl.Auth(smtp.PlainAuth("", c.Username, password, c.Host)); err != nil {
+		var auth smtp.Auth = smtp.PlainAuth("", c.Username, password, c.Host)
+		if c.Security == "none" {
+			auth = plainAuth{c.Username, password} // the admin chose "None": a relay or proxy on their own network
+		}
+		if err := cl.Auth(auth); err != nil {
 			return fmt.Errorf("SMTP auth: %w", err)
 		}
 	}
@@ -317,6 +321,21 @@ func sendEmail(ctx context.Context, c SMTPConfig, password, to string, m Message
 		return err
 	}
 	return cl.Quit()
+}
+
+// plainAuth is smtp.PlainAuth without its refusal to send the password over a connection that
+// isn't encrypted ("unencrypted connection"), for servers the admin set to Security "None".
+type plainAuth struct{ user, pass string }
+
+func (a plainAuth) Start(*smtp.ServerInfo) (string, []byte, error) {
+	return "PLAIN", []byte("\x00" + a.user + "\x00" + a.pass), nil
+}
+
+func (a plainAuth) Next(_ []byte, more bool) ([]byte, error) {
+	if more {
+		return nil, errors.New("unexpected server challenge")
+	}
+	return nil, nil
 }
 
 func addrOnly(s string) string {

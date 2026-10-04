@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/smtp"
 	"strings"
 	"testing"
 )
@@ -32,4 +33,17 @@ func TestHTTPClientGuard(t *testing.T) {
 		t.Fatalf("allowLocal request failed: %v", err)
 	}
 	resp.Body.Close()
+}
+
+// Security "none" (a relay or proxy on the local network) must still log in: Go's own
+// smtp.PlainAuth refuses to send the password over an unencrypted connection.
+func TestPlainAuthWithoutTLS(t *testing.T) {
+	info := &smtp.ServerInfo{Name: "mail.example.com", TLS: false, Auth: []string{"PLAIN"}}
+	if _, _, err := smtp.PlainAuth("", "u", "pw", info.Name).Start(info); err == nil {
+		t.Fatal("expected the standard library to refuse; this test no longer proves anything")
+	}
+	proto, resp, err := plainAuth{"u", "pw"}.Start(info)
+	if err != nil || proto != "PLAIN" || string(resp) != "\x00u\x00pw" {
+		t.Fatalf("got %q %q %v", proto, resp, err)
+	}
 }

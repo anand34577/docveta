@@ -76,7 +76,7 @@ class ApiTest {
         assertEquals("A", me.displayName)
         val r = server.takeRequest()
         assertEquals("Bearer dvt_secret", r.getHeader("Authorization"))
-        assertEquals("http://127.0.0.1:${server.port}", r.getHeader("Origin"))
+        assertEquals("http://${server.hostName}:${server.port}", r.getHeader("Origin")) // the host name differs between machines
         assertEquals("/api/v1/me", r.path)
     }
 

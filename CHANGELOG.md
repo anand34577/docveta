@@ -13,6 +13,10 @@ All notable changes to Docveta. The format follows
   to the server. Phones without Google Play services keep the built-in scanner.
 
 ### Fixed
+- Dropdowns were white in the dark theme (the select lost its background colour when its classes were merged), and had no arrow.
+- Ask: "l is not a function" crash in current browsers, where `scrollIntoView` returns a Promise that React tried to call as a cleanup function.
+- Email: "SMTP auth: unencrypted connection" when the mail server (or a relay/proxy) is set to Security "None"; the login is now sent as the administrator chose.
+- Inbox: the keyboard shortcut hints at the bottom lost their spaces and wrapped one word per line.
 - The release workflow never built the Android app, so no APK was published. It now builds a
   signed `docveta-android-<version>.apk` and attaches it to the release; the app's version
   follows the tag.

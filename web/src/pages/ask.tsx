@@ -38,7 +38,10 @@ export function AskPage() {
   const end = React.useRef<HTMLDivElement>(null);
   const abort = React.useRef<AbortController | null>(null);
 
-  React.useEffect(() => end.current?.scrollIntoView({ block: "end", behavior: "smooth" }), [turns]);
+  // Braces: newer browsers return a Promise from scrollIntoView, and React would call it as the cleanup.
+  React.useEffect(() => {
+    end.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [turns]);
   React.useEffect(() => () => abort.current?.abort(), []);
 
   const open = async (id: string | null) => {

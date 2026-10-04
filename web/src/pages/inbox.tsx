@@ -203,9 +203,12 @@ export function InboxPage() {
           )}
         </ul>
         {isDesktop && (
-          <p className="flex items-center gap-1.5 border-t border-border px-4 py-2.5 text-xs text-subtle">
-            <Kbd>J</Kbd>
-            <Kbd>K</Kbd> move <span className="mx-1">·</span> <Kbd>E</Kbd> reviewed <span className="mx-1">·</span> <Kbd>A</Kbd> accept AI <span className="mx-1">·</span> <Kbd>↵</Kbd> open
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-4 py-2.5 text-xs text-subtle">
+            {[["J K", "move"], ["E", "reviewed"], ["A", "accept AI"], ["↵", "open"]].map(([keys, label]) => (
+              <span key={label} className="inline-flex items-center gap-1 whitespace-nowrap">
+                {keys.split(" ").map((k) => <Kbd key={k}>{k}</Kbd>)} {label}
+              </span>
+            ))}
           </p>
         )}
       </div>
