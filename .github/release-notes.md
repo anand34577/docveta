@@ -8,6 +8,7 @@
 | **Linux** in one step (servers, VMs, containers, boards, incl. Allwinner A733 NPU) | `get-docveta.sh`: `curl -fsSLO https://github.com/anand34577/docveta/releases/latest/download/get-docveta.sh && sudo sh get-docveta.sh` |
 | **Mac** (Apple silicon) | `docveta-…-darwin-arm64.tar.gz` + `docveta-ocr-…-darwin-arm64.zip` |
 | Mac (Intel) | `docveta-…-darwin-x64.tar.gz` |
+| **Android phone** | `docveta-android-�.apk`: scan documents and browse your server (allow installs from your browser or file manager) |
 | Docker, NAS (Synology, Unraid, TrueNAS) | `docker compose up -d` with [docker-compose.yml](https://github.com/anand34577/docveta/blob/main/deploy/docker-compose.yml): nothing to edit |
 
 Nothing else to install: on first start, click **Save and start** in your browser to use the

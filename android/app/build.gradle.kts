@@ -5,6 +5,12 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// CI passes the release version (tag) and the signing key; a local build gets a dev version and
+// is signed with the debug key only if you ask for a debug build.
+val releaseVersion = System.getenv("DOCVETA_VERSION")?.removePrefix("v") ?: "0.0.0-dev"
+val versionParts = releaseVersion.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 } + listOf(0, 0, 0)
+val keystorePath: String? = System.getenv("ANDROID_KEYSTORE_PATH")
+
 android {
     namespace = "app.docveta.android"
     compileSdk = 37
@@ -13,14 +19,22 @@ android {
         applicationId = "app.docveta.android"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
-        // Only ships what a phone needs; no native libraries are bundled.
-        vectorDrawables.useSupportLibrary = true
+        versionCode = (versionParts[0] * 1_000_000 + versionParts[1] * 1_000 + versionParts[2]).coerceAtLeast(1)
+        versionName = releaseVersion
+                vectorDrawables.useSupportLibrary = true
     }
 
+    signingConfigs {
+        if (keystorePath != null) create("release") {
+            storeFile = file(keystorePath)
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+        }
+    }
     buildTypes {
         release {
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -63,6 +77,7 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.exifinterface)
+    implementation(libs.mlkit.docscan)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

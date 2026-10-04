@@ -8,6 +8,7 @@
 #   docveta-setup-<ver>-windows-<arch>.exe Windows installer (service, OCR included on x64/arm64)
 #   docveta-ocr-models-<ver>.zip           the OCR models alone (Docker image, custom setups)
 #   docveta-worker-allwinner-<ver>-linux-arm64.tar.gz   OCR on the Allwinner A733 NPU
+#   docveta-android-<ver>.apk              Android app (signed with the ANDROID_KEYSTORE_* secrets)
 #   get-docveta.sh                         one-step Linux installer (server + text recognition)
 #   SHA256SUMS
 # plus Docker images on ghcr.io.
@@ -255,6 +256,49 @@ jobs:
           name: allwinner
           path: workers/allwinner/dist/*.tar.gz
 
+  # The Android app. Signed with the repository secrets ANDROID_KEYSTORE_BASE64 (the .jks file,
+  # base64), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD (Settings,
+  # Secrets and variables, Actions, *Secrets* tab: variables are not passed to this job).
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - name: Build
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          DOCVETA_VERSION: ${{ env.VERSION }}
+        run: |
+          set -eu
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" >/dev/null
+          ./gradlew --no-daemon testDebugUnitTest
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEY_ALIAS" ]; then
+            [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ] && { echo "::error::Android signing secrets are missing (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD): add them as repository *secrets*"; exit 1; }
+            echo "::warning::No Android signing secrets: compiling only, no APK is produced"
+            ./gradlew --no-daemon assembleRelease
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+          ./gradlew --no-daemon assembleRelease
+          apk=app/build/outputs/apk/release/app-release.apk
+          "$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner" verify --print-certs "$apk"
+          mkdir -p dist
+          cp "$apk" "dist/docveta-android-${VERSION#v}.apk"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: android/dist/*.apk
+          if-no-files-found: ignore
+
   installer:
     needs: [server, ocr]
     runs-on: windows-latest
@@ -288,7 +332,7 @@ jobs:
           path: dist/*.exe
 
   publish:
-    needs: [server, ocr, installer, models, allwinner]
+    needs: [server, ocr, installer, models, allwinner, android]
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -303,6 +347,7 @@ jobs:
           mkdir -p dist
           cp artifacts/server/* artifacts/installers/* dist/
           cp artifacts/ocr-*/*.zip artifacts/allwinner/*.tar.gz dist/
+          cp artifacts/android/*.apk dist/
           cp deploy/linux/get-docveta.sh dist/ # releases/latest/download/get-docveta.sh
           (cd artifacts/models && zip -qr "../../dist/docveta-ocr-models-$V.zip" .)
           cd dist && sha256sum * > SHA256SUMS && ls -la
