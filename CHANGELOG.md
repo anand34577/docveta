@@ -5,6 +5,18 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-04
+
+### Added
+- Android: scanning with Google's ML Kit document scanner (live edge detection, crop, clean-up,
+  gallery import), then the app's review: reorder, one combined PDF or separate pictures, upload
+  to the server. Phones without Google Play services keep the built-in scanner.
+
+### Fixed
+- The release workflow never built the Android app, so no APK was published. It now builds a
+  signed `docveta-android-<version>.apk` and attaches it to the release; the app's version
+  follows the tag.
+
 ## [0.5.0] - 2026-10-04
 
 ### Added

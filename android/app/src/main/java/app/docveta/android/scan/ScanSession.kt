@@ -92,6 +92,32 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
         add({ resolver.openInputStream(uri)!! }, orientation, onAdded)
     }
 
+    /** Adds the pages ML Kit's scanner returned, in order, then calls [onDone]. They are already cropped and cleaned up, so they're kept whole and unfiltered. */
+    fun addScanned(uris: List<Uri>, resolver: android.content.ContentResolver, onDone: () -> Unit) {
+        viewModelScope.launch {
+            working = true
+            try {
+                val added = withContext(Dispatchers.Default) {
+                    uris.map { uri ->
+                        val bmp = ImageIO.decodeUpright({ resolver.openInputStream(uri)!! }, ImageIO.orientationOf { resolver.openInputStream(uri)!! }, MAX_SOURCE)
+                        val id = UUID.randomUUID().toString()
+                        val f = File(dir, "$id.jpg")
+                        ImageIO.saveJpeg(bmp, f)
+                        val p = ScanPage(id, f, bmp.width, bmp.height, Quad.full(bmp.width.toFloat(), bmp.height.toFloat()), true, PageFilters.Kind.ORIGINAL)
+                        bmp.recycle()
+                        p
+                    }
+                }
+                pages = pages + added
+                onDone()
+            } catch (e: Exception) {
+                error = "Couldn't use the scanned pages"
+            } finally {
+                working = false
+            }
+        }
+    }
+
     fun update(id: String, f: (ScanPage) -> ScanPage) {
         pages = pages.map { if (it.id == id) f(it) else it }
     }

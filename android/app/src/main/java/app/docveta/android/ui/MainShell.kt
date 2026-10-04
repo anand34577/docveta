@@ -58,9 +58,9 @@ import androidx.navigation.navArgument
 import app.docveta.android.data.AiStatus
 import app.docveta.android.data.Me
 import app.docveta.android.data.Stats
-import app.docveta.android.scan.CameraScreen
 import app.docveta.android.scan.CropScreen
 import app.docveta.android.scan.ReviewScreen
+import app.docveta.android.scan.ScanEntry
 import app.docveta.android.scan.ScanSession
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -151,9 +151,9 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
                 composable(Route.Doc, arguments = listOf(navArgument("id") { type = NavType.StringType }, navArgument("page") { type = NavType.IntType; defaultValue = 0 })) {
                     DocumentScreen(it.arguments!!.getString("id")!!, startPage = (it.arguments!!.getInt("page") - 1).coerceAtLeast(0), onBack = { nav.popBackStack() })
                 }
-                composable(Route.Scan) { CameraScreen(scan, onDone = { nav.navigate(Route.Review) }, onClose = { nav.popBackStack() }) }
+                composable(Route.Scan) { ScanEntry(scan, onDone = { nav.navigate(Route.Review) { popUpTo(Route.Scan) { inclusive = true } } }, onClose = { nav.popBackStack() }) }
                 composable(Route.Review) {
-                    ReviewScreen(scan, onAddMore = { nav.popBackStack() }, onEdit = { id -> nav.navigate("scan/crop/$id") },
+                    ReviewScreen(scan, onAddMore = { nav.navigate(Route.Scan) }, onEdit = { id -> nav.navigate("scan/crop/$id") },
                         onUploaded = { nav.popBackStack(Route.Inbox, false); nav.navigate(Route.Uploads) }, onBack = { nav.popBackStack() })
                 }
                 composable(Route.Crop, arguments = listOf(navArgument("pageId") { type = NavType.StringType })) { CropScreen(scan, it.arguments!!.getString("pageId")!!, onBack = { nav.popBackStack() }) }
