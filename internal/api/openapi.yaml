@@ -137,6 +137,42 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/ProcessingSettings'
+  /api/v1/admin/settings/server:
+    get:
+      summary: Get the server address and network settings
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerSettings'
+        default: *id001
+    put:
+      summary: Replace the server address and network settings
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerSettings'
+        default: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                public_url:
+                  type: string
+                allow_local_targets:
+                  type: boolean
   /api/v1/admin/settings/smtp:
     get:
       summary: Get smtp settings
@@ -505,6 +541,39 @@ paths:
       - name: return_to
         in: query
         schema: *id002
+      - name: link
+        in: query
+        description: '"1" connects the provider account to the signed-in user instead of signing in'
+        schema: *id002
+      - name: app
+        in: query
+        description: '"1" when the Android app signs in; it ends at docveta://sso?code=…'
+        schema: *id002
+      - name: code_challenge
+        in: query
+        description: The app's PKCE S256 code challenge (required with app=1)
+        schema: *id002
+      security: *id004
+  /api/v1/auth/oidc/app:
+    post:
+      summary: Redeem the Android app's single sign-on code for a session
+      tags:
+      - auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - code
+              - code_verifier
+              properties:
+                code: *id002
+                code_verifier: *id002
+      responses:
+        '204': *id003
+        default: *id001
       security: *id004
   /api/v1/changes:
     get:
@@ -1499,6 +1568,41 @@ paths:
         required: true
         schema: *id002
         description: Session id or `others`
+  /api/v1/me/identities:
+    get:
+      summary: List the single sign-on accounts connected to me
+      tags:
+      - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Identity'
+        default: *id001
+  /api/v1/me/identities/{id}:
+    delete:
+      summary: Disconnect a single sign-on account
+      tags:
+      - account
+      responses:
+        '204': *id003
+        default: *id001
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
   /api/v1/me/tokens:
     get:
       summary: List API tokens
@@ -3477,7 +3581,7 @@ paths:
           type: string
   /api/v1/ai/ask:
     post:
-      summary: 'Ask a question about your documents (server-sent events: citations, delta, done, error)'
+      summary: 'Ask a question about your documents (server-sent events: status {stage: searching or answering}, citations, delta, done, error; comment lines keep the connection alive)'
       tags:
       - ai
       responses:
@@ -3516,6 +3620,36 @@ paths:
                       $ref: '#/components/schemas/Conversation'
         default:
           $ref: '#/components/responses/Problem'
+      parameters:
+      - name: before
+        in: query
+        description: Only conversations updated before this time (RFC 3339), for paging
+        schema:
+          type: string
+          format: date-time
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+    delete:
+      summary: Delete all of your conversations
+      tags:
+      - ai
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: integer
+        default:
+          $ref: '#/components/responses/Problem'
   /api/v1/ai/conversations/{id}/messages:
     get:
       summary: Messages of a conversation
@@ -3544,6 +3678,36 @@ paths:
         schema:
           type: string
   /api/v1/ai/conversations/{id}:
+    patch:
+      summary: Rename a conversation
+      tags:
+      - ai
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - title
+              properties:
+                title:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        default:
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       summary: Delete a conversation
       tags:
@@ -4099,6 +4263,42 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
   schemas:
+    ServerSettings:
+      type: object
+      properties:
+        public_url:
+          type: string
+          description: Address used in links sent by email and push notifications
+        allow_local_targets:
+          type: boolean
+          description: Everyone's notification channels and webhooks may reach the local network
+        base_url:
+          type: string
+          readOnly: true
+        base_url_fixed:
+          type: boolean
+          readOnly: true
+          description: DOCVETA_BASE_URL names a real host, so it is used instead of public_url
+        detected:
+          type: string
+          readOnly: true
+        allow_local_env:
+          type: boolean
+          readOnly: true
+    Identity:
+      type: object
+      properties:
+        id:
+          format: uuid
+          type: string
+        provider:
+          type: string
+          description: The issuer URL
+        email:
+          type: string
+        created_at:
+          format: date-time
+          type: string
     APIToken:
       properties:
         created_at:
@@ -4194,6 +4394,11 @@ components:
       properties:
         action:
           type: string
+        select:
+          type: string
+          enum:
+          - inbox
+          description: Pick the documents on the server instead of ids ("inbox" = your Inbox, up to 5000 per call)
         ids:
           items:
             format: uuid
@@ -4252,6 +4457,9 @@ components:
       type: object
     BulkResult:
       properties:
+        remaining:
+          type: integer
+          description: With select, how many documents still match (call again while it is above 0)
         failed:
           items:
             properties:
@@ -4725,6 +4933,9 @@ components:
         total:
           nullable: true
           type: integer
+        total_capped:
+          type: boolean
+          description: More documents match than total (counting stops at 100,000)
         mode:
           type: string
           enum:
@@ -4874,6 +5085,10 @@ components:
           type: string
         link_by_verified_email:
           type: boolean
+        redirect_uri:
+          type: string
+          readOnly: true
+          description: The callback address to register with the provider
         scopes:
           items:
             type: string
@@ -6311,6 +6526,12 @@ components:
           format: uuid
         space_ids:
           type: array
+          items:
+            type: string
+            format: uuid
+        document_ids:
+          type: array
+          description: Ask only about these documents (at most 50)
           items:
             type: string
             format: uuid

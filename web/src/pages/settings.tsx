@@ -1,11 +1,11 @@
 import * as React from "react";
 import { useParams } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Bookmark, KeyRound, Monitor, Plus, Shield, Smartphone, Trash2, User } from "lucide-react";
+import { Bell, Bookmark, KeyRound, Link2, LogIn, Monitor, Plus, Shield, Smartphone, Trash2, User } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
-import { keys, useChannels } from "@/lib/queries";
-import type { ApiToken, Channel, Session } from "@/lib/types";
+import { keys, useChannels, useStatus } from "@/lib/queries";
+import type { ApiToken, Channel, Identity, Session } from "@/lib/types";
 import { formatDateTime, setDateFormat, timeAgo } from "@/lib/utils";
 import { ThemePicker, useCurrentUser } from "@/components/app-shell";
 import { SecretReveal, SettingsCard, SettingsLayout } from "@/components/settings-layout";
@@ -161,6 +161,8 @@ function Security() {
 
       <TwoFactorCard />
 
+      <SingleSignOnCard />
+
       <SettingsCard
         title="Signed-in devices"
         description="Sign out devices you don't recognise."
@@ -195,6 +197,73 @@ function Security() {
       </SettingsCard>
     </>
   );
+}
+
+/** Connect or disconnect single sign-on accounts (shown when an administrator turned SSO on). */
+function SingleSignOnCard() {
+  const status = useStatus();
+  const qc = useQueryClient();
+  const ids = useQuery({ queryKey: ["identities"], queryFn: () => api.get<{ items: Identity[] }>("/me/identities").then((r) => r.items) });
+  React.useEffect(() => {
+    // Back from the provider: /settings/security?sso=linked or ?sso_error=…
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("sso") === "linked") toast.success("Single sign-on connected. You can now use it to sign in.");
+    const e = q.get("sso_error");
+    if (e) toast.error(e);
+    if (q.has("sso") || q.has("sso_error")) window.history.replaceState(null, "", window.location.pathname);
+  }, []);
+  if (!status.data?.oidc.enabled && !ids.data?.length) return null;
+  const unlink = async (id: string) => {
+    if (!(await confirm({ title: "Disconnect single sign-on?", body: "You won't be able to sign in with it until you connect it again.", confirmLabel: "Disconnect", destructive: true }))) return;
+    await api.del(`/me/identities/${id}`).then(
+      () => qc.invalidateQueries({ queryKey: ["identities"] }),
+      (e) => toast.error(errorMessage(e)),
+    );
+  };
+  return (
+    <SettingsCard
+      title="Single sign-on"
+      description="Sign in with your organisation's account instead of a password."
+      actions={
+        status.data?.oidc.enabled && !ids.data?.length && (
+          <Button size="sm" asChild>
+            <a href={`/api/v1/auth/oidc/start?link=1&return_to=${encodeURIComponent("/settings/security")}`}>
+              <LogIn /> Connect
+            </a>
+          </Button>
+        )
+      }
+    >
+      {ids.data?.length ? (
+        <ul className="divide-y divide-border">
+          {ids.data.map((i) => (
+            <li key={i.id} className="flex items-center gap-3 py-3">
+              <Link2 className="size-5 shrink-0 text-muted" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm">{i.email || "Connected account"}</div>
+                <div className="truncate text-xs text-subtle">
+                  {hostOf(i.provider)} · connected {timeAgo(i.created_at)}
+                </div>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => unlink(i.id)}>
+                Disconnect
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-muted">No account connected yet. Choose Connect, sign in with your provider, and you'll come back here.</p>
+      )}
+    </SettingsCard>
+  );
+}
+
+function hostOf(u: string): string {
+  try {
+    return new URL(u).host;
+  } catch {
+    return u;
+  }
 }
 
 function browserName(ua: string): string {

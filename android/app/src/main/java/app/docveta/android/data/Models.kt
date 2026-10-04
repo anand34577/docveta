@@ -40,7 +40,11 @@ data class ServerStatus(
     @SerialName("setup_needed") val setupNeeded: Boolean = false,
     val version: String = "",
     @SerialName("password_login") val passwordLogin: Boolean = true,
+    val oidc: OidcStatus = OidcStatus(),
 )
+
+@Serializable
+data class OidcStatus(val enabled: Boolean = false, @SerialName("button_label") val buttonLabel: String = "")
 
 @Serializable
 data class Segment(val text: String, val hit: Boolean = false)

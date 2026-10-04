@@ -45,7 +45,6 @@ type Service struct {
 }
 
 func NewService(pool *pgxpool.Pool, keys *crypto.Keys, st *settings.Store, cfg *config.Config, log *slog.Logger) *Service {
-	httpClient = newHTTPClient(cfg.AllowLocalTargets)
 	return &Service{pool: pool, keys: keys, settings: st, cfg: cfg, log: log, Hub: NewHub()}
 }
 
@@ -349,17 +348,34 @@ func (s *Service) TestChannel(ctx context.Context, p *auth.Principal, id uuid.UU
 		return err
 	}
 	msg := Message{Title: "Docveta test notification", Body: "If you can read this, \"" + c.Name + "\" is set up correctly.",
-		URL: s.cfg.BaseURL.String(), Severity: "info", Event: jobs.Event{Type: "test", At: time.Now()}}
+		URL: s.link(ctx, "/"), Severity: "info", Event: jobs.Event{Type: "test", At: time.Now()}}
 	if err := s.deliver(ctx, c.Type, cfg, p.UserID, msg); err != nil {
 		return &apperr.Error{Kind: apperr.KindValidation, Code: "delivery_failed", Msg: "Sending failed: " + err.Error()}
 	}
 	return nil
 }
 
+// localAllowed reports whether a channel may reach local network addresses: system channels and
+// administrators' own always may; everyone's when an administrator allowed it.
+func (s *Service) localAllowed(ctx context.Context, owner uuid.UUID) bool {
+	if s.cfg.AllowLocalTargets || owner == uuid.Nil || s.settings.ServerSettings(ctx).AllowLocalTargets {
+		return true
+	}
+	var admin bool
+	_ = s.pool.QueryRow(ctx, `SELECT is_admin FROM users WHERE id=$1`, owner).Scan(&admin)
+	return admin
+}
+
+// link turns an in-app path into an address people can open from an email or a phone.
+func (s *Service) link(ctx context.Context, path string) string {
+	return s.settings.PublicURL(ctx, s.cfg.BaseURL) + path
+}
+
 func (s *Service) deliver(ctx context.Context, typ string, cfg map[string]any, owner uuid.UUID, m Message) error {
 	raw, _ := json.Marshal(cfg)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	ctx = WithLocalTargets(ctx, s.localAllowed(ctx, owner))
 	switch typ {
 	case "gotify":
 		var c GotifyConfig
@@ -478,7 +494,7 @@ func (s *Service) SendTestEmail(ctx context.Context, p *auth.Principal) error {
 	if err != nil {
 		return err
 	}
-	err = sendEmail(ctx, c, pw, p.Email, Message{Title: "Docveta test email", Body: "Email delivery from Docveta works.", URL: s.cfg.BaseURL.String()})
+	err = sendEmail(ctx, c, pw, p.Email, Message{Title: "Docveta test email", Body: "Email delivery from Docveta works.", URL: s.link(ctx, "/")})
 	if err != nil {
 		return &apperr.Error{Kind: apperr.KindValidation, Code: "delivery_failed", Msg: "Sending failed: " + err.Error()}
 	}
@@ -600,7 +616,7 @@ func (s *Service) dispatch(ctx context.Context, e jobs.Event, jobID int64, exter
 	rows.Close()
 	link := ""
 	if e.Link != "" {
-		link = s.cfg.BaseURL.String() + e.Link
+		link = s.link(ctx, e.Link)
 	}
 	msg := Message{Title: e.Title, Body: e.Body, URL: link, Severity: sev, Event: e}
 	var wg sync.WaitGroup

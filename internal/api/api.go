@@ -26,6 +26,7 @@ import (
 	"github.com/anand34577/docveta/internal/pipeline"
 	"github.com/anand34577/docveta/internal/platform/config"
 	"github.com/anand34577/docveta/internal/platform/httpx"
+	"github.com/anand34577/docveta/internal/platform/settings"
 	"github.com/anand34577/docveta/internal/search"
 	"github.com/anand34577/docveta/internal/shares"
 	"github.com/anand34577/docveta/internal/spaces"
@@ -58,6 +59,7 @@ type Deps struct {
 	Workflows    *workflows.Service
 	Uploads      *tus.Service
 	Queue        *jobs.Queue
+	Settings     *settings.Store
 	Audit        *audit.Log
 	Version      string
 }
@@ -148,6 +150,9 @@ func (a *API) Authenticate(next http.Handler) http.Handler {
 		}
 		if p != nil {
 			ctx = auth.With(ctx, p)
+			if p.Kind == auth.KindSession {
+				a.rememberAddress(r)
+			}
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -171,7 +176,7 @@ func (a *API) sameOrigin(r *http.Request) bool {
 				return true
 			}
 		}
-		return o == a.origin
+		return o == a.origin || o == originOf(a.publicBase(r))
 	}
 	return true // non-browser client
 }

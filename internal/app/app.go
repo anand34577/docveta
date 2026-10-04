@@ -160,7 +160,10 @@ func (a *App) startJobs(ctx context.Context) error {
 	a.Pipeline = pipeline.NewService(a.Pool, a.Store, a.PDF, a.Queue, a.Settings, a.Log)
 	a.Docedit = docedit.NewService(a.Documents, a.PDF)
 	a.Workflows = workflows.NewService(a.Pool, a.Spaces, a.Search, a.Documents, a.Queue, a.Log)
-	a.Workflows.Webhook = notify.PostJSON
+	a.Workflows.Webhook = func(ctx context.Context, url string, payload any) error {
+		allow := a.Cfg.AllowLocalTargets || a.Settings.ServerSettings(ctx).AllowLocalTargets
+		return notify.PostJSON(notify.WithLocalTargets(ctx, allow), url, payload)
+	}
 	a.Folders = folders.NewService(a.Pool, a.Documents, a.Queue, a.Audit, a.Log, a.Cfg.DataDir, a.Cfg.WatchRoots)
 	a.Pipeline.Office = a.Office
 	pipeline.ServerVersion = a.Version
@@ -228,7 +231,7 @@ func (a *App) Handler() http.Handler {
 	m := newMetrics(a)
 	ap := api.New(api.Deps{
 		Cfg: a.Cfg, Log: a.Log, Pool: a.Pool, Store: a.Store, Identity: a.Identity, Spaces: a.Spaces, Taxonomy: a.Taxonomy, CustomFields: a.CustomFields,
-		Documents: a.Documents, Docedit: a.Docedit, Search: a.Search, Pipeline: a.Pipeline, Notify: a.Notify, Views: a.Views, Shares: a.Shares, AI: a.AI, Queue: a.Queue, Office: a.Office, Folders: a.Folders, Workflows: a.Workflows, Uploads: a.Uploads, Audit: a.Audit, Version: a.Version,
+		Documents: a.Documents, Docedit: a.Docedit, Search: a.Search, Pipeline: a.Pipeline, Notify: a.Notify, Views: a.Views, Shares: a.Shares, AI: a.AI, Queue: a.Queue, Office: a.Office, Folders: a.Folders, Workflows: a.Workflows, Uploads: a.Uploads, Audit: a.Audit, Settings: a.Settings, Version: a.Version,
 	})
 	ap.Register(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
@@ -241,7 +244,7 @@ func (a *App) Handler() http.Handler {
 		}
 		w.Write([]byte("ok"))
 	})
-	mux.Handle("GET /metrics", m.handler())
+	mux.Handle("GET /metrics", m.handler(a.Cfg.MetricsToken))
 	mux.Handle("/", webui.Handler())
 
 	return httpx.Chain(mux,

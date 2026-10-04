@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -158,7 +159,14 @@ fun PdfView(file: File, modifier: Modifier = Modifier, startPage: Int = 0, onPag
         return
     }
     val state = rememberLazyListState(initialFirstVisibleItemIndex = startPage.coerceIn(0, max(0, pages.count - 1)))
-    val current by remember { derivedStateOf { state.firstVisibleItemIndex } }
+    // The page under the middle of the screen (the first visible one may be just its last few lines).
+    val current by remember {
+        derivedStateOf {
+            val info = state.layoutInfo
+            val mid = (info.viewportStartOffset + info.viewportEndOffset) / 2
+            info.visibleItemsInfo.firstOrNull { it.offset <= mid && it.offset + it.size > mid }?.index ?: state.firstVisibleItemIndex
+        }
+    }
     LaunchedEffect(current) { onPage(current, pages.count) }
     BoxWithConstraints(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant)) {
         val widthPx = with(LocalDensity.current) { min(maxWidth.toPx() * 1.6f, 1800f).toInt() }
@@ -172,6 +180,17 @@ fun PdfView(file: File, modifier: Modifier = Modifier, startPage: Int = 0, onPag
                 Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp).aspectRatio(1f / ratio), shadowElevation = 2.dp, color = androidx.compose.ui.graphics.Color.White) {
                     bmp?.let { Image(it.asImageBitmap(), "Page ${i + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.FillWidth) }
                 }
+            }
+        }
+        // Where am I: "2 / 5", and a reminder that pages zoom.
+        if (pages.count > 1) {
+            Surface(
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 16.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.82f),
+                contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+            ) {
+                Text("${current + 1} / ${pages.count}", Modifier.padding(horizontal = 14.dp, vertical = 6.dp), style = MaterialTheme.typography.labelLarge)
             }
         }
     }

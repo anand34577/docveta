@@ -58,10 +58,12 @@ type Hit struct {
 }
 
 type Result struct {
-	Hits       []Hit   `json:"hits"`
-	Total      *int    `json:"total,omitempty"`
-	NextCursor *string `json:"next_cursor"`
-	Facets     *Facets `json:"facets,omitempty"`
+	Hits  []Hit `json:"hits"`
+	Total *int  `json:"total,omitempty"`
+	// TotalCapped: there are more than Total matches (counting stopped at TotalCap).
+	TotalCapped bool    `json:"total_capped,omitempty"`
+	NextCursor  *string `json:"next_cursor"`
+	Facets      *Facets `json:"facets,omitempty"`
 }
 
 // Facets are document counts under the current filters, keyed by the id (or status name).
@@ -427,14 +429,20 @@ func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Resul
 		out.Hits = append(out.Hits, Hit{ID: r.id, Rank: r.rank})
 	}
 
-	if q.WithTotal && q.Cursor == "" {
-		var n int
-		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM documents d WHERE `+where, countArgs...).Scan(&n); err != nil {
+	n := -1
+	if (q.WithTotal || q.WithFacets) && q.Cursor == "" {
+		// Counting stops at TotalCap: an exact count of a huge library costs more than the page itself.
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM (SELECT 1 FROM documents d WHERE `+where+` LIMIT `+strconv.Itoa(TotalCap+1)+`) x`, countArgs...).Scan(&n); err != nil {
 			return nil, err
 		}
-		out.Total = &n
+		if q.WithTotal {
+			total := min(n, TotalCap)
+			out.Total = &total
+			out.TotalCapped = n > TotalCap
+		}
 	}
-	if q.WithFacets && q.Cursor == "" {
+	// Facet counts walk every matching document; past facetCap the filter menus show overall counts.
+	if q.WithFacets && q.Cursor == "" && n <= facetCap {
 		if out.Facets, err = s.facets(ctx, where, countArgs); err != nil {
 			return nil, err
 		}
@@ -538,6 +546,12 @@ func (s *Service) Suggest(ctx context.Context, p *auth.Principal, text string, l
 		return x, err
 	})
 }
+
+// TotalCap bounds how far result totals are counted; facetCap, above which facets are skipped.
+const (
+	TotalCap = 100000
+	facetCap = 50000
+)
 
 // facets counts the matching documents per tag, correspondent, type and status in one round trip.
 func (s *Service) facets(ctx context.Context, where string, args []any) (*Facets, error) {

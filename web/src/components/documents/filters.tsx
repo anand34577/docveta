@@ -15,6 +15,7 @@ interface Props {
   query: DocQuery;
   onChange: (q: DocQuery) => void;
   total?: number;
+  totalCapped?: boolean;
   facets?: Facets;
   found?: string; // how the results were found (keyword | semantic | hybrid)
   hideSpace?: boolean;
@@ -22,7 +23,7 @@ interface Props {
 }
 
 /** Search box + filter chips. Every filter lives in the URL, so views are shareable and Back works. */
-export function FilterBar({ query, onChange, total, facets, found, hideSpace, actions }: Props) {
+export function FilterBar({ query, onChange, total, totalCapped, facets, found, hideSpace, actions }: Props) {
   const me = useCurrentUser();
   const ai = useAIEnabled().data;
   const fieldsQ = useCustomFields(query.space_id?.length === 1 ? query.space_id[0] : undefined);
@@ -142,7 +143,7 @@ export function FilterBar({ query, onChange, total, facets, found, hideSpace, ac
               <Sparkles className="size-3.5" /> by meaning
             </span>
           ) : null}
-          {total !== undefined && <span className="text-[13px] tabular-nums text-subtle">{total.toLocaleString()} document{total === 1 ? "" : "s"}</span>}
+          {total !== undefined && <span className="text-[13px] tabular-nums text-subtle">{total.toLocaleString()}{totalCapped ? "+" : ""} document{total === 1 && !totalCapped ? "" : "s"}</span>}
           <NativeSelect value={query.sort ?? ""} onChange={(e) => set({ sort: e.target.value || undefined })} className="h-8 w-auto text-[13px]" aria-label="Sort">
             <option value="">{query.q ? "Best match" : "Newest added"}</option>
             {query.q && <option value="-added">Newest added</option>}

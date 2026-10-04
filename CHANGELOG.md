@@ -5,6 +5,65 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-04
+
+### Added
+- **Ask about one document**: ⋯ → *Ask about this document* ("Summarise this", "What are the important dates?").
+- Ask: Markdown answers (lists, tables, bold, code) on the web and in the Android app, a **Stop** button,
+  *Try again*, *Copy*, a "Searching…/Writing…" status, cited sources first ("Also searched N more"),
+  rename and delete conversations, *Delete all conversations*, older conversations load page by page,
+  and the conversation list on phones (**History**).
+- **pgvector** support for meaning-based search: used automatically when the extension is installed
+  (HNSW index per vector size, built in the background; pgvector 0.8 iterative scans for filtered
+  searches); existing vectors are copied over by the maintenance job. Without pgvector the in-app
+  scan now keeps a bounded top-k list.
+- **Single sign-on in the Android app** (browser sign-in with PKCE), and **Settings → Security →
+  Single sign-on** to connect or disconnect an account.
+- Viewer: **Fit page** and **Fit width**, pinch-to-zoom and Ctrl/⌘ + wheel zoom, a picture viewer
+  with the same controls, and a page indicator in the Android viewer.
+- Administration → System: **Server address** (used in emailed and pushed links) and a switch to let
+  everyone's notification channels reach the local network.
+- `DOCVETA_METRICS_TOKEN` for scraping `/metrics` from outside the local network.
+- Wiki: [AI and Ask](docs/wiki/AI-and-Ask.md) and [Single sign-on](docs/wiki/Single-sign-on.md).
+
+### Fixed
+- **Single sign-on** didn't work in common setups: issuers with a trailing `/` (Authentik, Zitadel,
+  Auth0) failed discovery because Docveta removed the slash, and the redirect URI sent to the provider
+  was `http://localhost:8080/…` unless `DOCVETA_BASE_URL` was set, so providers rejected it. The
+  redirect URI now follows the address in use (and Administration shows the exact one to register);
+  userinfo is read when email or groups are missing from the ID token; `email_verified: "true"`
+  (string) is accepted; error messages say what to fix.
+- **Hindi documents weren't recognised at all**: the OCR engines used only the space's language
+  (English by default), so every Devanagari line was dropped. The PaddleOCR engines (ONNX, Rockchip,
+  Allwinner) now detect each page's script themselves and read mixed English/Hindi lines line by
+  line; Tesseract also reads Hindi when installed (`DOCVETA_OCR_EXTRA_LANGUAGES`). The document's
+  language follows the text unless someone set it.
+- Document viewer: tapping zoom/turn on a touch screen selected document text (the text layer sat
+  above the controls), on shared links and in the Inbox. Shared links showed recognised pictures as a
+  broken image.
+- Ask: follow-up questions ("and last year?") found nothing; long pages crowded out other sources;
+  a failed first question left an empty conversation; stopping an answer lost it; reasoning models'
+  `<think>` text appeared in answers; AI server errors showed as "Something went wrong"; a stuck model
+  kept the answer spinning forever; slow-loading models were cut off by reverse proxies (keep-alives
+  are now sent); stopping in the Android app didn't cancel the request.
+- Meaning-based search: chunks were sized in characters, so Hindi and other Indian-language pages
+  overflowed embedding models' token limits.
+- Links in emails, Gotify, ntfy and invitations pointed at `localhost` when `DOCVETA_BASE_URL` wasn't set.
+- Notifications to Gotify/ntfy/Apprise on the local network were blocked even for administrators;
+  ntfy titles in Hindi; Microsoft 365 / Outlook.com SMTP (AUTH LOGIN only) couldn't sign in.
+- Inbox: **All reviewed** only marked the documents loaded on screen; keyboard shortcuts fired while a
+  dialog was open; the three columns squeezed the preview on laptop screens. Esc in a bulk-action
+  dialog also cleared the selection.
+- Home page overflowed sideways on phones with long titles; list view squeezed titles to a few letters.
+- Android: no way out when the server address stopped working (now *Sign out and change server*);
+  tab colours made the active tab hard to see.
+
+### Changed
+- Large libraries: indexes behind foreign keys (purging documents no longer scans every page of every
+  document), taxonomy counts in one grouped query, result totals counted up to 100,000 ("100,000+"),
+  filter counts skipped above 50,000 matches.
+- `/metrics` answers only local-network addresses unless `DOCVETA_METRICS_TOKEN` is set.
+
 ## [0.5.2] - 2026-10-04
 
 ### Fixed

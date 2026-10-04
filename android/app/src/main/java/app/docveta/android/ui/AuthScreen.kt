@@ -32,7 +32,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -54,10 +59,17 @@ import kotlinx.coroutines.launch
 
 private enum class Step { Server, Login, Code, Token }
 
+/** The result of single sign-on, handed over by MainActivity when the browser opens docveta://sso. */
+class SsoInbox {
+    var code by mutableStateOf<String?>(null)
+    var error by mutableStateOf<String?>(null)
+}
+
 /** First run: which server, then who you are. Ends with an access token that keeps the phone signed in. */
 @Composable
-fun AuthScreen(onSignedIn: () -> Unit) {
+fun AuthScreen(sso: SsoInbox, onSignedIn: () -> Unit) {
     val c = LocalContainer.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var step by remember { mutableStateOf(Step.Server) }
     var server by remember { mutableStateOf(c.session.serverUrl.orEmpty()) }
@@ -91,7 +103,26 @@ fun AuthScreen(onSignedIn: () -> Unit) {
         base = url
         status = c.repo.checkServer(url)
         if (status!!.setupNeeded) error = "This server hasn't been set up yet. Open it in a browser first to create the administrator."
-        else step = if (status!!.passwordLogin) Step.Login else Step.Token
+        else step = if (status!!.passwordLogin || status!!.oidc.enabled) Step.Login else Step.Token
+    }
+
+    fun startSso() {
+        error = null
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(c.repo.ssoStartUrl(base))))
+        } catch (e: ActivityNotFoundException) {
+            error = "No web browser is installed to sign in with."
+        }
+    }
+
+    // Back from the browser with a sign-in code (or an error).
+    LaunchedEffect(sso.code, sso.error) {
+        val got = sso.code
+        sso.error?.let { error = it; sso.error = null }
+        if (got != null) {
+            sso.code = null
+            run { c.repo.signInWithSso(got); onSignedIn() }
+        }
     }
 
     fun signIn() = run {
@@ -144,6 +175,11 @@ fun AuthScreen(onSignedIn: () -> Unit) {
                         PrimaryButton("Continue", busy, enabled = server.isNotBlank()) { checkServer() }
                     }
                     Step.Login -> {
+                        if (status?.oidc?.enabled == true) {
+                            PrimaryButton(status!!.oidc.buttonLabel.ifBlank { "Sign in with SSO" }, busy) { startSso() }
+                            if (status?.passwordLogin == true) Text("or", Modifier.align(Alignment.CenterHorizontally), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (status?.passwordLogin != false) {
                         OutlinedTextField(email, { email = it }, label = { Text("Email") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next))
                         OutlinedTextField(
                             password, { password = it }, label = { Text("Password") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
@@ -152,6 +188,7 @@ fun AuthScreen(onSignedIn: () -> Unit) {
                             trailingIcon = { IconButton({ show = !show }) { Icon(if (show) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (show) "Hide password" else "Show password") } },
                         )
                         PrimaryButton("Sign in", busy, enabled = email.isNotBlank() && password.isNotEmpty()) { signIn() }
+                        }
                         TextButton({ step = Step.Token; error = null }, Modifier.align(Alignment.CenterHorizontally)) { Text("Use an access token instead") }
                     }
                     Step.Code -> {
@@ -164,7 +201,7 @@ fun AuthScreen(onSignedIn: () -> Unit) {
                     Step.Token -> {
                         OutlinedTextField(token, { token = it }, label = { Text("Access token") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Go), keyboardActions = KeyboardActions(onGo = { run { c.repo.signInWithToken(base, token); onSignedIn() } }))
                         PrimaryButton("Sign in", busy, enabled = token.isNotBlank()) { run { c.repo.signInWithToken(base, token); onSignedIn() } }
-                        if (status?.passwordLogin == true) TextButton({ step = Step.Login; error = null }, Modifier.align(Alignment.CenterHorizontally)) { Text("Use email and password") }
+                        if (status?.passwordLogin == true || status?.oidc?.enabled == true) TextButton({ step = Step.Login; error = null }, Modifier.align(Alignment.CenterHorizontally)) { Text(if (status?.passwordLogin == true) "Use email and password" else "Back to sign in") }
                     }
                 }
                 if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)

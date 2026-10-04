@@ -2,8 +2,10 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/anand34577/docveta/internal/apperr"
@@ -15,6 +17,7 @@ import (
 	"github.com/anand34577/docveta/internal/office"
 	"github.com/anand34577/docveta/internal/pipeline"
 	"github.com/anand34577/docveta/internal/platform/httpx"
+	"github.com/anand34577/docveta/internal/platform/settings"
 )
 
 func admin(p *auth.Principal) error {
@@ -76,14 +79,14 @@ func (a *API) registerAdmin(mux router) {
 		if err := admin(p); err != nil {
 			return nil, err
 		}
-		return a.Identity.OIDCConfig(r.Context())
+		return a.withRedirectURI(r)(a.Identity.OIDCConfig(r.Context()))
 	}))
 	mux.HandleFunc("PUT /api/v1/admin/settings/oidc", handle(func(r *http.Request, p *auth.Principal) (*identity.OIDCConfig, error) {
 		in, err := decode[identity.OIDCConfig](r)
 		if err != nil {
 			return nil, err
 		}
-		return a.Identity.SetOIDCConfig(r.Context(), p, in)
+		return a.withRedirectURI(r)(a.Identity.SetOIDCConfig(r.Context(), p, in))
 	}))
 	mux.HandleFunc("GET /api/v1/admin/settings/smtp", handle(func(r *http.Request, p *auth.Principal) (notify.SMTPConfig, error) {
 		return a.Notify.SMTPSettings(r.Context(), p)
@@ -223,6 +226,32 @@ func (a *API) registerAdmin(mux router) {
 	}))
 
 	// System & audit
+	mux.HandleFunc("GET /api/v1/admin/settings/server", handle(func(r *http.Request, p *auth.Principal) (*serverSettings, error) {
+		if err := admin(p); err != nil {
+			return nil, err
+		}
+		return a.serverSettings(r), nil
+	}))
+	mux.HandleFunc("PUT /api/v1/admin/settings/server", handle(func(r *http.Request, p *auth.Principal) (*serverSettings, error) {
+		if err := admin(p); err != nil {
+			return nil, err
+		}
+		in, err := decode[settings.Server](r)
+		if err != nil {
+			return nil, err
+		}
+		if u := strings.TrimSpace(in.PublicURL); u != "" {
+			pu, err := url.Parse(u)
+			if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+				return nil, apperr.Invalid("public_url", "Enter the full address, e.g. https://docs.example.com or http://192.168.1.20:8080")
+			}
+		}
+		if err := a.Settings.SetServerSettings(r.Context(), in, p.UserID); err != nil {
+			return nil, err
+		}
+		a.Audit.Record(r.Context(), nil, "settings.server", "settings", "server", map[string]any{"public_url": in.PublicURL, "allow_local_targets": in.AllowLocalTargets})
+		return a.serverSettings(r), nil
+	}))
 	mux.HandleFunc("GET /api/v1/admin/system", handle(func(r *http.Request, p *auth.Principal) (*systemInfo, error) {
 		if err := admin(p); err != nil {
 			return nil, err
@@ -256,4 +285,31 @@ func (a *API) registerAdmin(mux router) {
 		e, err := a.Audit.List(r.Context(), p, r.URL.Query().Get("action"), before, httpx.QueryInt(r, "limit", 100, 1, 500))
 		return items(e), err
 	}))
+}
+
+// withRedirectURI fills in the callback address to register with the identity provider, as the
+// administrator's browser reaches Docveta (exactly what sign-ins from there will send).
+func (a *API) withRedirectURI(r *http.Request) func(*identity.OIDCConfig, error) (*identity.OIDCConfig, error) {
+	return func(c *identity.OIDCConfig, err error) (*identity.OIDCConfig, error) {
+		if c != nil {
+			c.RedirectURI = a.publicBase(r) + identity.OIDCCallbackPath
+		}
+		return c, err
+	}
+}
+
+type serverSettings struct {
+	settings.Server
+	// BaseURL is DOCVETA_BASE_URL; when it names a real host it is used and PublicURL is ignored.
+	BaseURL      string `json:"base_url"`
+	BaseURLFixed bool   `json:"base_url_fixed"`
+	// Detected is the address this request used.
+	Detected string `json:"detected"`
+	// AllowLocalEnv is DOCVETA_ALLOW_LOCAL_TARGETS (allows local targets whatever the setting says).
+	AllowLocalEnv bool `json:"allow_local_env"`
+}
+
+func (a *API) serverSettings(r *http.Request) *serverSettings {
+	return &serverSettings{Server: a.Settings.ServerSettings(r.Context()), BaseURL: a.Cfg.BaseURL.String(),
+		BaseURLFixed: !isLoopbackHost(a.Cfg.BaseURL.Hostname()), Detected: a.publicBase(r), AllowLocalEnv: a.Cfg.AllowLocalTargets}
 }

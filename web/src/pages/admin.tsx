@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Bell, Brain, Cpu, Database, FileStack, FolderSync, KeyRound, Mail, Plus, RotateCw, ScrollText, Server, ShieldOff, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
-import type { AuditEntry, OIDCConfig, ProcessingSettings, QueueStats, SMTPConfig, SystemInfo, TaskView, User, Worker } from "@/lib/types";
+import type { AuditEntry, OIDCConfig, ProcessingSettings, QueueStats, ServerSettings, SMTPConfig, SystemInfo, TaskView, User, Worker } from "@/lib/types";
 import { cn, formatBytes, formatDateTime, timeAgo } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { SecretReveal, SettingsCard, SettingsLayout } from "@/components/settings-layout";
@@ -520,6 +520,7 @@ function OIDCAdmin() {
     setErr(null);
     try {
       const body: OIDCConfig = { ...c };
+      delete body.redirect_uri; // read-only
       if (secret) body.client_secret = secret;
       else delete body.client_secret;
       const r = await api.put<OIDCConfig>("/admin/settings/oidc", body);
@@ -549,8 +550,22 @@ function OIDCAdmin() {
         <Field label="Client secret" htmlFor="o-sec" hint={c.has_client_secret ? "A secret is saved. Enter a new one to replace it." : undefined}>
           <Input id="o-sec" type="password" value={secret} placeholder={c.has_client_secret ? "••••••••" : ""} onChange={(e) => setSecret(e.target.value)} />
         </Field>
-        <Field label="Redirect URI (add this in your provider)" htmlFor="o-red" className="sm:col-span-2">
-          <Input id="o-red" readOnly value={`${window.location.origin}/api/v1/auth/oidc/callback`} onFocus={(e) => e.currentTarget.select()} />
+        <Field
+          label="Redirect URI (add this in your provider)"
+          htmlFor="o-red"
+          className="sm:col-span-2"
+          hint="Open Docveta at the address people will use (not localhost) before copying this, or set DOCVETA_BASE_URL."
+        >
+          <div className="flex gap-2">
+            <Input id="o-red" readOnly value={c.redirect_uri ?? `${window.location.origin}/api/v1/auth/oidc/callback`} onFocus={(e) => e.currentTarget.select()} />
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => navigator.clipboard?.writeText(c.redirect_uri ?? `${window.location.origin}/api/v1/auth/oidc/callback`).then(() => toast.success("Copied"), () => undefined)}
+            >
+              Copy
+            </Button>
+          </div>
         </Field>
         <Field label="Button label" htmlFor="o-btn">
           <Input id="o-btn" value={c.button_label} onChange={(e) => setC({ ...c, button_label: e.target.value })} />
@@ -687,6 +702,8 @@ function SystemAdmin() {
     ["Processing queue", `${s.queue.queued} waiting · ${s.queue.leased} in progress`],
   ];
   return (
+    <>
+    <ServerAddressCard />
     <SettingsCard title="System" description="Health and capacity of this Docveta server.">
       <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-[200px_1fr]">
         {rows.map(([k, v]) => (
@@ -697,8 +714,71 @@ function SystemAdmin() {
         ))}
       </dl>
       <p className="mt-5 text-xs text-subtle">
-        Back up regularly: the database (pg_dump) and the data directory. See docs/operations.md. Metrics for Prometheus are at /metrics.
+        Back up regularly: the database (pg_dump) and the data directory. See docs/operations.md. Metrics for Prometheus are at /metrics (local network only, or set DOCVETA_METRICS_TOKEN).
       </p>
+    </SettingsCard>
+    </>
+  );
+}
+
+/** The address used in emailed and pushed links, and whether notifications may reach the local network. */
+function ServerAddressCard() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["server-settings"], queryFn: () => api.get<ServerSettings>("/admin/settings/server") });
+  const [url, setUrl] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState<ApiError | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const s = q.data;
+  if (!s) return <Skeleton className="h-40" />;
+  const value = url ?? s.public_url;
+  const save = async (patch: Partial<ServerSettings>) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.put<ServerSettings>("/admin/settings/server", { public_url: value, allow_local_targets: s.allow_local_targets, ...patch });
+      qc.setQueryData(["server-settings"], r);
+      setUrl(null);
+      toast.success("Saved");
+    } catch (e) {
+      setErr(e as ApiError);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <SettingsCard
+      title="Server address"
+      description="The address people use to open Docveta. It goes into links in emails, push notifications, invitations and share links."
+      actions={!s.base_url_fixed && <Button size="sm" variant="primary" loading={busy} onClick={() => save({})}>Save</Button>}
+    >
+      {s.base_url_fixed ? (
+        <p className="text-sm">
+          Set by <code className="rounded bg-surface-2 px-1">DOCVETA_BASE_URL</code>: <span className="font-medium">{s.base_url}</span>
+        </p>
+      ) : (
+        <Field label="Address" htmlFor="srv-url" error={err?.fieldError("public_url")} hint={`This browser reaches Docveta at ${s.detected}.`}>
+          <div className="flex gap-2">
+            <Input id="srv-url" value={value} placeholder={s.detected} onChange={(e) => setUrl(e.target.value)} />
+            {value !== s.detected && (
+              <Button type="button" variant="secondary" onClick={() => setUrl(s.detected)}>
+                Use this
+              </Button>
+            )}
+          </div>
+        </Field>
+      )}
+      <div className="mt-3 border-t border-border pt-1">
+        <SwitchRow
+          label="Let everyone's notifications reach the local network"
+          description={
+            s.allow_local_env
+              ? "Allowed for everyone by DOCVETA_ALLOW_LOCAL_TARGETS."
+              : "Gotify, ntfy, Apprise and webhooks set up by administrators can always use local addresses (192.168.x.x, 10.x.x.x). Turn this on to let other people's channels use them too."
+          }
+          checked={s.allow_local_env || s.allow_local_targets}
+          onCheckedChange={(v) => save({ allow_local_targets: v })}
+        />
+      </div>
     </SettingsCard>
   );
 }

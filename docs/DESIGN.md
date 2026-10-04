@@ -1327,7 +1327,7 @@ I've chosen a default for each so work isn't blocked; answer only where you disa
 
 ---
 
-## Implementation status (updated 2026-10-02)
+## Implementation status (updated 2026-10-04)
 
 Remaining work is broken down in detail in [ROADMAP.md](ROADMAP.md).
 
@@ -1358,7 +1358,10 @@ Legend: ✅ built · 🧪 built; the PostgreSQL integration test passes but does
 | Zero-config start: database setup page, generated secret, `docveta.conf` files | ✅ | `internal/firstrun`, `internal/platform/config` |
 | Packaging: Windows service + Inno Setup installer, Linux/macOS install scripts, 9-platform release builds | ✅ | `deploy/`, `.github/workflows/release.yml` |
 | GPU/NPU/CPU OCR engine (PaddleOCR on ONNX Runtime) bundled and supervised by the server | ✅ tested on DirectML (NVIDIA + AMD) and CPU | `workers/onnx`, `internal/app/localocr.go` |
-| Password-protected PDF unlock, Office conversion (Gotenberg), custom fields UI, reminders + ICS, IMAP, watched folder, paperless-ngx import, export/backup command, TOTP/passkeys, share links | ⏳ M2 | schema already has custom fields |
-| AI classification, embeddings, hybrid search, RAG "Ask" | ⏳ M2–M4 | |
-| Android app | ⏳ M4 | API is ready for it |
+| Password-protected PDF unlock, Office conversion (Gotenberg), custom fields, watched folders, export/import, TOTP + recovery codes, invitations, share links, versions and page tools, barcode separators/ASN, workflows, S3 storage, tus uploads, Apprise, quiet hours | 🧪 | `internal/docedit`, `office`, `customfields`, `folders`, `exchange`, `identity`, `shares`, `workflows`, `storage`, `tus` |
+| AI suggestions, embeddings, hybrid search, Similar, RAG "Ask" (incl. one document), MCP server | 🧪 | `internal/ai`; pgvector + HNSW when installed, in-app top-k scan otherwise; script-aware chunking; streaming with stop/keep-alive |
+| OIDC: web, Android (PKCE app link), account linking, request-derived redirect URI | ✅ unit · 🧪 | `internal/identity/oidc.go`, `internal/api/baseurl.go` |
+| OCR script detection (English/Hindi/Tamil/Telugu/Kannada per page and per line) | ✅ unit | `workers/sdk-python/docveta_worker/ppocr.py` `read_lines` |
+| Android app (Compose): sign-in incl. SSO, inbox, documents, viewer, scanner (ML Kit + built-in), uploads (tus), Ask, notifications, trash, app lock | ✅ unit | `android/` |
+| Reminders + ICS feed, IMAP email import, passkeys (WebAuthn), paperless-ngx import, digest emails, i18n (Hindi UI), `/api/docs` page, ClamAV, ASN label sheets | ⏳ not built | ROADMAP §2.3, 2.4, 2.8, 2.9, 3.5, 5.3, 1.1, 4.4 |
 

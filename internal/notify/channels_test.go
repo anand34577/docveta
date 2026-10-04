@@ -1,6 +1,8 @@
 package notify
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -25,7 +27,7 @@ func TestBlockedAddr(t *testing.T) {
 func TestHTTPClientGuard(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	defer srv.Close()
-	if _, err := newHTTPClient(false).Get(srv.URL); err == nil || !strings.Contains(err.Error(), "DOCVETA_ALLOW_LOCAL_TARGETS") {
+	if _, err := newHTTPClient(false).Get(srv.URL); err == nil || !strings.Contains(err.Error(), "local network") {
 		t.Fatalf("loopback request not blocked: %v", err)
 	}
 	resp, err := newHTTPClient(true).Get(srv.URL)
@@ -45,5 +47,49 @@ func TestPlainAuthWithoutTLS(t *testing.T) {
 	proto, resp, err := plainAuth{"u", "pw"}.Start(info)
 	if err != nil || proto != "PLAIN" || string(resp) != "\x00u\x00pw" {
 		t.Fatalf("got %q %q %v", proto, resp, err)
+	}
+}
+
+func TestLocalTargetsByContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	defer srv.Close()
+	req, _ := http.NewRequest("POST", srv.URL, nil)
+	if err := do(req); err == nil {
+		t.Fatal("a plain delivery reached a loopback address")
+	}
+	req, _ = http.NewRequestWithContext(WithLocalTargets(req.Context(), true), "POST", srv.URL, nil)
+	if err := do(req); err != nil {
+		t.Fatalf("an allowed delivery failed: %v", err)
+	}
+}
+
+// Microsoft 365 only offers AUTH LOGIN: the server asks for the username, then the password.
+func TestLoginAuth(t *testing.T) {
+	a := loginAuth{"me@example.com", "pw"}
+	if proto, resp, err := a.Start(&smtp.ServerInfo{Name: "smtp.office365.com", TLS: true}); proto != "LOGIN" || resp != nil || err != nil {
+		t.Fatalf("start: %q %q %v", proto, resp, err)
+	}
+	for challenge, want := range map[string]string{"Username:": "me@example.com", "Password:": "pw"} {
+		if got, err := a.Next([]byte(challenge), true); err != nil || string(got) != want {
+			t.Errorf("%s: got %q, %v", challenge, got, err)
+		}
+	}
+	if _, err := a.Next([]byte("Something else"), true); err == nil {
+		t.Error("an unknown challenge was answered")
+	}
+}
+
+func TestNtfyJSON(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+	}))
+	defer srv.Close()
+	ctx := WithLocalTargets(context.Background(), true)
+	if err := sendNtfy(ctx, NtfyConfig{Server: srv.URL, Topic: "docs"}, Message{Title: "बिजली का बिल", Body: "ready", URL: "https://d.example/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if got["topic"] != "docs" || got["title"] != "बिजली का बिल" || got["click"] != "https://d.example/x" {
+		t.Fatalf("payload %v", got)
 	}
 }

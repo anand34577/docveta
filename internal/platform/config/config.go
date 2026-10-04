@@ -55,6 +55,9 @@ type Config struct {
 	S3      S3
 	// WatchRoots limits where watched folders may be (DOCVETA_WATCH_ROOTS); default <data>/watch.
 	WatchRoots []string
+	// MetricsToken, when set, lets Prometheus scrape /metrics from anywhere with
+	// "Authorization: Bearer <token>". Without it /metrics only answers the local network.
+	MetricsToken string
 }
 
 func Load() (*Config, error) {
@@ -93,6 +96,9 @@ func Load() (*Config, error) {
 			Prefix: env("DOCVETA_S3_PREFIX", ""), Insecure: envBool("DOCVETA_S3_INSECURE", false), PathStyle: envBool("DOCVETA_S3_PATH_STYLE", false),
 		},
 		Interactive: interactive,
+	}
+	if t, err := secretFromEnv("DOCVETA_METRICS_TOKEN"); err == nil {
+		c.MetricsToken = t
 	}
 	var errs []error
 

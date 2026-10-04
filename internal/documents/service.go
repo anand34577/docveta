@@ -259,8 +259,10 @@ func ownerOf(p *auth.Principal) *uuid.UUID {
 
 func dedupe(ids []uuid.UUID) []uuid.UUID {
 	out := make([]uuid.UUID, 0, len(ids))
+	seen := make(map[uuid.UUID]struct{}, len(ids))
 	for _, id := range ids {
-		if !slices.Contains(out, id) {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
 			out = append(out, id)
 		}
 	}
@@ -361,11 +363,13 @@ func (s *Service) Get(ctx context.Context, p *auth.Principal, id uuid.UUID) (*Do
 }
 
 type ListResult struct {
-	Mode       string         `json:"mode,omitempty"` // how the results were found: keyword | semantic | hybrid
-	Items      []*Document    `json:"items"`
-	Total      *int           `json:"total,omitempty"`
-	NextCursor *string        `json:"next_cursor"`
-	Facets     *search.Facets `json:"facets,omitempty"`
+	Mode  string      `json:"mode,omitempty"` // how the results were found: keyword | semantic | hybrid
+	Items []*Document `json:"items"`
+	Total *int        `json:"total,omitempty"`
+	// TotalCapped: more than Total documents match (counting stops at search.TotalCap).
+	TotalCapped bool           `json:"total_capped,omitempty"`
+	NextCursor  *string        `json:"next_cursor"`
+	Facets      *search.Facets `json:"facets,omitempty"`
 }
 
 // List runs a search and hydrates the results.
@@ -389,7 +393,7 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, q search.Query) (
 			d.MatchedPage = res.Hits[i].MatchedPage
 		}
 	}
-	return &ListResult{Items: docs, Total: res.Total, NextCursor: res.NextCursor, Facets: res.Facets}, nil
+	return &ListResult{Items: docs, Total: res.Total, TotalCapped: res.TotalCapped, NextCursor: res.NextCursor, Facets: res.Facets}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -493,6 +497,7 @@ func (s *Service) updateTx(ctx context.Context, tx pgx.Tx, p *auth.Principal, id
 		} else {
 			sets = append(sets, "language="+arg(in.Language.Value))
 			changes["language"] = in.Language.Value
+			userFields = append(userFields, "language") // OCR's detected language won't override it
 		}
 	}
 	if in.PhysicalLocation.Set {
@@ -746,7 +751,10 @@ func (s *Service) AssignASN(ctx context.Context, p *auth.Principal, id uuid.UUID
 // ---------------------------------------------------------------------------
 
 type BulkInput struct {
-	IDs    []uuid.UUID `json:"ids"`
+	IDs []uuid.UUID `json:"ids"`
+	// Select picks the documents on the server instead of IDs: "inbox" = the caller's Inbox
+	// (up to 5000 per call; BulkResult.Remaining says whether to call again).
+	Select string      `json:"select,omitempty"`
 	Action string      `json:"action"` // update | trash | restore | purge | reprocess
 	Update UpdateInput `json:"update"`
 }
@@ -754,6 +762,8 @@ type BulkInput struct {
 type BulkResult struct {
 	Succeeded int         `json:"succeeded"`
 	Failed    []BulkError `json:"failed"`
+	// Remaining: documents the selection still matches after this call (Select only).
+	Remaining int `json:"remaining"`
 }
 
 type BulkError struct {
@@ -761,11 +771,47 @@ type BulkError struct {
 	Message string    `json:"message"`
 }
 
+const bulkMax = 5000
+
 func (s *Service) Bulk(ctx context.Context, p *auth.Principal, in BulkInput) (*BulkResult, error) {
+	selected := false
+	switch in.Select {
+	case "":
+	case "inbox":
+		visible, err := s.spaces.VisibleSpaceIDs(ctx, p.UserID)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := s.pool.Query(ctx, `SELECT id FROM documents WHERE inbox AND deleted_at IS NULL AND space_id = ANY($1)
+			ORDER BY added_at LIMIT $2`, visible, bulkMax)
+		if err != nil {
+			return nil, err
+		}
+		if in.IDs, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID]); err != nil {
+			return nil, err
+		}
+		if len(in.IDs) == 0 {
+			return &BulkResult{Failed: []BulkError{}}, nil
+		}
+		selected = true
+	default:
+		return nil, apperr.Invalid("select", "Unknown selection")
+	}
+	res, err := s.bulk(ctx, p, in)
+	if err == nil && selected {
+		visible, _ := s.spaces.VisibleSpaceIDs(ctx, p.UserID)
+		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM documents WHERE inbox AND deleted_at IS NULL AND space_id = ANY($1)`, visible).Scan(&res.Remaining)
+		// Documents the caller can't change stay in the Inbox; don't count them as work left.
+		res.Remaining = max(0, res.Remaining-len(res.Failed))
+	}
+	return res, err
+}
+
+func (s *Service) bulk(ctx context.Context, p *auth.Principal, in BulkInput) (*BulkResult, error) {
 	if len(in.IDs) == 0 {
 		return nil, apperr.Invalid("ids", "Select at least one document")
 	}
-	if len(in.IDs) > 5000 {
+	if len(in.IDs) > bulkMax {
 		return nil, apperr.Invalid("ids", "Select at most 5000 documents at a time")
 	}
 	res := &BulkResult{Failed: []BulkError{}}

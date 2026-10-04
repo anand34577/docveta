@@ -38,3 +38,11 @@ func TestFindLocalOCR(t *testing.T) {
 		t.Errorf("auto found %q", p)
 	}
 }
+
+func TestMetricsAccess(t *testing.T) {
+	for ip, want := range map[string]bool{"127.0.0.1": true, "192.168.1.9": true, "10.2.3.4": true, "::1": true, "fd00::2": true, "8.8.8.8": false, "": false} {
+		if got := localClient(ip); got != want {
+			t.Errorf("%q: got %v", ip, got)
+		}
+	}
+}

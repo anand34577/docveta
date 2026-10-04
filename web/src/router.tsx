@@ -112,7 +112,13 @@ export const spaceSettingsRoute = createRoute({
   component: SpaceSettingsPage,
 });
 
-const askRoute = createRoute({ getParentRoute: () => appRoute, path: "/ask", component: AskPage });
+const askRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/ask",
+  // ?doc=<id>: ask about one document (from the document page).
+  validateSearch: (s: Record<string, unknown>): { doc?: string } => ({ doc: typeof s.doc === "string" && /^[0-9a-f-]{36}$/i.test(s.doc) ? s.doc : undefined }),
+  component: AskPage,
+});
 const notificationsRoute = createRoute({ getParentRoute: () => appRoute, path: "/notifications", component: NotificationsPage });
 
 export const adminRoute = createRoute({ getParentRoute: () => appRoute, path: "/admin/$section", component: AdminPage });

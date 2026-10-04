@@ -134,7 +134,7 @@ export function DocumentCard({ doc, selected, selecting, onToggle, query }: Item
       <Link to="/documents/$id" params={{ id: doc.id }} search={linkSearch(doc, query)} className="flex flex-1 flex-col" onClick={(e) => selecting && (e.preventDefault(), onToggle(e))}>
         <Thumbnail doc={doc} className="aspect-[4/3.6] border-b border-border" />
         <div className="flex flex-1 flex-col gap-1.5 p-3">
-          <h3 className="line-clamp-2 text-sm font-medium leading-snug">{doc.title}</h3>
+          <h3 className="line-clamp-2 break-words text-sm font-medium leading-snug" title={doc.title}>{doc.title}</h3>
           <div className="truncate text-xs text-muted">
             {[formatDocDate(doc.document_date), doc.correspondent?.name].filter(Boolean).join(" · ") || " "}
           </div>
@@ -172,30 +172,30 @@ export function DocumentRow({ doc, selected, selecting, onToggle, query }: ItemP
         className="flex min-w-0 flex-1 items-center gap-3"
       >
         <Thumbnail doc={doc} className="h-12 w-10 shrink-0 rounded border border-border" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium">{doc.title}</span>
+        <div className="min-w-[14rem] flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-medium" title={doc.title}>{doc.title}</span>
             {doc.inbox && doc.status === "ready" && <NewBadge className="shrink-0" />}
             <StatusBadge doc={doc} className="shrink-0 shadow-none" />
           </div>
           {doc.snippet?.length ? (
             <Snippet segments={doc.snippet} className="line-clamp-1" />
           ) : (
-            <div className="truncate text-xs text-muted sm:hidden">
+            <div className="truncate text-xs text-muted lg:hidden">
               {[formatDocDate(doc.document_date), doc.correspondent?.name].filter(Boolean).join(" · ")}
             </div>
           )}
         </div>
-        <div className="hidden w-40 truncate text-sm text-muted md:block">{doc.correspondent?.name}</div>
-        <div className="hidden w-32 truncate text-sm text-muted xl:block">{doc.document_type?.name}</div>
-        <div className="hidden w-48 lg:block">
+        <div className="hidden w-36 shrink-0 truncate text-sm text-muted lg:block" title={doc.correspondent?.name}>{doc.correspondent?.name}</div>
+        <div className="hidden w-28 shrink-0 truncate text-sm text-muted 2xl:block" title={doc.document_type?.name}>{doc.document_type?.name}</div>
+        <div className="hidden w-44 shrink-0 xl:block">
           <TagList tags={doc.tags} max={2} />
         </div>
-        <div className="hidden w-32 lg:block">
+        <div className="hidden w-28 shrink-0 2xl:block">
           <SpaceTag doc={doc} />
         </div>
-        <div className="hidden w-24 text-right text-sm tabular-nums text-muted sm:block">{formatDocDate(doc.document_date)}</div>
-        <div className="hidden w-8 text-right text-xs text-subtle sm:block">
+        <div className="hidden w-24 shrink-0 text-right text-sm tabular-nums text-muted sm:block">{formatDocDate(doc.document_date)}</div>
+        <div className="hidden w-8 shrink-0 text-right text-xs text-subtle sm:block">
           {doc.note_count > 0 && (
             <span className="inline-flex items-center gap-0.5">
               <MessageSquare className="size-3" />

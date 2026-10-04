@@ -6,6 +6,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -41,6 +42,8 @@ sealed interface SignIn {
 }
 
 sealed interface AskEvent {
+    /** "searching" while documents are looked up, then "answering" while the model writes. */
+    data class Status(val stage: String) : AskEvent
     data class Citations(val list: List<Citation>) : AskEvent
     data class Delta(val text: String) : AskEvent
     data class Done(val conversationId: String) : AskEvent
@@ -115,6 +118,31 @@ class Repository(val api: ApiClient, val session: SessionStore, private val cach
             session.signOut()
             throw e
         }
+    }
+
+    /**
+     * Single sign-on happens in the browser. Returns the address to open; the server sends the
+     * browser back to docveta://sso?code=…, which [signInWithSso] redeems. The code is useless
+     * without the secret kept here (PKCE), so another app catching the link gains nothing.
+     */
+    fun ssoStartUrl(base: String): String {
+        val bytes = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        val verifier = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+        session.pendingSsoServer = base
+        session.pendingSsoVerifier = verifier
+        return "$base/api/v1/auth/oidc/start?app=1&code_challenge=${pkceChallenge(verifier)}"
+    }
+
+    suspend fun signInWithSso(code: String) {
+        val base = session.pendingSsoServer ?: throw ApiException(0, "sso_expired", "Start single sign-on again from the app.")
+        val verifier = session.pendingSsoVerifier ?: throw ApiException(0, "sso_expired", "Start single sign-on again from the app.")
+        session.pendingSsoServer = null
+        session.pendingSsoVerifier = null
+        loginBase = base
+        loginHttp = newLoginClient()
+        val body = buildJsonObject { put("code", code); put("code_verifier", verifier) }.toString()
+        loginPost("$base/api/v1/auth/oidc/app", body)
+        finishSignIn(base)
     }
 
     private suspend fun loginPost(url: String, body: String): String {
@@ -276,43 +304,63 @@ class Repository(val api: ApiClient, val session: SessionStore, private val cach
     suspend fun conversation(id: String): List<ConversationMessage> = api.get<Items<ConversationMessage>>("/ai/conversations/$id/messages").items
     suspend fun deleteConversation(id: String) = api.delete("/ai/conversations/$id")
 
-    fun ask(question: String, conversationId: String?, spaceId: String?): Flow<AskEvent> = callbackFlow {
+    suspend fun renameConversation(id: String, title: String) {
+        api.patch<Conversation>("/ai/conversations/$id", buildJsonObject { put("title", title) }.toString())
+    }
+
+    fun ask(question: String, conversationId: String?, spaceId: String?, documentId: String? = null): Flow<AskEvent> = callbackFlow {
         val body = buildJsonObject {
             put("question", question)
             if (conversationId != null) put("conversation_id", conversationId)
             if (spaceId != null) putJsonArray("space_ids") { add(JsonPrimitive(spaceId)) }
+            if (documentId != null) putJsonArray("document_ids") { add(JsonPrimitive(documentId)) }
         }.toString()
         val req = Request.Builder().url(api.url("/ai/ask")).header("Accept", "text/event-stream").post(body.toRequestBody(ApiClient.JSON)).build()
-        val client = api.imageClient.newBuilder().readTimeout(0, java.util.concurrent.TimeUnit.SECONDS).build()
+        // The server sends a keep-alive every 15 s, so two minutes of silence means the connection is gone.
+        val client = api.imageClient.newBuilder().readTimeout(120, java.util.concurrent.TimeUnit.SECONDS).build()
         val call = client.newCall(req)
-        try {
-            val res = call.await()
-            res.use {
-                if (!it.isSuccessful) throw ApiClient.problem(it)
-                val src = it.body!!.source()
-                var event = ""
-                while (!src.exhausted()) {
-                    val line = src.readUtf8Line() ?: break
-                    when {
-                        line.startsWith("event:") -> event = line.removePrefix("event:").trim()
-                        line.startsWith("data:") -> {
-                            val data = line.removePrefix("data:").trim()
-                            when (event) {
-                                "citations" -> trySend(AskEvent.Citations(AppJson.decodeFromString(ListSerializer(Citation.serializer()), data)))
-                                "delta" -> trySend(AskEvent.Delta(AppJson.parseToJsonElement(data).let { e -> (e as? JsonPrimitive)?.content.orEmpty() }))
-                                "error" -> trySend(AskEvent.Failed((AppJson.parseToJsonElement(data) as? JsonObject)?.get("message")?.let { m -> (m as? JsonPrimitive)?.content } ?: "Something went wrong"))
-                                "done" -> trySend(AskEvent.Done((AppJson.parseToJsonElement(data) as? JsonObject)?.get("conversation_id")?.let { c -> (c as? JsonPrimitive)?.content }.orEmpty()))
+        // Read in a child coroutine so that cancelling the flow (Stop) reaches awaitClose and
+        // cancels the HTTP call, which unblocks the read.
+        launch {
+            try {
+                val res = call.await()
+                res.use {
+                    if (!it.isSuccessful) throw ApiClient.problem(it)
+                    val src = it.body!!.source()
+                    var event = ""
+                    while (!src.exhausted()) {
+                        val line = src.readUtf8Line() ?: break
+                        when {
+                            line.startsWith("event:") -> event = line.removePrefix("event:").trim()
+                            line.startsWith("data:") -> {
+                                val data = line.removePrefix("data:").trim()
+                                val obj = { AppJson.parseToJsonElement(data) as? JsonObject }
+                                when (event) {
+                                    "status" -> trySend(AskEvent.Status((obj()?.get("stage") as? JsonPrimitive)?.content.orEmpty()))
+                                    "citations" -> trySend(AskEvent.Citations(AppJson.decodeFromString(ListSerializer(Citation.serializer()), data)))
+                                    "delta" -> trySend(AskEvent.Delta(AppJson.parseToJsonElement(data).let { e -> (e as? JsonPrimitive)?.content.orEmpty() }))
+                                    "error" -> trySend(AskEvent.Failed((obj()?.get("message") as? JsonPrimitive)?.content ?: "Something went wrong"))
+                                    "done" -> trySend(AskEvent.Done((obj()?.get("conversation_id") as? JsonPrimitive)?.content.orEmpty()))
+                                }
                             }
                         }
                     }
                 }
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException && !isClosedForSend) {
+                    trySend(AskEvent.Failed((e as? ApiException)?.message ?: "The connection to the server was lost. Try again."))
+                }
+            } finally {
+                close()
             }
-            close()
-        } catch (e: Exception) {
-            if (e !is kotlinx.coroutines.CancellationException) trySend(AskEvent.Failed((e as? ApiException)?.message ?: "Couldn't get an answer"))
-            close()
         }
         awaitClose { call.cancel() }
     }.flowOn(Dispatchers.IO)
 }
 
+
+/** PKCE S256: base64url(SHA-256(verifier)) without padding. */
+fun pkceChallenge(verifier: String): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII))
+    return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+}

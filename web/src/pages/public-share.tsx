@@ -4,11 +4,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, FileQuestion, Lock } from "lucide-react";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import type { PublicDoc, PublicShare } from "@/lib/types";
-import { cn, formatBytes, formatDocDate } from "@/lib/utils";
+import { browserImage, cn, fileKind, formatBytes, formatDocDate } from "@/lib/utils";
 import { LogoMark } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { EmptyState, Spinner } from "@/components/ui/misc";
+import { ImageViewer } from "@/components/documents/image-viewer";
 
 const PdfViewer = React.lazy(() => import("@/components/documents/pdf-viewer"));
 
@@ -35,8 +36,8 @@ export function PublicSharePage() {
         </div>
         {doc && share.data?.allow_download && (
           <Button size="sm" asChild>
-            <a href={`/api/v1/public/shares/${token}/documents/${doc.id}/file?kind=original&download=1`}>
-              <Download /> Download
+            <a href={`/api/v1/public/shares/${token}/documents/${doc.id}/file?kind=original&download=1`} aria-label="Download" title="Download">
+              <Download /> <span className="hidden sm:inline">Download</span>
             </a>
           </Button>
         )}
@@ -109,23 +110,24 @@ function PasswordGate({ token, onUnlocked }: { token: string; onUnlocked: () => 
 }
 
 function SharedViewer({ token, doc }: { token: string; doc: PublicDoc }) {
-  const url = `/api/v1/public/shares/${token}/documents/${doc.id}/file?kind=best`;
-  const image = doc.mime_type.startsWith("image/");
-  if (image)
+  const file = (kind: string) => `/api/v1/public/shares/${token}/documents/${doc.id}/file?kind=${kind}`;
+  const kind = fileKind(doc.mime_type);
+  // A converted copy first (Office → PDF, HEIC → JPEG), then the searchable PDF of a scan, then
+  // the file itself. Recognised pictures go to the PDF viewer: with downloads off, the link
+  // serves their archive PDF rather than the original picture.
+  let view: React.ReactNode = null;
+  if (doc.has_derived) {
+    view = kind === "image" ? <ImageViewer src={file("derived")} alt={doc.title} /> : <PdfViewer url={file("derived")} />;
+  } else if (kind === "pdf" || (kind === "image" && doc.has_archive)) {
+    view = <PdfViewer url={file(doc.has_archive ? "archive" : "best")} />;
+  } else if (kind === "image" && browserImage(doc.mime_type)) {
+    view = <ImageViewer src={file("best")} alt={doc.title} />;
+  }
+  if (!view)
     return (
-      <div className="flex h-full items-start justify-center overflow-auto bg-surface-3 p-4">
-        <img src={url} alt={doc.title} className="max-w-full rounded-md shadow-md" style={{ imageOrientation: "from-image" }} />
-      </div>
+      <EmptyState icon={<FileQuestion />} title="No preview for this file" className="h-full">
+        Use Download to open it on your device.
+      </EmptyState>
     );
-  if (doc.mime_type === "application/pdf" || doc.has_archive || doc.has_derived)
-    return (
-      <React.Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
-        <PdfViewer url={url} />
-      </React.Suspense>
-    );
-  return (
-    <EmptyState icon={<FileQuestion />} title="No preview for this file" className="h-full">
-      Use Download to open it on your device.
-    </EmptyState>
-  );
+  return <React.Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>{view}</React.Suspense>;
 }

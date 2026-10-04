@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
@@ -150,6 +152,7 @@ func (a *API) registerAI(mux router) {
 			return
 		}
 		rc := http.NewResponseController(w)
+		var mu sync.Mutex // the answer and the keep-alive write from different goroutines
 		started := false
 		start := func() {
 			if started {
@@ -163,27 +166,72 @@ func (a *API) registerAI(mux router) {
 			w.WriteHeader(http.StatusOK)
 		}
 		emit := func(event string, data any) {
+			mu.Lock()
+			defer mu.Unlock()
 			start()
 			b, _ := json.Marshal(data)
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 			_ = rc.Flush()
 		}
+		// A model that is still loading can take a minute to say anything; a comment line every
+		// few seconds keeps proxies (nginx, Cloudflare) from closing the quiet connection.
+		stopPing := make(chan struct{})
+		defer close(stopPing)
+		go func() {
+			t := time.NewTicker(15 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-stopPing:
+					return
+				case <-r.Context().Done():
+					return
+				case <-t.C:
+					mu.Lock()
+					if started {
+						_, _ = fmt.Fprint(w, ": keep-alive\n\n")
+						_ = rc.Flush()
+					}
+					mu.Unlock()
+				}
+			}
+		}()
 		// Errors before the first event are normal problem responses; later ones are events.
 		if err := a.AI.Ask(r.Context(), p, in, emit); err != nil {
-			if !started {
+			if r.Context().Err() != nil {
+				return // the person stopped the answer or left
+			}
+			mu.Lock()
+			wasStarted := started
+			mu.Unlock()
+			if !wasStarted {
 				httpx.Error(w, r, err)
 				return
 			}
 			msg := "Something went wrong while answering."
-			if ae, ok := apperr.As(err); ok {
+			if ae, ok := apperr.As(err); ok && ae.Kind != apperr.KindInternal {
 				msg = ae.Msg
+			} else {
+				httpx.Logger(r.Context()).Error("ask failed", "err", err)
 			}
 			emit("error", map[string]string{"message": msg})
 		}
 	})
 	mux.HandleFunc("GET /api/v1/ai/conversations", handle(func(r *http.Request, p *auth.Principal) (list[ai.Conversation], error) {
-		c, err := a.AI.Conversations(r.Context(), p)
+		var before *time.Time
+		if v := r.URL.Query().Get("before"); v != "" {
+			t, err := time.Parse(time.RFC3339Nano, v)
+			if err != nil {
+				return list[ai.Conversation]{}, apperr.Invalid("before", "Use an RFC 3339 time")
+			}
+			before = &t
+		}
+		c, err := a.AI.Conversations(r.Context(), p, before, httpx.QueryInt(r, "limit", 50, 1, 200))
 		return items(c), err
+	}))
+	mux.HandleFunc("DELETE /api/v1/ai/conversations", handle(func(r *http.Request, p *auth.Principal) (map[string]int64, error) {
+		n, err := a.AI.DeleteAllConversations(r.Context(), p)
+		return map[string]int64{"deleted": n}, err
 	}))
 	mux.HandleFunc("GET /api/v1/ai/conversations/{id}/messages", handle(func(r *http.Request, p *auth.Principal) (list[ai.ConversationMessage], error) {
 		id, err := httpx.PathUUID(r, "id")
@@ -192,6 +240,19 @@ func (a *API) registerAI(mux router) {
 		}
 		m, err := a.AI.Messages(r.Context(), p, id)
 		return items(m), err
+	}))
+	mux.HandleFunc("PATCH /api/v1/ai/conversations/{id}", handle(func(r *http.Request, p *auth.Principal) (*ai.Conversation, error) {
+		id, err := httpx.PathUUID(r, "id")
+		if err != nil {
+			return nil, err
+		}
+		in, err := decode[struct {
+			Title string `json:"title"`
+		}](r)
+		if err != nil {
+			return nil, err
+		}
+		return a.AI.RenameConversation(r.Context(), p, id, in.Title)
 	}))
 	mux.HandleFunc("DELETE /api/v1/ai/conversations/{id}", handleNoContent(func(r *http.Request, p *auth.Principal) error {
 		id, err := httpx.PathUUID(r, "id")

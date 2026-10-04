@@ -16,17 +16,19 @@ text (on your graphics card, an NPU or the CPU), organises them, and finds them 
 - **Works without OCR too** — born-digital PDFs are searchable immediately.
 - **Search that understands Indic scripts and IDs** — Unicode-aware indexing, typo
   tolerance, `tag:` / `from:` / `date:` filters, highlighted snippets with page numbers.
-- **Single sign-on (OIDC)**, API tokens, audit log.
+- **Single sign-on (OIDC)** in the web and Android apps, two-step sign-in, API tokens, audit log.
+- **Ask your documents** (optional AI, any OpenAI-compatible server incl. Ollama): cited answers,
+  meaning-based search (pgvector when installed), suggestions for tags, sender and dates.
 - **Notifications** — in-app (live), Gotify, ntfy, email (SMTP), signed webhooks.
 - **One binary, every platform** — the server and web app in a single file for Windows,
   Linux and macOS (x64, ARM64, ARMv7, x86), with a built-in database. Windows installer,
   one-command Linux install, Docker Compose with nothing to edit.
-- **Phone-ready** — installable web app with Android "Share to Docveta"; API designed for a
-  future native app (delta sync, token auth).
+- **Android app** — scanner with edge detection, resumable uploads, Inbox, search, Ask and
+  single sign-on; the web app is installable too.
 
-> Status: **early development (v0.1)**. See [docs/DESIGN.md](docs/DESIGN.md) for the full
-> design, the *Implementation status* section there for what's done, and
-> [docs/ROADMAP.md](docs/ROADMAP.md) for everything that remains.
+> Status: **beta (0.5)**. See [docs/DESIGN.md](docs/DESIGN.md) for the design, its
+> *Implementation status* section for what's built, [docs/ROADMAP.md](docs/ROADMAP.md) for what
+> remains, and [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## Install
 

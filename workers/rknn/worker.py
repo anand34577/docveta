@@ -124,35 +124,21 @@ class RKNNEngine(Engine):
     def close_session(self, session: Session) -> None:
         session.close()
 
-    def _script(self, languages: list[str]) -> str:
-        for l in languages:
-            s = LANG_SCRIPT.get(l.split("-")[0].lower())
-            if s in self.scripts:
-                return s
-        if "en" in self.scripts:
-            return "en"
-        return self.scripts[0]
-
     def recognize(self, session: Optional[Session], image: Image.Image, page_no: int, languages: list[str]) -> PageResult:
         if session is None:
             raise EngineError("engine_error", "no NPU session", retryable=True)
         img = np.asarray(image.convert("RGB"))
-        script = self._script(languages)
-        rec = session.rec_infer(script)
-        charset = session.charsets[script]
         with session.lock:
             boxes = ppocr.detect(img, session.det_infer, self.profile.det_size)
-            lines: list[Line] = []
-            for b in boxes:
-                r = ppocr.recognize(img, b, rec, charset)
-                if r is None or r.confidence < 0.5:
-                    continue
-                x0, y0, x1, y1 = b.rect
-                w = x1 - x0
-                words = [Word(t, (x0 + f0 * w, y0, x0 + f1 * w, y1), r.confidence) for t, f0, f1 in r.words]
-                lines.append(Line(text=r.text, bbox=(x0, y0, x1, y1), confidence=r.confidence, words=words))
-        lang = next((l for l in languages if LANG_SCRIPT.get(l) == script), None)
-        return PageResult(lines=lines, language=lang)
+            found, script = ppocr.read_lines(
+                boxes, lambda b, sc: ppocr.recognize(img, b, session.rec_infer(sc), session.charsets[sc]), languages, self.scripts)
+        lines: list[Line] = []
+        for b, r in found:
+            x0, y0, x1, y1 = b.rect
+            w = x1 - x0
+            words = [Word(t, (x0 + f0 * w, y0, x0 + f1 * w, y1), r.confidence) for t, f0, f1 in r.words]
+            lines.append(Line(text=r.text, bbox=(x0, y0, x1, y1), confidence=r.confidence, words=words))
+        return PageResult(lines=lines, language=ppocr.page_language(languages, script))
 
 
 if __name__ == "__main__":

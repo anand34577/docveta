@@ -310,33 +310,22 @@ class AllwinnerEngine(Engine):
     def open_session(self, slot: int) -> Models:
         return self.m
 
-    def _script(self, languages: list[str]) -> str:
-        for l in languages:
-            s = LANG_SCRIPT.get(l.split("-")[0].lower())
-            if s in self.scripts:
-                return s
-        return "en" if "en" in self.scripts else self.scripts[0]
-
     def recognize(self, session: Optional[Models], image: Image.Image, page_no: int, languages: list[str]) -> PageResult:
         if session is None:
             raise EngineError("engine_error", "no NPU session", retryable=True)
         img = np.asarray(image.convert("RGB"))
-        script = self._script(languages)
         try:
             boxes = ppocr.detect(img, session.det_infer, session.det_size)
         except VipError as e:
             raise EngineError("engine_error", str(e), retryable=True)
+        found, script = ppocr.read_lines(boxes, lambda b, sc: session.read(img, b, sc), languages, self.scripts)
         lines: list[Line] = []
-        for b in boxes:
-            r = session.read(img, b, script)
-            if r is None or r.confidence < 0.5:
-                continue
+        for b, r in found:
             x0, y0, x1, y1 = b.rect
             w = x1 - x0
             words = [Word(t, (x0 + f0 * w, y0, x0 + f1 * w, y1), r.confidence) for t, f0, f1 in r.words]
             lines.append(Line(text=r.text, bbox=(x0, y0, x1, y1), confidence=r.confidence, words=words))
-        lang = next((l for l in languages if LANG_SCRIPT.get(l) == script), None)
-        return PageResult(lines=lines, language=lang)
+        return PageResult(lines=lines, language=ppocr.page_language(languages, script))
 
 
 def probe() -> None:

@@ -84,7 +84,7 @@ func (a *API) registerMCP(mux router) {
 
 func (a *API) mcp(w http.ResponseWriter, r *http.Request) {
 	// Browsers must not be able to drive this from another site (DNS rebinding).
-	if o := r.Header.Get("Origin"); o != "" && o != a.origin {
+	if o := r.Header.Get("Origin"); o != "" && o != a.origin && o != originOf(a.publicBase(r)) {
 		httpx.Error(w, r, apperr.Forbidden("Cross-origin requests aren't allowed"))
 		return
 	}

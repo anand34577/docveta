@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -311,10 +312,25 @@ func extractJSON(s string) json.RawMessage {
 	return nil
 }
 
-// ChatStream streams an answer, calling onDelta with each piece of text.
+// ErrEmptyAnswer: the model streamed nothing usable.
+var ErrEmptyAnswer = errors.New("the AI returned an empty answer; try again, or ask an administrator to check the chat model")
+
+// ChatStream streams an answer, calling onDelta with each piece of visible text. Reasoning
+// models' <think>…</think> sections are left out. If the server sends nothing for the
+// provider's timeout (a stuck or overloaded model), the answer is abandoned.
 func (c *Client) ChatStream(ctx context.Context, msgs []Message, onDelta func(string)) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	idle := time.Duration(max(c.p.TimeoutSeconds, 30)) * time.Second
+	var stalled atomic.Bool
+	watchdog := time.AfterFunc(idle, func() { stalled.Store(true); cancel() })
+	defer watchdog.Stop()
+
 	res, err := c.do(ctx, http.MethodPost, "/chat/completions", chatRequest{Model: c.p.ChatModel, Messages: msgs, Stream: true}, true)
 	if err != nil {
+		if stalled.Load() {
+			return fmt.Errorf("the AI server didn't start answering within %s", idle)
+		}
 		return err
 	}
 	defer res.Body.Close()
@@ -322,9 +338,23 @@ func (c *Client) ChatStream(ctx context.Context, msgs []Message, onDelta func(st
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
 		return &httpError{Status: res.StatusCode, Body: string(b)}
 	}
+	var think thinkFilter
+	wrote := false
+	emit := func(s string) {
+		if s = think.Write(s); s != "" {
+			if !wrote {
+				s = strings.TrimLeft(s, " \n\r\t")
+			}
+			if s != "" {
+				wrote = true
+				onDelta(s)
+			}
+		}
+	}
 	sc := bufio.NewScanner(res.Body)
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
 	for sc.Scan() {
+		watchdog.Reset(idle)
 		line := strings.TrimSpace(sc.Text())
 		data, ok := strings.CutPrefix(line, "data:")
 		if !ok {
@@ -332,7 +362,7 @@ func (c *Client) ChatStream(ctx context.Context, msgs []Message, onDelta func(st
 		}
 		data = strings.TrimSpace(data)
 		if data == "[DONE]" {
-			return nil
+			break
 		}
 		var v struct {
 			Choices []struct {
@@ -340,12 +370,95 @@ func (c *Client) ChatStream(ctx context.Context, msgs []Message, onDelta func(st
 					Content string `json:"content"`
 				} `json:"delta"`
 			} `json:"choices"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
 		}
-		if json.Unmarshal([]byte(data), &v) == nil && len(v.Choices) > 0 && v.Choices[0].Delta.Content != "" {
-			onDelta(v.Choices[0].Delta.Content)
+		if json.Unmarshal([]byte(data), &v) != nil {
+			continue
+		}
+		if v.Error != nil {
+			return fmt.Errorf("the AI server stopped with an error: %s", v.Error.Message)
+		}
+		if len(v.Choices) > 0 && v.Choices[0].Delta.Content != "" {
+			emit(v.Choices[0].Delta.Content)
 		}
 	}
-	return sc.Err()
+	if err := sc.Err(); err != nil {
+		if stalled.Load() {
+			return fmt.Errorf("the AI server stopped answering for %s", idle)
+		}
+		return err
+	}
+	if stalled.Load() {
+		return fmt.Errorf("the AI server stopped answering for %s", idle)
+	}
+	emit(think.Flush())
+	if !wrote {
+		return ErrEmptyAnswer
+	}
+	return nil
+}
+
+// thinkFilter removes <think>…</think> (and <thinking>…</thinking>) sections from streamed
+// text, even when a tag is split across pieces.
+type thinkFilter struct {
+	in      bool
+	pending string
+}
+
+var thinkOpen, thinkClose = []string{"<think>", "<thinking>"}, []string{"</think>", "</thinking>"}
+
+func (f *thinkFilter) Write(s string) string {
+	s = f.pending + s
+	f.pending = ""
+	var out strings.Builder
+	for s != "" {
+		tags := thinkOpen
+		if f.in {
+			tags = thinkClose
+		}
+		at, tag := -1, ""
+		for _, t := range tags {
+			if i := strings.Index(s, t); i >= 0 && (at < 0 || i < at) {
+				at, tag = i, t
+			}
+		}
+		if at >= 0 {
+			if !f.in {
+				out.WriteString(s[:at])
+			}
+			f.in = !f.in
+			s = s[at+len(tag):]
+			continue
+		}
+		// Keep a possible partial tag at the end for the next piece.
+		keep := 0
+		for _, t := range tags {
+			for n := min(len(t)-1, len(s)); n > keep; n-- {
+				if strings.HasSuffix(s, t[:n]) {
+					keep = n
+					break
+				}
+			}
+		}
+		if !f.in {
+			out.WriteString(s[:len(s)-keep])
+		}
+		f.pending = s[len(s)-keep:]
+		break
+	}
+	return out.String()
+}
+
+// Flush returns text held back as a possible tag start when the stream ends.
+func (f *thinkFilter) Flush() string {
+	p := f.pending
+	f.pending = ""
+	if f.in {
+		return ""
+	}
+	return p
 }
 
 // Embed returns one vector per input, in order. Inputs are sent in small batches.

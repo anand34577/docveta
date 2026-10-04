@@ -21,6 +21,7 @@ import (
 	"net/netip"
 	"net/smtp"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -71,7 +72,25 @@ type EmailConfig struct {
 	To string `json:"to"` // empty = the channel owner's account email
 }
 
-var httpClient = newHTTPClient(false)
+var (
+	strictClient = newHTTPClient(false) // refuses local network addresses (SSRF protection)
+	localClient  = newHTTPClient(true)
+)
+
+type allowLocalKey struct{}
+
+// WithLocalTargets marks deliveries made with ctx as allowed to reach the local network:
+// channels set up by administrators (a Gotify or ntfy server at home is the usual case).
+func WithLocalTargets(ctx context.Context, allow bool) context.Context {
+	return context.WithValue(ctx, allowLocalKey{}, allow)
+}
+
+func clientFor(ctx context.Context) *http.Client {
+	if allow, _ := ctx.Value(allowLocalKey{}).(bool); allow {
+		return localClient
+	}
+	return strictClient
+}
 
 // newHTTPClient returns the client used for user-defined URLs (Gotify, ntfy,
 // webhooks). Unless allowLocal is set, it refuses to connect to loopback, private,
@@ -88,7 +107,7 @@ func newHTTPClient(allowLocal bool) *http.Client {
 				return err
 			}
 			if blockedAddr(ap.Addr()) {
-				return fmt.Errorf("%s is a local network address; an administrator can allow these with DOCVETA_ALLOW_LOCAL_TARGETS=true", ap.Addr())
+				return fmt.Errorf("%s is a local network address; an administrator can allow these in Admin → System (Local network)", ap.Addr())
 			}
 			return nil
 		}
@@ -141,14 +160,18 @@ func sendNtfy(ctx context.Context, c NtfyConfig, m Message) error {
 	if server == "" {
 		server = "https://ntfy.sh"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/"+url.PathEscape(c.Topic), strings.NewReader(m.Body))
+	// JSON publishing: titles in Hindi or other scripts don't fit in HTTP headers.
+	payload := map[string]any{"topic": c.Topic, "title": m.Title, "message": m.Body,
+		"priority": min(5, max(1, priorityFor(m.Severity)/2+1)), "tags": []string{"page_facing_up"}}
+	if m.URL != "" {
+		payload["click"] = m.URL
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Title", m.Title)
-	req.Header.Set("Click", m.URL)
-	req.Header.Set("Priority", strconv.Itoa(min(5, max(1, priorityFor(m.Severity)/2+1))))
-	req.Header.Set("Tags", "page_facing_up")
+	req.Header.Set("Content-Type", "application/json")
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
@@ -235,7 +258,7 @@ func PostJSON(ctx context.Context, rawURL string, payload any) error {
 }
 
 func do(req *http.Request) error {
-	resp, err := httpClient.Do(req)
+	resp, err := clientFor(req.Context()).Do(req)
 	if err != nil {
 		return err
 	}
@@ -292,11 +315,7 @@ func sendEmail(ctx context.Context, c SMTPConfig, password, to string, m Message
 		}
 	}
 	if c.Username != "" {
-		var auth smtp.Auth = smtp.PlainAuth("", c.Username, password, c.Host)
-		if c.Security == "none" {
-			auth = plainAuth{c.Username, password} // the admin chose "None": a relay or proxy on their own network
-		}
-		if err := cl.Auth(auth); err != nil {
+		if err := cl.Auth(smtpAuth(cl, c, password)); err != nil {
 			return fmt.Errorf("SMTP auth: %w", err)
 		}
 	}
@@ -321,6 +340,38 @@ func sendEmail(ctx context.Context, c SMTPConfig, password, to string, m Message
 		return err
 	}
 	return cl.Quit()
+}
+
+// smtpAuth picks a login method the server offers: PLAIN when it's advertised (or nothing is),
+// otherwise LOGIN, which Microsoft 365 / Outlook.com and some hosting providers require.
+func smtpAuth(cl *smtp.Client, c SMTPConfig, password string) smtp.Auth {
+	_, mechs := cl.Extension("AUTH")
+	offered := strings.Fields(strings.ToUpper(mechs))
+	if len(offered) > 0 && !slices.Contains(offered, "PLAIN") && slices.Contains(offered, "LOGIN") {
+		return loginAuth{c.Username, password}
+	}
+	if c.Security == "none" {
+		return plainAuth{c.Username, password} // the admin chose "None": a relay or proxy on their own network
+	}
+	return smtp.PlainAuth("", c.Username, password, c.Host)
+}
+
+// loginAuth is the AUTH LOGIN mechanism (username, then password, each base64 by net/smtp).
+type loginAuth struct{ user, pass string }
+
+func (a loginAuth) Start(*smtp.ServerInfo) (string, []byte, error) { return "LOGIN", nil, nil }
+
+func (a loginAuth) Next(challenge []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(string(challenge))) {
+	case "username:", "user name", "username":
+		return []byte(a.user), nil
+	case "password:", "password":
+		return []byte(a.pass), nil
+	}
+	return nil, fmt.Errorf("unexpected server challenge %q", challenge)
 }
 
 // plainAuth is smtp.PlainAuth without its refusal to send the password over a connection that

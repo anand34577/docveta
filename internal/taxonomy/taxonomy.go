@@ -158,7 +158,18 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, k Kind, spaceID *
 			return nil, err
 		}
 	}
-	rows, err := s.pool.Query(ctx, s.selectSQL(k)+` WHERE t.space_id = ANY($1) ORDER BY lower(t.name)`, ids)
+	// Count documents with one grouped pass over the spaces' documents instead of a count per
+	// item: with thousands of tags or senders that is the difference between one scan and thousands.
+	counts := `SELECT d.` + k.docColumn() + ` AS id, count(*) AS n FROM documents d
+		WHERE d.space_id = ANY($1) AND d.deleted_at IS NULL AND d.` + k.docColumn() + ` IS NOT NULL GROUP BY 1`
+	if k == Tags {
+		counts = `SELECT dt.tag_id AS id, count(*) AS n FROM document_tags dt JOIN documents d ON d.id=dt.document_id
+			WHERE d.space_id = ANY($1) AND d.deleted_at IS NULL GROUP BY 1`
+	}
+	rows, err := s.pool.Query(ctx, `SELECT t.id, t.space_id, t.name, `+colorCol(k)+`, t.match_algorithm, t.match_pattern, t.case_sensitive,
+			coalesce(c.n, 0), t.updated_at
+		FROM `+string(k)+` t LEFT JOIN (`+counts+`) c ON c.id = t.id
+		WHERE t.space_id = ANY($1) ORDER BY lower(t.name)`, ids)
 	if err != nil {
 		return nil, err
 	}

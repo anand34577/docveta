@@ -10,7 +10,7 @@ interface Props {
   query: DocQuery;
   layout: "grid" | "list";
   empty: React.ReactNode;
-  onLoaded?: (info: { total?: number; items: Document[]; facets?: Facets; mode?: string }) => void;
+  onLoaded?: (info: { total?: number; totalCapped?: boolean; items: Document[]; facets?: Facets; mode?: string }) => void;
 }
 
 /** Width of an element that may mount later (the results list appears after loading). */
@@ -34,6 +34,7 @@ export function DocumentResults({ query, layout, empty, onLoaded }: Props) {
   const res = useDocuments(query, { refetchWhileProcessing: true });
   const items = React.useMemo(() => res.data?.pages.flatMap((p) => p.items) ?? [], [res.data]);
   const total = res.data?.pages[0]?.total;
+  const totalCapped = res.data?.pages[0]?.total_capped;
   const facets = res.data?.pages[0]?.facets;
   const mode = res.data?.pages[0]?.mode;
   const { ids, toggle, set } = useSelection();
@@ -41,8 +42,8 @@ export function DocumentResults({ query, layout, empty, onLoaded }: Props) {
   const lastClicked = React.useRef<number | null>(null);
 
   React.useEffect(() => {
-    onLoaded?.({ total, items, facets, mode });
-  }, [total, items, facets, mode, onLoaded]);
+    onLoaded?.({ total, totalCapped, items, facets, mode });
+  }, [total, totalCapped, items, facets, mode, onLoaded]);
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const [listEl, setListEl] = React.useState<HTMLDivElement | null>(null);

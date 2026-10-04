@@ -106,6 +106,8 @@ export interface Document {
 export interface DocumentList {
   items: Document[];
   total?: number;
+  /** More documents match than `total` (the server stops counting at 100,000). */
+  total_capped?: boolean;
   next_cursor: string | null;
   mode?: "keyword" | "semantic" | "hybrid";
   facets?: Facets;
@@ -318,6 +320,25 @@ export interface OIDCConfig {
   disable_password_login: boolean;
   has_client_secret: boolean;
   client_secret?: string;
+  redirect_uri?: string; // read-only: what to register with the provider
+}
+
+/** Admin → System: the address used in links, and the local-network rule for notifications. */
+export interface ServerSettings {
+  public_url: string;
+  allow_local_targets: boolean;
+  base_url: string;
+  base_url_fixed: boolean;
+  detected: string;
+  allow_local_env: boolean;
+}
+
+/** A single sign-on account connected to the signed-in user. */
+export interface Identity {
+  id: string;
+  provider: string;
+  email: string;
+  created_at: string;
 }
 
 export interface SMTPConfig {
