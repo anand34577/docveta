@@ -5,6 +5,8 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-04
+
 ### Added
 - **Ask about one document**: ⋯ → *Ask about this document* ("Summarise this", "What are the important dates?").
 - Ask: Markdown answers (lists, tables, bold, code) on the web and in the Android app, a **Stop** button,
