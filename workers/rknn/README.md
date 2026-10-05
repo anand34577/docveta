@@ -74,7 +74,7 @@ Create the token in Docveta: *Administration → Processing → Add worker*.
 
 | Symptom | Fix |
 |---|---|
-| `cannot initialise the NPU runtime` | Pass `--device /dev/rknpu` (and/or `/dev/dri`); match `librknnrt.so` to the driver version |
+| `cannot initialise the NPU runtime` | Pass `--device /dev/dri`, and `--device /dev/rknpu` too if the host has it (older BSP kernels); match `librknnrt.so` to the driver version |
 | `No models found for this SoC` | Convert models for your SoC and mount them at `/app/models/<soc>/` |
 | Worker shows *offline* in Docveta | Check `DOCVETA_URL` is reachable from the board and the token is valid |
 | Poor accuracy on photos | Prefer flat, well-lit photos; Docveta can fall back to Tesseract for specific languages |
