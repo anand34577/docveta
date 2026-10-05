@@ -29,8 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AddAPhoto
-import androidx.compose.material.icons.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.ArrowForward
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Button
@@ -92,10 +91,10 @@ fun ReviewScreen(session: ScanSession, onAddMore: () -> Unit, onEdit: (String) -
                         if (!p.detected) Text("Check edges", Modifier.align(Alignment.BottomCenter).padding(6.dp).background(androidx.compose.ui.graphics.Color(0xCCB77900), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp), color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelSmall)
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        IconButton({ session.move(p.id, -1) }, enabled = idx > 0, modifier = Modifier.size(36.dp)) { Icon(Icons.Outlined.ArrowBack, "Move earlier", Modifier.size(18.dp)) }
+                        IconButton({ session.move(p.id, -1) }, enabled = idx > 0, modifier = Modifier.size(36.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Move earlier", Modifier.size(18.dp)) }
                         IconButton({ onEdit(p.id) }, Modifier.size(36.dp)) { Icon(Icons.Outlined.Crop, "Crop and filter", Modifier.size(18.dp)) }
                         IconButton({ session.remove(p.id); if (session.pages.isEmpty()) onBack() }, Modifier.size(36.dp)) { Icon(Icons.Outlined.Delete, "Delete page", Modifier.size(18.dp)) }
-                        IconButton({ session.move(p.id, 1) }, enabled = idx < session.pages.lastIndex, modifier = Modifier.size(36.dp)) { Icon(Icons.Outlined.ArrowForward, "Move later", Modifier.size(18.dp)) }
+                        IconButton({ session.move(p.id, 1) }, enabled = idx < session.pages.lastIndex, modifier = Modifier.size(36.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowForward, "Move later", Modifier.size(18.dp)) }
                     }
                 }
             }

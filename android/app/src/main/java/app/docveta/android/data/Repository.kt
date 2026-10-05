@@ -22,19 +22,64 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-/** What a documents screen asks for. */
+/** What a documents screen asks for. The same shape as a saved view's query on the web. */
 data class DocQuery(
     val q: String = "",
     val spaceId: String? = null,
     val tagIds: List<String> = emptyList(),
-    val correspondentId: String? = null,
-    val typeId: String? = null,
+    val correspondentIds: List<String> = emptyList(),
+    val typeIds: List<String> = emptyList(),
+    val dateFrom: String? = null,
+    val dateTo: String? = null,
+    val untagged: Boolean = false,
     val inbox: Boolean? = null,
     val status: String? = null,
     val trash: Boolean = false,
     val sort: String? = null,
     val semantic: Boolean = false,
-)
+) {
+    /** How many filters (not the search text or sort) are on. */
+    val filterCount: Int
+        get() = tagIds.size + correspondentIds.size + typeIds.size + (if (spaceId != null) 1 else 0) + (if (status != null) 1 else 0) +
+            (if (dateFrom != null || dateTo != null) 1 else 0) + (if (untagged) 1 else 0)
+
+    fun clearedFilters() = DocQuery(q = q, sort = sort, semantic = semantic, inbox = inbox, trash = trash)
+
+    /** The web app's saved-view query (arrays for ids, strings for dates). */
+    fun toJson(): JsonObject = buildJsonObject {
+        if (q.isNotBlank()) put("q", q.trim())
+        fun ids(k: String, l: List<String>) { if (l.isNotEmpty()) put(k, JsonArray(l.map { JsonPrimitive(it) })) }
+        ids("space_id", listOfNotNull(spaceId))
+        ids("tag_id", tagIds)
+        ids("correspondent_id", correspondentIds)
+        ids("document_type_id", typeIds)
+        dateFrom?.let { put("date_from", it) }
+        dateTo?.let { put("date_to", it) }
+        inbox?.let { put("inbox", it) }
+        status?.let { put("status", it) }
+        if (untagged) put("untagged", true)
+        if (trash) put("trash", true)
+        sort?.let { put("sort", it) }
+        if (semantic) put("mode", "hybrid")
+    }
+
+    companion object {
+        fun fromJson(o: JsonObject): DocQuery {
+            fun str(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            fun bool(k: String) = (o[k] as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
+            fun ids(k: String): List<String> = when (val v = o[k]) {
+                is JsonArray -> v.mapNotNull { (it as? JsonPrimitive)?.content }
+                is JsonPrimitive -> listOf(v.content)
+                else -> emptyList()
+            }
+            return DocQuery(
+                q = str("q").orEmpty(), spaceId = ids("space_id").firstOrNull(), tagIds = ids("tag_id"), correspondentIds = ids("correspondent_id"),
+                typeIds = ids("document_type_id"), dateFrom = str("date_from"), dateTo = str("date_to"), untagged = bool("untagged") == true,
+                inbox = bool("inbox"), status = str("status"), trash = bool("trash") == true, sort = str("sort"), semantic = str("mode") == "hybrid" || str("mode") == "semantic",
+            )
+        }
+    }
+}
 
 sealed interface SignIn {
     data object Done : SignIn
@@ -61,7 +106,7 @@ private class MemoryCookies : CookieJar {
 }
 
 /** Everything the screens do against the server. */
-class Repository(val api: ApiClient, val session: SessionStore, private val cacheDir: File, private val deviceName: String = "Android phone") {
+class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: File, private val deviceName: String = "Android phone") {
 
     /* ------------------------------------------------------------ sign-in */
 
@@ -150,17 +195,49 @@ class Repository(val api: ApiClient, val session: SessionStore, private val cach
         return api.execute(req, loginHttp) { it.body?.string().orEmpty() }
     }
 
+    private suspend fun loginGet(url: String): String {
+        val req = Request.Builder().url(url).header("Accept", "application/json").build()
+        return api.execute(req, loginHttp) { it.body?.string().orEmpty() }
+    }
+
+    /** First start of a new server: creates the administrator (and a shared space), then signs in. */
+    suspend fun setup(base: String, name: String, email: String, password: String, sharedSpace: String) {
+        loginBase = base
+        loginHttp = newLoginClient()
+        val body = buildJsonObject {
+            put("display_name", name.trim()); put("email", email.trim()); put("password", password)
+            if (sharedSpace.isNotBlank()) put("shared_space_name", sharedSpace.trim())
+        }.toString()
+        loginPost("$base/api/v1/setup", body)
+        finishSignIn(base)
+    }
+
+    /** What an invitation link (…/invite/<token>) is for, before accepting it. */
+    suspend fun invitePreview(base: String, token: String): InvitePreview {
+        loginBase = base
+        loginHttp = newLoginClient()
+        return AppJson.decodeFromString(loginGet("$base/api/v1/invites/$token"))
+    }
+
+    suspend fun acceptInvite(base: String, token: String, name: String, email: String?, password: String) {
+        loginBase = base
+        val body = buildJsonObject {
+            put("display_name", name.trim()); put("password", password)
+            if (!email.isNullOrBlank()) put("email", email.trim())
+        }.toString()
+        loginPost("$base/api/v1/invites/$token/accept", body)
+        finishSignIn(base)
+    }
+
     /** Swaps the temporary web session for an access token that lasts, so the phone stays signed in. */
     private suspend fun finishSignIn(base: String) {
-        val tokenBody = buildJsonObject {
-            put("name", "Docveta Android ($deviceName)")
-            putJsonArray("scopes") { add(JsonPrimitive("documents:read")); add(JsonPrimitive("documents:write")); add(JsonPrimitive("upload")) }
-            put("expires_in_days", 365)
-        }.toString()
-        val created = AppJson.decodeFromString<NewToken>(loginPost("$base/api/v1/me/tokens", tokenBody))
+        // Administrators get the admin permission too, so Administration works in the app.
+        val admin = runCatching { AppJson.decodeFromString<Me>(loginGet("$base/api/v1/me")).isAdmin }.getOrDefault(false)
+        val created = AppJson.decodeFromString<NewToken>(loginPost("$base/api/v1/me/tokens", tokenRequest(admin)))
         session.serverUrl = base
         session.token = created.secret
         session.tokenId = created.token?.id
+        session.tokenScopes = created.token?.scopes?.joinToString(",") ?: appScopes(admin).joinToString(",")
         runCatching { loginPost("$base/api/v1/auth/logout", "{}") } // the web session isn't needed any more
         loginHttp = newLoginClient()
         val me = me()
@@ -168,10 +245,63 @@ class Repository(val api: ApiClient, val session: SessionStore, private val cach
         session.userEmail = me.email
     }
 
+    private fun appScopes(admin: Boolean) = listOf("documents:read", "documents:write", "upload") + if (admin) listOf("admin") else emptyList()
+
+    private fun tokenRequest(admin: Boolean) = buildJsonObject {
+        put("name", "Docveta Android ($deviceName)")
+        putJsonArray("scopes") { appScopes(admin).forEach { add(JsonPrimitive(it)) } }
+        put("expires_in_days", 365)
+    }.toString()
+
+    /** False when this phone signed in before the app asked for the admin permission. Unknown (older sign-ins) counts as missing. */
+    val hasAdminScope: Boolean get() = session.tokenScopes?.split(',')?.contains("admin") == true
+
     suspend fun signOut() {
         session.tokenId?.let { id -> runCatching { api.delete("/me/tokens/$id") } }
         session.signOut()
         cacheDir.resolve("docs").deleteRecursively()
+        cacheDir.resolve("shared").deleteRecursively()
+    }
+
+    /* ------------------------------------------------------------ confirming it's you */
+
+    /**
+     * Some account changes (password, two-step sign-in, new tokens) are only allowed from a fresh
+     * sign-in, never with the phone's stored token. This signs in with the password (and code),
+     * gives [block] that short-lived session, then signs it out again.
+     * Throws [ApiException] with code "two_factor_required" when a code is needed and none was given.
+     */
+    suspend fun <T> withPassword(password: String, code: String?, block: suspend (WebSession) -> T): T {
+        val s = openWebSession(password, code)
+        try {
+            return block(s)
+        } finally {
+            s.close()
+        }
+    }
+
+    suspend fun openWebSession(password: String, code: String?): WebSession {
+        val base = session.serverUrl ?: throw ApiException(401, "signed_out", "Please sign in again")
+        val email = session.userEmail ?: me().email
+        val s = WebSession(base, api, deviceName)
+        val r = AppJson.decodeFromString<LoginReply>(s.postRaw("/auth/login", buildJsonObject { put("email", email); put("password", password) }.toString()))
+        if (r.twoFactorRequired && r.challenge != null) {
+            if (code.isNullOrBlank()) throw ApiException(428, "two_factor_required", "Enter the code from your authenticator app")
+            s.postRaw("/auth/login/2fa", buildJsonObject { put("challenge", r.challenge); put("code", code.replace(" ", "")) }.toString())
+        }
+        return s
+    }
+
+    /** Replaces this phone's token with one that includes the admin permission. */
+    suspend fun enableAdminOnPhone(password: String, code: String?) {
+        withPassword(password, code) { s ->
+            val created = AppJson.decodeFromString<NewToken>(s.postRaw("/me/tokens", tokenRequest(admin = true)))
+            val old = session.tokenId
+            session.token = created.secret
+            session.tokenId = created.token?.id
+            session.tokenScopes = created.token?.scopes?.joinToString(",") ?: appScopes(true).joinToString(",")
+            if (old != null) runCatching { s.send("DELETE", "/me/tokens/$old") }
+        }
     }
 
     /* ------------------------------------------------------------ reading */
@@ -183,12 +313,15 @@ class Repository(val api: ApiClient, val session: SessionStore, private val cach
     suspend fun documents(q: DocQuery, cursor: String? = null, limit: Int = 40, facets: Boolean = false): DocumentList {
         val multi = buildList {
             q.tagIds.forEach { add("tag_id" to it) }
+            q.correspondentIds.forEach { add("correspondent_id" to it) }
+            q.typeIds.forEach { add("document_type_id" to it) }
         }
         val query = mapOf(
             "q" to q.q.trim(),
             "space_id" to q.spaceId,
-            "correspondent_id" to q.correspondentId,
-            "document_type_id" to q.typeId,
+            "date_from" to q.dateFrom,
+            "date_to" to q.dateTo,
+            "untagged" to if (q.untagged) "true" else null,
             "inbox" to q.inbox?.toString(),
             "status" to q.status,
             "trash" to if (q.trash) "true" else null,
@@ -271,10 +404,17 @@ class Repository(val api: ApiClient, val session: SessionStore, private val cach
 
     /* ------------------------------------------------------------ files */
 
-    fun thumbnailUrl(d: Document): String = api.url("/documents/${d.id}/thumbnail", mapOf("v" to d.version.toString())).toString()
+    fun thumbnailUrl(d: Document): String = api.url("/documents/${d.id}/thumbnail", mapOf("v" to fileSignature(d))).toString()
 
-    /** The best viewable copy of a document in the cache (downloaded once per version). */
-    suspend fun viewableFile(d: Document, onProgress: (Float) -> Unit = {}): File {
+    /**
+     * Changes when the file itself changes (new version, pages edited, searchable PDF made), but
+     * not when only the title or tags do: the document's version counts those too, and a big PDF
+     * shouldn't be downloaded again because a tag was added.
+     */
+    fun fileSignature(d: Document): String = "${d.sizeBytes}-${d.pageCount ?: 0}-${if (d.hasArchive) 1 else 0}${if (d.hasDerived) 1 else 0}${if (d.hasThumbnail) 1 else 0}"
+
+    /** The cache file [viewableFile] uses for this document as it is now. */
+    fun viewableName(d: Document): String {
         val kind = when {
             d.hasDerived -> "derived"
             d.hasArchive -> "archive"
@@ -285,8 +425,19 @@ class Repository(val api: ApiClient, val session: SessionStore, private val cach
             d.isImage -> d.mimeType.substringAfter('/').substringBefore('+').ifBlank { "jpg" }
             else -> d.originalFilename.substringAfterLast('.', "bin")
         }
-        val f = File(cacheDir, "docs/${d.id}-v${d.version}-$kind.$ext")
-        if (!f.exists() || f.length() == 0L) api.download("/documents/${d.id}/file", mapOf("kind" to kind), f, onProgress)
+        return "${d.id}-${fileSignature(d)}-$kind.$ext"
+    }
+
+    /** The best viewable copy of a document in the cache (downloaded once per file change). */
+    suspend fun viewableFile(d: Document, onProgress: (Float) -> Unit = {}): File {
+        val name = viewableName(d)
+        val kind = name.substringAfterLast('-').substringBefore('.')
+        val f = File(cacheDir, "docs/$name")
+        if (!f.exists() || f.length() == 0L) {
+            api.download("/documents/${d.id}/file", mapOf("kind" to kind), f, onProgress)
+            // Older copies of this document aren't needed any more.
+            f.parentFile?.listFiles { x -> x.name.startsWith("${d.id}-") && x.name != name }?.forEach { it.delete() }
+        }
         return f
     }
 
@@ -358,6 +509,28 @@ class Repository(val api: ApiClient, val session: SessionStore, private val cach
     }.flowOn(Dispatchers.IO)
 }
 
+
+/** A short-lived browser-style session (cookie), for the few account changes a token may not make. */
+class WebSession(private val base: String, private val api: ApiClient, deviceName: String) {
+    private val agent = "DocvetaAndroid/0.1 ($deviceName)"
+    private val http: OkHttpClient = ApiClient.baseHttp().newBuilder().cookieJar(MemoryCookies()).addInterceptor { chain ->
+        chain.proceed(chain.request().newBuilder().header("User-Agent", agent).header("Origin", ApiClient.origin(base)).build())
+    }.build()
+
+    suspend fun send(method: String, path: String, body: String? = null): String {
+        val rb = body?.toRequestBody(ApiClient.JSON) ?: if (method == "POST" || method == "PUT" || method == "PATCH") "{}".toRequestBody(ApiClient.JSON) else null
+        val req = Request.Builder().url("$base/api/v1$path").header("Accept", "application/json").method(method, rb).build()
+        return api.execute(req, http) { it.body?.string().orEmpty() }
+    }
+
+    suspend fun postRaw(path: String, body: String = "{}"): String = send("POST", path, body)
+
+    suspend inline fun <reified T> post(path: String, body: String = "{}"): T = AppJson.decodeFromString(postRaw(path, body))
+
+    suspend fun close() {
+        runCatching { postRaw("/auth/logout") }
+    }
+}
 
 /** PKCE S256: base64url(SHA-256(verifier)) without padding. */
 fun pkceChallenge(verifier: String): String {

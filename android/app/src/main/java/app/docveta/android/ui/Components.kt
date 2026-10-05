@@ -119,8 +119,8 @@ fun stageLabel(stage: String) = when (stage) {
 }
 
 @Composable
-fun SpaceDot(space: Space?, modifier: Modifier = Modifier, size: Dp = 8.dp) {
-    val c = if (space == null || space.isPersonal) Color(0xFF94A3B8) else colorFor(space.color)
+fun SpaceDot(space: Space?, modifier: Modifier = Modifier, size: Dp = 8.dp, color: Color? = null) {
+    val c = color ?: if (space == null || space.isPersonal) Color(0xFF94A3B8) else colorFor(space.color)
     Box(modifier.size(size).clip(CircleShape).background(c))
 }
 

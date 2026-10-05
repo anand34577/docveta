@@ -82,6 +82,12 @@ val LocalMe = androidx.compose.runtime.compositionLocalOf<Me> { error("not signe
 val LocalStats = androidx.compose.runtime.compositionLocalOf<Stats?> { null }
 val LocalAi = androidx.compose.runtime.compositionLocalOf<androidx.compose.runtime.State<AiStatus>> { mutableStateOf(AiStatus()) }
 
+/** Fetch the account again (after changing spaces, profile or members) so every screen sees it. */
+val LocalReloadMe = androidx.compose.runtime.compositionLocalOf<() -> Unit> { {} }
+
+/** Pick files on the phone and add them to the upload queue (after choosing a space). */
+val LocalPickFiles = androidx.compose.runtime.compositionLocalOf<() -> Unit> { {} }
+
 @Composable
 fun produceAi(): androidx.compose.runtime.State<AiStatus> = LocalAi.current
 
@@ -91,13 +97,23 @@ private object Route {
     const val Ask = "ask"
     const val More = "more"
     const val Doc = "doc/{id}?page={page}"
+    const val Pages = "doc/{id}/pages"
+    const val AskDoc = "ask/doc/{id}"
     const val Scan = "scan"
     const val Review = "scan/review"
     const val Crop = "scan/crop/{pageId}"
     const val Uploads = "uploads"
     const val Notifications = "notifications"
     const val Settings = "settings"
+    const val SettingsSection = "settings/{section}"
     const val Trash = "trash"
+    const val View = "view/{id}"
+    const val Spaces = "spaces"
+    const val Space = "space/{id}"
+    const val SpaceSection = "space/{id}/{section}"
+    const val Workflow = "space/{id}/workflow/{wid}"
+    const val Admin = "admin"
+    const val AdminSection = "admin/{section}"
     fun doc(id: String, page: Int = 0) = "doc/$id?page=$page"
 }
 
@@ -155,8 +171,12 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
     var me by remember { mutableStateOf<Me?>(null) }
     var stats by remember { mutableStateOf<Stats?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
-    val ai = produceState(AiStatus()) { value = c.repo.aiStatus() }
+    val ai = c.ai
+    LaunchedEffect(Unit) { c.refreshAi() }
     val scope = rememberCoroutineScope()
+    val reloadMe: () -> Unit = { scope.launch { runCatching { me = c.repo.me() } } }
+    var picked by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { picked = it }
 
     LaunchedEffect(Unit) { c.signedOut.collect { onSignedOut() } }
     LaunchedEffect(Unit) {
@@ -189,7 +209,7 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
         return
     }
 
-    CompositionLocalProvider(LocalMe provides m, LocalStats provides stats, LocalAi provides ai) {
+    CompositionLocalProvider(LocalMe provides m, LocalStats provides stats, LocalAi provides ai, LocalReloadMe provides reloadMe, LocalPickFiles provides { pickFiles.launch(arrayOf("*/*")) }) {
         val entry by nav.currentBackStackEntryAsState()
         val route = entry?.destination?.route
         val inMain = route in setOf(Route.Inbox, Route.Docs, Route.Ask, Route.More)
@@ -215,26 +235,81 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
                 popEnterTransition = { screenPopEnter(initialState.destination.route, targetState.destination.route) },
                 popExitTransition = { screenPopExit(initialState.destination.route, targetState.destination.route) },
             ) {
-                composable(Route.Inbox) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { InboxScreen(onOpen = { nav.navigate(Route.doc(it)) }, onScan = { nav.navigate(Route.Scan) }) } }
-                composable(Route.Docs) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { DocumentsScreen(onOpen = { nav.navigate(Route.doc(it)) }, onScan = { nav.navigate(Route.Scan) }) } }
-                composable(Route.Ask) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { AskScreen(onOpenDoc = { id, page -> nav.navigate(Route.doc(id, page)) }) } }
-                composable(Route.More) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { MoreScreen(onNavigate = { nav.navigate(it) }, uploadsActive = busy, onSignedOut = onSignedOut) } }
-                composable(Route.Doc, arguments = listOf(navArgument("id") { type = NavType.StringType }, navArgument("page") { type = NavType.IntType; defaultValue = 0 })) {
-                    DocumentScreen(it.arguments!!.getString("id")!!, startPage = (it.arguments!!.getInt("page") - 1).coerceAtLeast(0), onBack = { nav.popBackStack() })
+                val back: () -> Unit = { nav.popBackStack() }
+                val open: (String) -> Unit = { nav.navigate(it) }
+                val openDoc: (String) -> Unit = { nav.navigate(Route.doc(it)) }
+                composable(Route.Inbox) { Box(Modifier.fillMaxSize().statusBarsPadding()) { InboxScreen(onOpen = openDoc, onScan = { nav.navigate(Route.Scan) }) } }
+                composable(Route.Docs) { Box(Modifier.fillMaxSize().statusBarsPadding()) { DocumentsScreen(onOpen = openDoc, onScan = { nav.navigate(Route.Scan) }, onOpenView = { nav.navigate("view/$it") }) } }
+                composable(Route.Ask) { Box(Modifier.fillMaxSize().statusBarsPadding()) { AskScreen(onOpenDoc = { id, page -> nav.navigate(Route.doc(id, page)) }) } }
+                composable(Route.AskDoc, arguments = listOf(navArgument("id") { type = NavType.StringType })) {
+                    Box(Modifier.fillMaxSize().statusBarsPadding()) { AskScreen(onOpenDoc = { id, page -> nav.navigate(Route.doc(id, page)) }, documentId = it.arguments!!.getString("id"), onBack = back) }
                 }
-                composable(Route.Scan) { ScanEntry(scan, onDone = { nav.navigate(Route.Review) { popUpTo(Route.Scan) { inclusive = true } } }, onClose = { nav.popBackStack() }) }
+                composable(Route.More) { Box(Modifier.fillMaxSize().statusBarsPadding()) { MoreScreen(onNavigate = open, uploadsActive = busy) } }
+                composable(Route.Doc, arguments = listOf(navArgument("id") { type = NavType.StringType }, navArgument("page") { type = NavType.IntType; defaultValue = 0 })) {
+                    val id = it.arguments!!.getString("id")!!
+                    DocumentScreen(id, startPage = (it.arguments!!.getInt("page") - 1).coerceAtLeast(0), onBack = back, onOpenDoc = openDoc, onNavigate = open)
+                }
+                composable(Route.Pages, arguments = listOf(navArgument("id") { type = NavType.StringType })) { PageManagerScreen(it.arguments!!.getString("id")!!, onBack = back) }
+                composable(Route.Scan) { ScanEntry(scan, onDone = { nav.navigate(Route.Review) { popUpTo(Route.Scan) { inclusive = true } } }, onClose = back) }
                 composable(Route.Review) {
                     ReviewScreen(scan, onAddMore = { nav.navigate(Route.Scan) }, onEdit = { id -> nav.navigate("scan/crop/$id") },
-                        onUploaded = { nav.popBackStack(Route.Inbox, false); nav.navigate(Route.Uploads) }, onBack = { nav.popBackStack() })
+                        onUploaded = { nav.popBackStack(Route.Inbox, false); nav.navigate(Route.Uploads) }, onBack = back)
                 }
-                composable(Route.Crop, arguments = listOf(navArgument("pageId") { type = NavType.StringType })) { CropScreen(scan, it.arguments!!.getString("pageId")!!, onBack = { nav.popBackStack() }) }
-                composable(Route.Uploads) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().navigationBarsPadding()) { UploadsScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Route.doc(it)) }) } }
-                composable(Route.Notifications) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().navigationBarsPadding()) { NotificationsScreen(onBack = { nav.popBackStack() }, onOpenDoc = { nav.navigate(Route.doc(it)) }) } }
-                composable(Route.Settings) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().navigationBarsPadding()) { SettingsScreen(onBack = { nav.popBackStack() }, onSignedOut = onSignedOut) } }
-                composable(Route.Trash) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().navigationBarsPadding()) { TrashScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Route.doc(it)) }) } }
+                composable(Route.Crop, arguments = listOf(navArgument("pageId") { type = NavType.StringType })) { CropScreen(scan, it.arguments!!.getString("pageId")!!, onBack = back) }
+                composable(Route.Uploads) { Box(Modifier.fillMaxSize().navigationBarsPadding()) { UploadsScreen(onBack = back, onOpen = openDoc) } }
+                composable(Route.Notifications) { Box(Modifier.fillMaxSize().navigationBarsPadding()) { NotificationsScreen(onBack = back, onOpenDoc = openDoc) } }
+                composable(Route.Trash) { Box(Modifier.fillMaxSize().navigationBarsPadding()) { TrashScreen(onBack = back, onOpen = openDoc) } }
+                composable(Route.View, arguments = listOf(navArgument("id") { type = NavType.StringType })) { SavedViewScreen(it.arguments!!.getString("id")!!, onBack = back, onOpen = openDoc) }
+                composable(Route.Settings) { SettingsScreen(onBack = back, onNavigate = open, onSignedOut = onSignedOut) }
+                composable(Route.SettingsSection, arguments = listOf(navArgument("section") { type = NavType.StringType })) {
+                    when (it.arguments!!.getString("section")) {
+                        "profile" -> ProfileScreen(back)
+                        "security" -> SecurityScreen(back)
+                        "notifications" -> NotificationSettingsScreen(back)
+                        "views" -> SavedViewsScreen(back, onOpen = { id -> nav.navigate("view/$id") })
+                        "tokens" -> TokensScreen(back, onSignedOut)
+                        else -> PhoneSettingsScreen(back)
+                    }
+                }
+                composable(Route.Spaces) { SpacesScreen(back, onOpen = { nav.navigate("space/$it") }) }
+                composable(Route.Space, arguments = listOf(navArgument("id") { type = NavType.StringType })) { SpaceScreen(it.arguments!!.getString("id")!!, back, open) }
+                composable(Route.SpaceSection, arguments = listOf(navArgument("id") { type = NavType.StringType }, navArgument("section") { type = NavType.StringType })) {
+                    val id = it.arguments!!.getString("id")!!
+                    val gone: () -> Unit = { if (!nav.popBackStack(Route.Spaces, false)) nav.popBackStack(Route.More, false) }
+                    when (val section = it.arguments!!.getString("section")!!) {
+                        "general" -> SpaceGeneralScreen(id, back, onGone = gone)
+                        "members" -> SpaceMembersScreen(id, back)
+                        "tags", "correspondents", "document-types" -> VocabularyScreen(id, section, back)
+                        "fields" -> FieldsScreen(id, back)
+                        "workflows" -> WorkflowsScreen(id, back, onEdit = { wid -> nav.navigate("space/$id/workflow/$wid") })
+                        "ai" -> SpaceAiScreen(id, back)
+                        else -> SpaceScanningScreen(id, back)
+                    }
+                }
+                composable(Route.Workflow, arguments = listOf(navArgument("id") { type = NavType.StringType }, navArgument("wid") { type = NavType.StringType })) {
+                    val wid = it.arguments!!.getString("wid")!!
+                    WorkflowEditScreen(it.arguments!!.getString("id")!!, wid.takeIf { w -> w != "new" }, back)
+                }
+                composable(Route.Admin) { AdminScreen(back, open) }
+                composable(Route.AdminSection, arguments = listOf(navArgument("section") { type = NavType.StringType })) {
+                    when (it.arguments!!.getString("section")) {
+                        "users" -> AdminUsersScreen(back)
+                        "processing" -> AdminProcessingScreen(back, onOpenDoc = openDoc)
+                        "ai" -> AdminAiScreen(back)
+                        "folders" -> AdminFoldersScreen(back)
+                        "office" -> AdminOfficeScreen(back)
+                        "sso" -> AdminSsoScreen(back)
+                        "email" -> AdminEmailScreen(back)
+                        "alerts" -> AdminAlertsScreen(back)
+                        "export" -> AdminExportScreen(back)
+                        "system" -> AdminSystemScreen(back)
+                        else -> AdminAuditScreen(back)
+                    }
+                }
             }
         }
         if (shared.uris.isNotEmpty()) ShareTargetDialog(shared.uris, onDone = { shared.uris = emptyList(); nav.navigate(Route.Uploads) }, onCancel = { shared.uris = emptyList() })
+        if (picked.isNotEmpty()) ShareTargetDialog(picked, onDone = { picked = emptyList(); nav.navigate(Route.Uploads) }, onCancel = { picked = emptyList() })
     }
 }
 

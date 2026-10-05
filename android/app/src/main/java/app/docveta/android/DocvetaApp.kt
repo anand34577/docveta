@@ -1,6 +1,7 @@
 package app.docveta.android
 
 import android.app.Application
+import app.docveta.android.data.AiStatus
 import app.docveta.android.data.ApiClient
 import app.docveta.android.data.Repository
 import app.docveta.android.data.SecureStore
@@ -11,6 +12,7 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
 
 /** Hand-wired dependencies: there are few enough that a DI framework would only add weight. */
 class AppContainer(app: Application) {
@@ -28,6 +30,24 @@ class AppContainer(app: Application) {
     })
     val repo = Repository(api, session, app.cacheDir, android.os.Build.MODEL ?: "Android phone")
     val uploads = UploadManager(app, api, session)
+
+    /** For work that outlives a screen (refreshing what the server offers). */
+    val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
+
+    /** Whether the server has AI (Ask, meaning-based search, similar documents). */
+    val ai = androidx.compose.runtime.mutableStateOf(AiStatus())
+
+    fun refreshAi() {
+        appScope.launch { ai.value = repo.aiStatus() }
+    }
+
+    /** Light, dark or follow the phone; the whole app recomposes when it changes. */
+    val theme = androidx.compose.runtime.mutableStateOf(session.theme)
+
+    fun setTheme(t: String) {
+        session.theme = t
+        theme.value = t
+    }
 }
 
 class DocvetaApp : Application(), ImageLoaderFactory {

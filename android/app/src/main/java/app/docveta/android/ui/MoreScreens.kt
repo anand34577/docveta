@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,6 +29,9 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.UploadFile
+import androidx.compose.material.icons.outlined.Bookmark
+import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -60,14 +64,13 @@ import app.docveta.android.data.Notification
 import kotlinx.coroutines.launch
 
 @Composable
-fun MoreScreen(onNavigate: (String) -> Unit, uploadsActive: Int, onSignedOut: () -> Unit) {
+fun MoreScreen(onNavigate: (String) -> Unit, uploadsActive: Int) {
     val me = LocalMe.current
     val stats = LocalStats.current
+    val pickFiles = LocalPickFiles.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
-                Text(me.displayName.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString(""), color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.titleMedium)
-            }
+        Row(Modifier.fillMaxWidth().clickable { onNavigate("settings/profile") }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Initials(me.displayName, 48.dp)
             Spacer(Modifier.width(14.dp))
             Column {
                 Text(me.displayName, style = MaterialTheme.typography.titleMedium)
@@ -75,21 +78,30 @@ fun MoreScreen(onNavigate: (String) -> Unit, uploadsActive: Int, onSignedOut: ()
             }
         }
         HorizontalDivider()
+        Item(Icons.Outlined.UploadFile, "Upload files", "PDFs, photos and Office files from this phone") { pickFiles() }
         Item(Icons.Outlined.CloudUpload, "Uploads", if (uploadsActive > 0) "$uploadsActive in progress" else "Waiting and finished uploads") { onNavigate("uploads") }
         Item(Icons.Outlined.Notifications, "Notifications", null) { onNavigate("notifications") }
+        Item(Icons.Outlined.Bookmark, "Saved views", "Your saved searches and filters") { onNavigate("settings/views") }
         Item(Icons.Outlined.DeleteOutline, "Trash", stats?.trash?.takeIf { it > 0 }?.let { "$it document${if (it == 1) "" else "s"}" }) { onNavigate("trash") }
-        Item(Icons.Outlined.Settings, "Settings", "Scanner, uploads, security") { onNavigate("settings") }
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        Text("Spaces", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Spaces", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            TextButton({ onNavigate("spaces") }) { Text("Manage") }
+        }
         me.spaces.forEach { s ->
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().clickable { onNavigate("space/${s.id}") }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 SpaceDot(s, size = 10.dp)
                 Spacer(Modifier.width(12.dp))
                 Text(s.label, Modifier.weight(1f))
                 Text("${s.documentCount}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.outline)
             }
         }
-        Text("Space settings, members, workflows and administration are in the web app.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        Item(Icons.Outlined.Settings, "Settings", "Profile, security, notifications, tokens") { onNavigate("settings") }
+        if (me.isAdmin) Item(Icons.Outlined.AdminPanelSettings, "Administration", "Users, workers, AI, sign-in, email, system") { onNavigate("admin") }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -207,62 +219,5 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenDoc: (String) -> Unit) {
                 }
             }
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SettingsScreen(onBack: () -> Unit, onSignedOut: () -> Unit) {
-    val c = LocalContainer.current
-    val me = LocalMe.current
-    val ctx = LocalContext.current
-    val s = c.session
-    var wifi by remember { mutableStateOf(s.wifiOnlyUploads) }
-    var auto by remember { mutableStateOf(s.autoCapture) }
-    var lock by remember { mutableStateOf(s.appLock) }
-    var confirmOut by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Settings") }, navigationIcon = { BackButton(onBack) })
-        Column(Modifier.verticalScroll(rememberScrollState())) {
-            SectionLabel("Account")
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-                Text(me.displayName, style = MaterialTheme.typography.bodyLarge)
-                Text(me.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(s.serverUrl.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            SectionLabel("Scanner")
-            ToggleRow("Take the picture by itself", "When the page is found and held still.", auto) { auto = it; s.autoCapture = it }
-            SectionLabel("Uploads")
-            ToggleRow("Wi-Fi only", "Wait for Wi-Fi before sending, to save mobile data.", wifi) { wifi = it; s.wifiOnlyUploads = it }
-            SectionLabel("Security")
-            ToggleRow("Lock the app", "Ask for your fingerprint, face or screen lock when opening Docveta.", lock) { lock = it; s.appLock = it }
-            SectionLabel("About")
-            Text("Docveta for Android ${BuildConfig.VERSION_NAME}", Modifier.padding(horizontal = 16.dp, vertical = 6.dp), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.padding(8.dp))
-            OutlinedButton({ confirmOut = true }, Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-                Icon(Icons.AutoMirrored.Outlined.Logout, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Sign out")
-            }
-            Spacer(Modifier.padding(16.dp))
-        }
-    }
-    if (confirmOut) AlertDialog(
-        onDismissRequest = { confirmOut = false }, title = { Text("Sign out?") },
-        text = { Text("This phone forgets its access to Docveta. Scans still waiting to upload are kept.") },
-        confirmButton = { TextButton({ confirmOut = false; scope.launch { runCatching { c.repo.signOut() }; onSignedOut() } }) { Text("Sign out") } },
-        dismissButton = { TextButton({ confirmOut = false }) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Switch(checked, onChange)
     }
 }

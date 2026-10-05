@@ -2,6 +2,9 @@ package app.docveta.android.ui
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,22 +25,33 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AlternateEmail
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.QuestionAnswer
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.RestoreFromTrash
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.automirrored.outlined.TextSnippet
+import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -47,6 +61,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,10 +71,11 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -78,6 +94,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -86,16 +103,40 @@ import androidx.lifecycle.viewModelScope
 import app.docveta.android.AppContainer
 import app.docveta.android.data.AiSuggestion
 import app.docveta.android.data.ApiException
+import app.docveta.android.data.CustomField
 import app.docveta.android.data.Document
 import app.docveta.android.data.Note
 import app.docveta.android.data.Share
 import app.docveta.android.data.Taxonomy
+import app.docveta.android.data.assignAsn
+import app.docveta.android.data.customFields
+import app.docveta.android.data.directory
+import app.docveta.android.data.downloadFile
+import app.docveta.android.data.history
+import app.docveta.android.data.pages
+import app.docveta.android.data.reprocess
+import app.docveta.android.data.restoreVersion
+import app.docveta.android.data.runAi
+import app.docveta.android.data.setCustomField
+import app.docveta.android.data.setLanguage
+import app.docveta.android.data.setLocation
+import app.docveta.android.data.setSpace
+import app.docveta.android.data.similar
+import app.docveta.android.data.uploadVersion
 import coil.compose.AsyncImage
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 
 class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
     var doc by mutableStateOf<Document?>(null)
@@ -113,42 +154,52 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
         private set
     var suggestions by mutableStateOf<List<AiSuggestion>>(emptyList())
         private set
+    var fields by mutableStateOf<List<CustomField>>(emptyList())
+        private set
     var busy by mutableStateOf(false)
         private set
     var gone by mutableStateOf(false)
         private set
 
+    private var poll: Job? = null
+
     init {
         load()
     }
 
+    /** Loads the document; while it's still being read, looks again every few seconds (one loop at a time). */
     fun load() {
-        viewModelScope.launch {
-            try {
-                val d = c.repo.document(id)
-                doc = d
-                error = null
-                loadFile(d)
-                notes = runCatching { c.repo.notes(id) }.getOrDefault(notes)
-                if (d.suggestionCount > 0) suggestions = runCatching { c.repo.suggestions(id) }.getOrDefault(emptyList())
-                // A document still being read: look again shortly so the text layer and suggestions appear.
-                if (d.status == "processing") {
-                    kotlinx.coroutines.delay(3000)
-                    load()
+        poll?.cancel()
+        poll = viewModelScope.launch {
+            while (true) {
+                try {
+                    val d = c.repo.document(id)
+                    val first = doc == null
+                    doc = d
+                    error = null
+                    loadFile(d)
+                    notes = runCatching { c.repo.notes(id) }.getOrDefault(notes)
+                    suggestions = if (d.suggestionCount > 0) runCatching { c.repo.suggestions(id) }.getOrDefault(emptyList()) else emptyList()
+                    if (first || fields.isEmpty()) fields = runCatching { c.repo.customFields(d.space.id).filter { it.spaceId == d.space.id } }.getOrDefault(emptyList())
+                    if (d.status != "processing") break
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    error = e.friendly()
+                    break
                 }
-            } catch (e: Exception) {
-                error = e.friendly()
+                delay(3000)
             }
         }
     }
 
     private suspend fun loadFile(d: Document) {
         if (!d.isPdf && !d.isImage && !d.hasDerived && !d.hasArchive) return
-        if (file != null && doc?.version == d.version) return
+        if (file?.name == c.repo.viewableName(d)) return
         try {
             fileError = null
             file = c.repo.viewableFile(d) { fileProgress = it }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             fileError = e.friendly()
         }
     }
@@ -162,6 +213,7 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
                 message = if (e.status == 412) "Someone else just changed this document. Reloaded." else e.message
                 if (e.status == 412) load()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 message = e.friendly()
             } finally {
                 busy = false
@@ -170,9 +222,10 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
     }
 
     private fun updated(d: Document) {
-        val versionChanged = doc?.version != d.version
+        val spaceChanged = doc?.space?.id != d.space.id
         doc = d
-        if (versionChanged && (d.isPdf || d.isImage)) viewModelScope.launch { file = null; loadFile(d) }
+        if (spaceChanged) viewModelScope.launch { fields = runCatching { c.repo.customFields(d.space.id).filter { it.spaceId == d.space.id } }.getOrDefault(emptyList()) }
+        viewModelScope.launch { loadFile(d) }
     }
 
     fun rename(title: String) {
@@ -185,6 +238,11 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
     fun setCorrespondent(t: Taxonomy?) = doc?.let { d -> act { updated(c.repo.setCorrespondent(id, t?.id, d.version)) } }
     fun setType(t: Taxonomy?) = doc?.let { d -> act { updated(c.repo.setType(id, t?.id, d.version)) } }
     fun setTags(ids: List<String>) = doc?.let { d -> act { updated(c.repo.setTags(id, ids, d.version)) } }
+    fun setField(fieldId: String, value: JsonElement) = doc?.let { d -> act { updated(c.repo.setCustomField(id, fieldId, value, d.version)) } }
+    fun moveTo(spaceId: String) = doc?.let { d -> act { updated(c.repo.setSpace(id, spaceId, d.version)); message = "Moved" } }
+    fun setLanguage(lang: String) = doc?.let { d -> act { updated(c.repo.setLanguage(id, lang, d.version)) } }
+    fun setLocation(where: String) = doc?.let { d -> if (where != d.physicalLocation) act { updated(c.repo.setLocation(id, where, d.version)) } }
+    fun assignAsn() = act { val d = c.repo.assignAsn(id); updated(d); message = "Archive number ${d.asn} assigned. Write it on the paper original." }
 
     fun review(onDone: () -> Unit) = act {
         updated(c.repo.markReviewed(id))
@@ -200,7 +258,8 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
 
     fun restore() = act { c.repo.restore(id); load() }
     fun deleteForever(onDone: () -> Unit) = act { c.repo.deleteForever(id); gone = true; onDone() }
-    fun reprocess() = act { c.repo.reprocess(id); message = "Processing again"; load() }
+    fun reprocess(force: Boolean) = act { c.repo.reprocess(id, force); message = if (force) "Reading the text again" else "Processing again"; load() }
+    fun askAi() = act { c.repo.runAi(id); message = "Asked AI for suggestions. They appear here in a moment."; delay(4000); load() }
     fun unlock(password: String, onDone: (Boolean) -> Unit) = act {
         try {
             updated(c.repo.unlock(id, password))
@@ -214,17 +273,36 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
     }
 
     fun addNote(body: String) = act { notes = listOf(c.repo.addNote(id, body)) + notes; doc = doc?.copy(noteCount = (doc?.noteCount ?: 0) + 1) }
-    fun deleteNote(n: Note) = act { c.repo.deleteNote(id, n.id); notes = notes.filterNot { it.id == n.id } }
+    fun deleteNote(n: Note) = act { c.repo.deleteNote(id, n.id); notes = notes.filterNot { it.id == n.id }; doc = doc?.copy(noteCount = ((doc?.noteCount ?: 1) - 1).coerceAtLeast(0)) }
 
     fun resolve(accept: Boolean, ids: List<String>? = null) = act {
         c.repo.resolveSuggestions(id, accept, ids)
         suggestions = if (ids == null) emptyList() else suggestions.filterNot { it.id in ids }
-        doc = c.repo.document(id)
+        updated(c.repo.document(id))
     }
+
+    fun uploadVersion(file: File, mime: String, name: String, onDone: () -> Unit) = act {
+        updated(c.repo.uploadVersion(id, file, mime, name))
+        file.delete()
+        message = "New version added. Text recognition runs again."
+        onDone()
+        load()
+    }
+
+    fun restoreVersion(no: Int, onDone: () -> Unit) = act { updated(c.repo.restoreVersion(id, no)); message = "Version $no is the current file again"; onDone(); load() }
 
     suspend fun originalFile(): File? = try {
         doc?.let { c.repo.originalFile(it) }
     } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        message = e.friendly()
+        null
+    }
+
+    suspend fun downloaded(kind: String, version: Int? = null): File? = try {
+        doc?.let { c.repo.downloadFile(it, kind, version) }
+    } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
         message = e.friendly()
         null
     }
@@ -232,14 +310,13 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
     suspend fun shares(): List<Share> = runCatching { c.repo.shares(id) }.getOrDefault(emptyList())
     suspend fun createShare(days: Int?, password: String?, download: Boolean) = c.repo.createShare(id, days, password, download)
     suspend fun revokeShare(s: Share) = runCatching { c.repo.revokeShare(s.id) }
-    suspend fun taxonomy(kind: String, space: String) = runCatching { c.repo.taxonomy(kind, space) }.getOrDefault(emptyList())
-    suspend fun createTaxonomy(kind: String, space: String, name: String) = c.repo.createTaxonomy(kind, space, name)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit) {
+fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit, onOpenDoc: (String) -> Unit = {}, onNavigate: (String) -> Unit = {}) {
     val me = LocalMe.current
+    val ai by produceAi()
     val vm = container("doc-$id") { DocViewModel(it, id) }
     val doc = vm.doc
     val snack = remember { SnackbarHostState() }
@@ -258,6 +335,8 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit) {
             vm.message = null
         }
     }
+    // Opening a page from Ask or a search result: start on the preview.
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { if (vm.doc != null) vm.load() }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snack) },
@@ -278,13 +357,20 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit) {
                             DropdownMenu(menu, { menu = false }) {
                                 if (doc.deletedAt == null) {
                                     DropdownMenuItem(text = { Text("Open in another app") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.OpenInNew, null) }, onClick = { menu = false; scope.launch { vm.originalFile()?.let { openFile(ctx, it, doc.mimeType) } } })
+                                    if (doc.hasArchive) DropdownMenuItem(text = { Text("Share searchable PDF") }, leadingIcon = { Icon(Icons.Outlined.Download, null) }, onClick = { menu = false; scope.launch { vm.downloaded("archive")?.let { shareFile(ctx, it, "application/pdf") } } })
                                     DropdownMenuItem(text = { Text("Share with a link") }, leadingIcon = { Icon(Icons.Outlined.Link, null) }, onClick = { menu = false; shareLink = true })
+                                    if (ai.chat && doc.status == "ready") DropdownMenuItem(text = { Text("Ask about this document") }, leadingIcon = { Icon(Icons.Outlined.QuestionAnswer, null) }, onClick = { menu = false; onNavigate("ask/doc/${doc.id}") })
                                     if (canEdit) {
+                                        if (doc.pagesEditable) DropdownMenuItem(text = { Text("Arrange pages") }, leadingIcon = { Icon(Icons.Outlined.GridView, null) }, onClick = { menu = false; onNavigate("doc/${doc.id}/pages") })
                                         if (doc.status == "needs_password") DropdownMenuItem(text = { Text("Enter PDF password") }, leadingIcon = { Icon(Icons.Outlined.LockOpen, null) }, onClick = { menu = false; unlock = true })
-                                        DropdownMenuItem(text = { Text("Process again") }, leadingIcon = { Icon(Icons.Outlined.Refresh, null) }, onClick = { menu = false; vm.reprocess() })
-                                        DropdownMenuItem(text = { Text("Move to Trash") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = { menu = false; vm.moveToTrash { scope.launch { snack.showSnackbar("Moved to Trash") }; onBack() } })
+                                        if (ai.chat) DropdownMenuItem(text = { Text("Suggest tags with AI") }, leadingIcon = { Icon(Icons.Outlined.AutoAwesome, null) }, onClick = { menu = false; vm.askAi() })
+                                        HorizontalDivider()
+                                        DropdownMenuItem(text = { Text("Process again") }, leadingIcon = { Icon(Icons.Outlined.Refresh, null) }, onClick = { menu = false; vm.reprocess(false) })
+                                        DropdownMenuItem(text = { Text("Re-read text (force OCR)") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.TextSnippet, null) }, onClick = { menu = false; vm.reprocess(true) })
+                                        HorizontalDivider()
+                                        DropdownMenuItem(text = { Text("Move to Trash") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = { menu = false; vm.moveToTrash { onBack() } })
                                     }
-                                } else if (canEdit) {
+                                } else if (me.spaces.firstOrNull { it.id == doc.space.id }?.canWrite == true) {
                                     DropdownMenuItem(text = { Text("Delete forever", color = MaterialTheme.colorScheme.error) }, leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error) }, onClick = { menu = false; confirmDelete = true })
                                 }
                             }
@@ -299,15 +385,24 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit) {
                 doc == null && vm.error != null -> ErrorState(vm.error!!) { vm.load() }
                 doc == null -> LoadingBox()
                 else -> {
-                    TabRow(tab) {
-                        listOf("Preview", "Details", "Notes" + if (doc.noteCount > 0) " (${doc.noteCount})" else "").forEachIndexed { i, t ->
-                            Tab(tab == i, { tab = i }, text = { Text(t) }, selectedContentColor = MaterialTheme.colorScheme.primary, unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val tabs = buildList {
+                        add("preview" to "Preview"); add("details" to "Details"); add("notes" to ("Notes" + if (doc.noteCount > 0) " (${doc.noteCount})" else ""))
+                        add("text" to "Text"); add("versions" to "Versions"); if (ai.embeddings) add("similar" to "Similar"); add("history" to "History")
+                    }
+                    val current = tabs.getOrNull(tab)?.first ?: "preview"
+                    ScrollableTabRow(tabs.indexOfFirst { it.first == current }.coerceAtLeast(0), edgePadding = 8.dp) {
+                        tabs.forEachIndexed { i, (_, t) ->
+                            Tab(current == tabs[i].first, { tab = i }, text = { Text(t) }, selectedContentColor = MaterialTheme.colorScheme.primary, unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    when (tab) {
-                        0 -> Preview(vm, doc, ctx, scope, startPage)
-                        1 -> Details(vm, doc, canEdit)
-                        else -> NotesTab(vm, canEdit)
+                    when (current) {
+                        "preview" -> Preview(vm, doc, ctx, scope, startPage)
+                        "details" -> Details(vm, doc, canEdit)
+                        "notes" -> NotesTab(vm, canEdit)
+                        "text" -> TextTab(doc)
+                        "versions" -> VersionsTab(vm, doc, canEdit)
+                        "similar" -> SimilarTab(doc, onOpenDoc)
+                        else -> HistoryTab(doc)
                     }
                 }
             }
@@ -315,11 +410,7 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit) {
     }
     if (unlock && doc != null) PasswordDialog({ unlock = false }) { pw -> vm.unlock(pw) { ok -> if (ok) unlock = false } }
     if (shareLink && doc != null) ShareLinkSheet(vm, { shareLink = false })
-    if (confirmDelete) AlertDialog(
-        onDismissRequest = { confirmDelete = false }, title = { Text("Delete forever?") }, text = { Text("“${doc?.title}” will be permanently deleted. This can't be undone.") },
-        confirmButton = { TextButton({ confirmDelete = false; vm.deleteForever(onBack) }) { Text("Delete forever", color = MaterialTheme.colorScheme.error) } },
-        dismissButton = { TextButton({ confirmDelete = false }) { Text("Cancel") } },
-    )
+    if (confirmDelete) ConfirmDialog("Delete forever?", "“${doc?.title}” will be permanently deleted. This can't be undone.", "Delete forever", destructive = true, onDismiss = { confirmDelete = false }) { vm.deleteForever(onBack) }
 }
 
 @Composable
@@ -331,7 +422,7 @@ private fun Preview(vm: DocViewModel, doc: Document, ctx: Context, scope: kotlin
             f != null -> ImagePreview(f)
             vm.fileError != null -> ErrorState(vm.fileError!!) { vm.load() }
             doc.isPdf || doc.isImage || doc.hasDerived || doc.hasArchive -> Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                LinearProgressIndicator(progress = { vm.fileProgress.coerceIn(0f, 1f) }.takeIf { vm.fileProgress > 0f } ?: { 0f }, Modifier.fillMaxWidth(0.6f))
+                if (vm.fileProgress > 0f) LinearProgressIndicator(progress = { vm.fileProgress.coerceIn(0f, 1f) }, Modifier.fillMaxWidth(0.6f)) else LinearProgressIndicator(Modifier.fillMaxWidth(0.6f))
                 Spacer(Modifier.height(12.dp))
                 Text("Opening…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -359,9 +450,17 @@ private fun ImagePreview(f: File) {
 private fun Details(vm: DocViewModel, doc: Document, canEdit: Boolean) {
     val me = LocalMe.current
     var title by remember(doc.id, doc.title) { mutableStateOf(doc.title) }
+    var location by remember(doc.id, doc.physicalLocation) { mutableStateOf(doc.physicalLocation) }
     var picker by remember { mutableStateOf<String?>(null) }
     var datePicker by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    var more by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        if (doc.status == "processing") Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(12.dp)).padding(12.dp)) {
+            Column {
+                Text(stageLabel(doc.processingStage) + "…", style = MaterialTheme.typography.titleSmall)
+                Text("You can already view, share and edit this document.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
         if (doc.status == "failed" || doc.status == "needs_password") {
             Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(12.dp)).padding(12.dp)) {
                 Column {
@@ -386,44 +485,124 @@ private fun Details(vm: DocViewModel, doc: Document, canEdit: Boolean) {
                 if (canEdit) Box(Modifier.clip(RoundedCornerShape(8.dp)).clickable { picker = "tags" }.background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 10.dp, vertical = 4.dp)) { Text(if (doc.tags.isEmpty()) "Add tags" else "Edit", style = MaterialTheme.typography.labelMedium) }
             }
         }
-        if (doc.customFields.any { !it.value.toString().let { v -> v == "null" || v == "\"\"" } }) {
+        if (vm.fields.isNotEmpty()) {
+            HorizontalDivider()
+            vm.fields.forEach { f -> CustomFieldEditor(f, doc.customFields.firstOrNull { it.fieldId == f.id }?.value ?: JsonNull, canEdit, me.dateFormat) { v -> vm.setField(f.id, v) } }
+        } else if (doc.customFields.any { it.value !is JsonNull }) {
             HorizontalDivider()
             doc.customFields.forEach { f ->
-                val v = f.value.toString().trim('"')
-                if (v != "null" && v.isNotBlank()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(f.name, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-                    Text(v + (f.currency?.let { " $it" } ?: ""), style = MaterialTheme.typography.bodyMedium)
-                }
+                val v = f.value.display()
+                if (v.isNotBlank()) InfoRow(f.name, v + (f.currency?.let { " $it" } ?: ""))
+            }
+        }
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { more = !more }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("More details", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            Icon(if (more) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, null)
+        }
+        if (more) {
+            val spaces = me.spaces.filter { it.canWrite || it.id == doc.space.id }
+            SelectField("Space", spaces.map { it.id to it.label }, doc.space.id, Modifier.fillMaxWidth(), enabled = canEdit, supporting = "Moving keeps tags and sender by matching names in the new space.") { if (it != doc.space.id) vm.moveTo(it) }
+            SelectField("Language", languageOptions(doc.language), doc.language, Modifier.fillMaxWidth(), enabled = canEdit, supporting = "Used for text recognition and search.") { vm.setLanguage(it) }
+            OutlinedTextField(
+                location, { location = it }, label = { Text("Where is the paper original?") }, placeholder = { Text("e.g. Blue folder, cupboard 2") }, modifier = Modifier.fillMaxWidth(), enabled = canEdit, singleLine = true,
+                trailingIcon = { if (location != doc.physicalLocation) IconButton({ vm.setLocation(location) }) { Icon(Icons.Filled.Check, "Save") } },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done), keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { vm.setLocation(location) }),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Archive number (ASN)", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (doc.asn != null) Text("#${doc.asn}", style = MaterialTheme.typography.titleSmall)
+                else OutlinedButton({ vm.assignAsn() }, enabled = canEdit) { Text("Assign next number") }
             }
         }
         HorizontalDivider()
-        InfoRow("Added", formatDate(doc.addedAt))
+        InfoRow("Added", formatDate(doc.addedAt, me.dateFormat) + (doc.owner?.let { " by ${it.name}" } ?: ""))
         InfoRow("File", doc.originalFilename.ifBlank { "—" })
         InfoRow("Size", formatBytes(doc.sizeBytes) + (doc.pageCount?.let { " · $it page${if (it > 1) "s" else ""}" } ?: ""))
-        InfoRow("Searchable", if (doc.status == "ready") "Yes" else "Not yet")
+        InfoRow("Searchable", when { doc.hasArchive -> "Yes, with text layer"; doc.status == "ready" -> "Yes"; else -> "Not yet" })
     }
     if (datePicker) {
-        val initial = doc.documentDate?.let { runCatching { LocalDate.parse(it).atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli() }.getOrNull() }
+        val initial = doc.documentDate?.let { runCatching { LocalDate.parse(it.take(10)).atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli() }.getOrNull() }
         val st = rememberDatePickerState(initialSelectedDateMillis = initial)
         DatePickerDialog(onDismissRequest = { datePicker = false }, confirmButton = {
             TextButton({ datePicker = false; st.selectedDateMillis?.let { vm.setDate(Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString()) } }) { Text("OK") }
         }, dismissButton = { TextButton({ datePicker = false }) { Text("Cancel") } }) { DatePicker(st) }
     }
     picker?.let { kind ->
-        TaxonomySheet(
-            title = when (kind) { "tags" -> "Tags"; "correspondents" -> "Who is it from?"; else -> "What is it?" },
-            kind = kind, spaceId = doc.space.id, vm = vm, multi = kind == "tags",
+        TaxonomyPicker(
+            kind, doc.space.id, multi = kind == "tags",
             selected = when (kind) { "tags" -> doc.tags.map { it.id }; "correspondents" -> listOfNotNull(doc.correspondent?.id); else -> listOfNotNull(doc.documentType?.id) },
             onDismiss = { picker = null },
-            onDone = { ids, items ->
-                picker = null
-                when (kind) {
-                    "tags" -> vm.setTags(ids)
-                    "correspondents" -> vm.setCorrespondent(items.firstOrNull())
-                    else -> vm.setType(items.firstOrNull())
+        ) { items ->
+            picker = null
+            when (kind) {
+                "tags" -> vm.setTags(items.map { it.id })
+                "correspondents" -> vm.setCorrespondent(items.firstOrNull())
+                else -> vm.setType(items.firstOrNull())
+            }
+        }
+    }
+}
+
+private fun JsonElement.display(): String = when (this) {
+    is JsonPrimitive -> if (isString) content else when (booleanOrNull) { true -> "Yes"; false -> "No"; null -> content }
+    is JsonArray -> mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.joinToString(", ")
+    else -> ""
+}
+
+/** A typed editor for one custom field of the document's space (Amount, Due date, …). Saves on change. */
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun CustomFieldEditor(f: CustomField, value: JsonElement, canEdit: Boolean, dateFormat: String, onSave: (JsonElement) -> Unit) {
+    val label = if (f.dataType == "monetary" && f.options.currency != null) "${f.name} (${f.options.currency})" else f.name
+    val text0 = (value as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content.orEmpty()
+    when (f.dataType) {
+        "boolean" -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(f.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            Switch((value as? JsonPrimitive)?.booleanOrNull == true, { onSave(JsonPrimitive(it)) }, enabled = canEdit)
+        }
+        "date" -> {
+            var picking by remember { mutableStateOf(false) }
+            FieldButton(label, formatDate(text0, dateFormat).ifBlank { "Not set" }, Icons.Outlined.CalendarMonth, canEdit, onClear = if (text0.isNotBlank() && canEdit) ({ onSave(JsonNull) }) else null) { picking = true }
+            if (picking) {
+                val st = rememberDatePickerState(initialSelectedDateMillis = runCatching { LocalDate.parse(text0.take(10)).atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli() }.getOrNull())
+                DatePickerDialog(onDismissRequest = { picking = false }, confirmButton = {
+                    TextButton({ picking = false; st.selectedDateMillis?.let { onSave(JsonPrimitive(Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString())) } }) { Text("OK") }
+                }, dismissButton = { TextButton({ picking = false }) { Text("Cancel") } }) { DatePicker(st) }
+            }
+        }
+        "select" -> SelectField(label, listOf("" to "—") + f.options.choices.map { it to it }, text0, Modifier.fillMaxWidth(), enabled = canEdit) { onSave(if (it.isEmpty()) JsonNull else JsonPrimitive(it)) }
+        "multiselect" -> {
+            val chosen = (value as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    f.options.choices.forEach { ch ->
+                        val on = ch in chosen
+                        FilterChip(on, { onSave(JsonArray((if (on) chosen - ch else chosen + ch).map { JsonPrimitive(it) })) }, label = { Text(ch) }, enabled = canEdit)
+                    }
                 }
-            },
-        )
+            }
+        }
+        else -> {
+            var text by remember(f.id, text0) { mutableStateOf(text0) }
+            val numeric = f.dataType == "integer" || f.dataType == "decimal" || f.dataType == "monetary"
+            fun commit() {
+                if (text == text0) return
+                val t = text.trim()
+                onSave(when {
+                    t.isEmpty() -> JsonNull
+                    f.dataType == "integer" -> t.toLongOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(t)
+                    numeric -> t.replace(",", "").toBigDecimalOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(t)
+                    else -> JsonPrimitive(t)
+                })
+            }
+            OutlinedTextField(
+                text, { text = it }, label = { Text(label) }, modifier = Modifier.fillMaxWidth(), enabled = canEdit, singleLine = f.dataType != "longtext", minLines = if (f.dataType == "longtext") 3 else 1,
+                trailingIcon = { if (text != text0) IconButton(::commit) { Icon(Icons.Filled.Check, "Save ${f.name}") } },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = when { numeric -> KeyboardType.Decimal; f.dataType == "url" -> KeyboardType.Uri; else -> KeyboardType.Text }, imeAction = if (f.dataType == "longtext") androidx.compose.ui.text.input.ImeAction.Default else androidx.compose.ui.text.input.ImeAction.Done),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { commit() }),
+            )
+        }
     }
 }
 
@@ -465,7 +644,7 @@ private fun SuggestionsCard(vm: DocViewModel) {
             vm.suggestions.forEach { s ->
                 val label = when (s.field) { "tag" -> "Tag"; "correspondent" -> "From"; "document_type" -> "Type"; "document_date" -> "Date"; "title" -> "Title"; else -> s.value.field ?: "Field" }
                 Row(Modifier.clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surface).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("$label: ${s.value.name}", style = MaterialTheme.typography.labelLarge)
+                    Text("$label: ${s.value.name}" + if (s.value.isNew) " (new)" else "", style = MaterialTheme.typography.labelLarge)
                     IconButton({ vm.resolve(true, listOf(s.id)) }, Modifier.size(36.dp)) { Icon(Icons.Filled.Check, "Accept", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) }
                     IconButton({ vm.resolve(false, listOf(s.id)) }, Modifier.size(36.dp)) { Icon(Icons.Outlined.Close, "Dismiss", Modifier.size(18.dp)) }
                 }
@@ -474,80 +653,148 @@ private fun SuggestionsCard(vm: DocViewModel) {
     }
 }
 
+private val mentionRe = Regex("@\\[([^\\]]{1,80})]\\(([0-9a-fA-F-]{36})\\)")
+
 @Composable
 private fun NotesTab(vm: DocViewModel, canEdit: Boolean) {
+    val c = LocalContainer.current
     var text by remember { mutableStateOf("") }
+    var mentioning by remember { mutableStateOf(false) }
+    val people = rememberLoader { runCatching { c.repo.directory() }.getOrDefault(emptyList()) }
     Column(Modifier.fillMaxSize().imePadding()) {
         LazyColumn(Modifier.weight(1f), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (vm.notes.isEmpty()) item { Text("No notes yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            if (vm.notes.isEmpty()) item { Text("No notes yet. Notes are good for reminders like “claim submitted on 12 March”.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             items(vm.notes, key = { it.id }) { n ->
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(n.author?.name ?: "Someone", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                        Text(n.author?.name ?: "Former member", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
                         Text(timeAgo(n.createdAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (n.canDelete) IconButton({ vm.deleteNote(n) }, Modifier.size(28.dp)) { Icon(Icons.Outlined.Delete, "Delete note", Modifier.size(16.dp)) }
                     }
-                    Text(n.body.replace(Regex("@\\[([^\\]]+)]\\([0-9a-fA-F-]{36}\\)"), "@$1"), style = MaterialTheme.typography.bodyMedium)
+                    SelectionContainer { Text(n.body.replace(mentionRe, "@$1"), style = MaterialTheme.typography.bodyMedium) }
                 }
             }
         }
         if (canEdit) Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Bottom) {
+            IconButton({ mentioning = true }) { Icon(Icons.Outlined.AlternateEmail, "Mention someone") }
             OutlinedTextField(text, { text = it }, Modifier.weight(1f), placeholder = { Text("Add a note…") }, maxLines = 4, shape = RoundedCornerShape(20.dp))
             Spacer(Modifier.width(8.dp))
             IconButton({ vm.addNote(text.trim()); text = "" }, enabled = text.isNotBlank()) { Icon(Icons.AutoMirrored.Outlined.Send, "Add note") }
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TaxonomySheet(title: String, kind: String, spaceId: String, vm: DocViewModel, multi: Boolean, selected: List<String>, onDismiss: () -> Unit, onDone: (List<String>, List<Taxonomy>) -> Unit) {
-    var items by remember { mutableStateOf<List<Taxonomy>?>(null) }
-    var picked by remember { mutableStateOf(selected) }
-    var q by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) { items = vm.taxonomy(kind, spaceId) }
-    val shown = items.orEmpty().filter { it.name.contains(q.trim(), ignoreCase = true) }
-    val exact = items.orEmpty().any { it.name.equals(q.trim(), ignoreCase = true) }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 16.dp).imePadding()) {
-            Text(title, style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Search or create") })
-            Spacer(Modifier.height(6.dp))
-            LazyColumn(Modifier.weight(1f, fill = false).height(360.dp)) {
-                if (q.isNotBlank() && !exact) item {
-                    Row(Modifier.fillMaxWidth().clickable(enabled = !busy) {
-                        busy = true
-                        scope.launch {
-                            runCatching { vm.createTaxonomy(kind, spaceId, q.trim()) }.onSuccess { t ->
-                                items = items.orEmpty() + t
-                                picked = if (multi) picked + t.id else listOf(t.id)
-                                q = ""
-                                if (!multi) onDone(picked, listOf(t))
-                            }
-                            busy = false
-                        }
-                    }.padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Create “${q.trim()}”", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleSmall)
-                    }
-                }
-                if (items == null) item { LoadingBox(Modifier.fillMaxWidth().height(80.dp)) }
-                items(shown, key = { it.id }) { t ->
-                    val on = picked.contains(t.id)
-                    Row(Modifier.fillMaxWidth().clickable {
-                        if (multi) picked = if (on) picked - t.id else picked + t.id
-                        else onDone(listOf(t.id), listOf(t))
-                    }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (multi) Checkbox(on, null) else if (on) Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
-                        if (multi || on) Spacer(Modifier.width(12.dp))
-                        Text(t.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                        Text(t.documentCount.toString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (mentioning) AlertDialog(
+        onDismissRequest = { mentioning = false }, title = { Text("Mention someone") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("They get a notification. Only people with access to this space can see the note.", style = MaterialTheme.typography.bodySmall)
+                people.data.orEmpty().forEach { p ->
+                    Row(Modifier.fillMaxWidth().clickable { text = (text.trimEnd() + " @[${p.displayName}](${p.id}) ").trimStart(); mentioning = false }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Initials(p.displayName, 28.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text(p.displayName)
                     }
                 }
             }
-            if (multi) Button({ onDone(picked, items.orEmpty().filter { it.id in picked }) }, Modifier.fillMaxWidth()) { Text("Done") }
+        },
+        confirmButton = { TextButton({ mentioning = false }) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun TextTab(doc: Document) {
+    val c = LocalContainer.current
+    val ctx = LocalContext.current
+    val pages = rememberLoader(doc.id, doc.version, doc.status) { c.repo.pages(doc.id) }
+    Loaded(pages) { list ->
+        if (list.isEmpty() || list.all { it.text.isBlank() }) EmptyState(Icons.AutoMirrored.Outlined.TextSnippet, "No text yet", "Text appears here once Docveta has read the document.")
+        else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton({ copyText(ctx, "Document text", list.joinToString("\n\n") { it.text }) }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Copy all") }
+            list.forEach { p ->
+                Text("Page ${p.pageNo}" + (p.confidence?.let { " · ${(it * 100).toInt()}% confidence" } ?: ""), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SelectionContainer { Text(p.text.ifBlank { "(no text)" }, Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp), style = MaterialTheme.typography.bodyMedium) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VersionsTab(vm: DocViewModel, doc: Document, canEdit: Boolean) {
+    val c = LocalContainer.current
+    val ctx = LocalContext.current
+    val me = LocalMe.current
+    val scope = rememberCoroutineScope()
+    val confirm = rememberConfirmation()
+    val versions = rememberLoader(doc.id, doc.version) { c.repo.versions(doc.id) }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            runCatching { copyToCache(ctx, uri) }.onSuccess { (f, name, mime) -> vm.uploadVersion(f, mime, name) { versions.reload() } }.onFailure { toast(ctx, "Couldn't read that file") }
+        }
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
+        Hint("Every file this document has had. A new upload or a page change adds one; restoring brings an old one back.")
+        if (canEdit) FilledTonalButton({ pick.launch(arrayOf("*/*")) }, Modifier.padding(horizontal = 16.dp, vertical = 6.dp), enabled = !vm.busy) {
+            Icon(Icons.Outlined.Upload, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(if (vm.busy) "Uploading…" else "Upload a new version")
+        }
+        Loaded(versions) { list ->
+            list.forEach { v ->
+                ItemRow("Version ${v.versionNo}", listOfNotNull(formatDateTime(v.createdAt, me.dateFormat), formatBytes(v.sizeBytes), v.createdBy?.name, v.note.ifBlank { null }).joinToString(" · "), badges = { if (v.current) StatusBadge("Current", "accent") }) {
+                    IconButton({ scope.launch { vm.downloaded("original", v.versionNo)?.let { shareFile(ctx, it, v.mimeType.ifBlank { doc.mimeType }) } } }) { Icon(Icons.Outlined.Share, "Share version ${v.versionNo}") }
+                    if (canEdit && !v.current) TextButton({ confirm.ask("Go back to version ${v.versionNo}?", "It becomes the current file. Nothing is lost: the current one stays in this list.", "Restore") { vm.restoreVersion(v.versionNo) { versions.reload() } } }) { Text("Restore") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SimilarTab(doc: Document, onOpenDoc: (String) -> Unit) {
+    val c = LocalContainer.current
+    val me = LocalMe.current
+    val similar = rememberLoader(doc.id) { c.repo.similar(doc.id) }
+    when {
+        similar.loading && similar.data == null -> LoadingBox()
+        similar.data.isNullOrEmpty() -> EmptyState(Icons.Outlined.AutoAwesome, "Nothing similar yet", if (similar.error != null) "Similar documents need an AI provider with an embedding model (Administration, AI)." else "Once more documents are added, related ones show up here.")
+        else -> LazyColumn(Modifier.fillMaxSize()) {
+            items(similar.data!!, key = { it.document.id }) { s ->
+                Column {
+                    DocumentRow(s.document, me.spaces, me.dateFormat, { c.repo.thumbnailUrl(it) }, onClick = { onOpenDoc(s.document.id) })
+                    Text(if (s.reason == "meaning") "Similar content · ${(s.score * 100).toInt()}%" else "Same sender or type", Modifier.padding(start = 82.dp, bottom = 6.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+private val historyLabels = mapOf(
+    "created" to "Uploaded", "updated" to "Edited", "trashed" to "Moved to Trash", "restored" to "Restored from Trash", "ocr_queued" to "Waiting for text recognition",
+    "text_extracted" to "Text recognised", "auto_classified" to "Organised automatically", "archive_created" to "Searchable PDF created", "processing_failed" to "Processing failed",
+    "reprocess_requested" to "Reprocessing requested", "asn_assigned" to "Archive number assigned",
+)
+
+@Composable
+private fun HistoryTab(doc: Document) {
+    val c = LocalContainer.current
+    val me = LocalMe.current
+    val h = rememberLoader(doc.id, doc.version) { c.repo.history(doc.id) }
+    Loaded(h) { list ->
+        if (list.isEmpty()) EmptyState(Icons.Outlined.History, "No history")
+        else LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
+            items(list, key = { it.id }) { e ->
+                val d = e.details
+                val detail = when (e.action) {
+                    "updated" -> d.keys.joinToString(", ") { it.removeSuffix("_ids").removeSuffix("_id").replace('_', ' ') }
+                    "text_extracted" -> "${d["pages"]?.let { (it as? JsonPrimitive)?.content } ?: "?"} page(s) via ${(d["engine"] as? JsonPrimitive)?.content ?: "?"}"
+                    "auto_classified" -> d.entries.joinToString(" · ") { (k, v) -> "${k.replace('_', ' ')}: ${v.display()}" }
+                    "processing_failed" -> (d["error"] as? JsonPrimitive)?.content.orEmpty()
+                    "created" -> (d["filename"] as? JsonPrimitive)?.content.orEmpty()
+                    else -> ""
+                }
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text((historyLabels[e.action] ?: e.action) + (e.actor?.let { " · ${it.name}" } ?: ""), style = MaterialTheme.typography.bodyMedium)
+                    if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(formatDateTime(e.createdAt, me.dateFormat), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                }
+            }
         }
     }
 }
@@ -603,10 +850,8 @@ private fun ShareLinkSheet(vm: DocViewModel, onDismiss: () -> Unit) {
                     }
                 }, Modifier.fillMaxWidth(), enabled = !busy) { Text("Create link") }
             } else {
-                Text(link!!, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp))
-                Button({
-                    ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, link) }, "Share link"))
-                }, Modifier.fillMaxWidth()) { Icon(Icons.Outlined.Share, null); Spacer(Modifier.width(8.dp)); Text("Send the link") }
+                SecretBox("Link", link!!)
+                Button({ shareText(ctx, link!!, "Share link") }, Modifier.fillMaxWidth()) { Icon(Icons.Outlined.Share, null); Spacer(Modifier.width(8.dp)); Text("Send the link") }
             }
             if (existing.isNotEmpty()) {
                 HorizontalDivider()
@@ -629,13 +874,38 @@ private fun ShareLinkSheet(vm: DocViewModel, onDismiss: () -> Unit) {
 @Composable
 private fun <T> FlowRowChips(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        options.forEach { (v, l) -> androidx.compose.material3.FilterChip(selected == v, { onSelect(v) }, label = { Text(l) }) }
+        options.forEach { (v, l) -> FilterChip(selected == v, { onSelect(v) }, label = { Text(l) }) }
     }
+}
+
+/** Copies a picked file into the cache so it can be sent; returns the file, its name and type. */
+suspend fun copyToCache(ctx: Context, uri: Uri): Triple<File, String, String> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    var name = "file"
+    ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+        if (c.moveToFirst()) {
+            val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (i >= 0) name = c.getString(i) ?: name
+        }
+    }
+    val mime = ctx.contentResolver.getType(uri) ?: "application/octet-stream"
+    val f = File(ctx.cacheDir, "outgoing/${System.currentTimeMillis()}-${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
+    f.parentFile?.mkdirs()
+    ctx.contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { o -> i.copyTo(o) } } ?: throw java.io.IOException("unreadable")
+    Triple(f, name, mime)
 }
 
 fun shareFile(ctx: Context, f: File, mime: String) {
     val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
     ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = mime.ifBlank { "*/*" }; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share"))
+}
+
+/** Shares several files at once (one goes through [shareFile]). */
+fun shareFiles(ctx: Context, files: List<Pair<File, String>>) {
+    if (files.size == 1) return shareFile(ctx, files[0].first, files[0].second)
+    val uris = ArrayList(files.map { FileProvider.getUriForFile(ctx, ctx.packageName + ".files", it.first) })
+    val types = files.map { it.second }.distinct()
+    val type = if (types.size == 1) types[0] else if (types.all { it.startsWith("image/") }) "image/*" else "*/*"
+    ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND_MULTIPLE).apply { this.type = type; putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share"))
 }
 
 fun openFile(ctx: Context, f: File, mime: String) {
