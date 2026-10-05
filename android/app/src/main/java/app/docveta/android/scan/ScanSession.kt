@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.docveta.android.AppContainer
+import app.docveta.android.data.AppJson
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -16,6 +17,7 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
 
 /** One scanned page: the upright photo on disk, where its corners are, and how it should look when done. */
 data class ScanPage(
@@ -162,12 +164,17 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
         return PageFilters.rotate(PageFilters.apply(flat, p.filter), p.turns)
     }
 
+    /** A file to upload, with its pages kept aside when the phone will read its text (see [PhoneOcr]). */
+    class Rendered(val file: File, val name: String, val ocrPages: File? = null)
+
     /** Builds the file(s) to upload from every page. Returns the PDF, or one JPEG per page. */
-    suspend fun render(onProgress: (Int, Int) -> Unit = { _, _ -> }): List<Pair<File, String>> = withContext(Dispatchers.Default) {
-        val out = ArrayList<Pair<File, String>>()
+    suspend fun render(onProgress: (Int, Int) -> Unit = { _, _ -> }): List<Rendered> = withContext(Dispatchers.Default) {
+        val out = ArrayList<Rendered>()
         val images = ArrayList<PdfPageImage>()
         val pdf = asPdf || pages.size == 1
         val base = title.trim().ifBlank { defaultTitle() }
+        val ocrPages = if (pdf && PhoneOcr.wanted(c.session.phoneOcr, c.session.serverReadsText)) File(dir, "ocr-${UUID.randomUUID()}").apply { mkdirs() } else null
+        val ocrList = ArrayList<OcrPageFile>()
         pages.forEachIndexed { i, p ->
             onProgress(i, pages.size)
             val bmp = ImageIO.decodeUpright(p.file, MAX_SOURCE)
@@ -177,16 +184,22 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
             val finalBmp = ImageIO.toBitmap(done)
             val jpg = ImageIO.jpeg(finalBmp, 85)
             finalBmp.recycle()
-            if (pdf) images.add(PdfPageImage(jpg, done.w, done.h))
-            else {
+            if (pdf) {
+                images.add(PdfPageImage(jpg, done.w, done.h))
+                if (ocrPages != null) {
+                    File(ocrPages, "p$i.jpg").writeBytes(jpg)
+                    ocrList.add(OcrPageFile("p$i.jpg", done.w, done.h))
+                }
+            } else {
                 val f = File(dir, "out-${UUID.randomUUID()}.jpg").also { it.writeBytes(jpg) }
-                out.add(f to "$base ${i + 1}.jpg")
+                out.add(Rendered(f, "$base ${i + 1}.jpg"))
             }
         }
         if (pdf) {
             val f = File(dir, "out-${UUID.randomUUID()}.pdf")
             f.outputStream().use { PdfWriter.write(images, it, base) }
-            out.add(f to "$base.pdf")
+            ocrPages?.let { File(it, "pages.json").writeText(AppJson.encodeToString(ListSerializer(OcrPageFile.serializer()), ocrList)) }
+            out.add(Rendered(f, "$base.pdf", ocrPages))
         }
         onProgress(pages.size, pages.size)
         out
@@ -199,9 +212,11 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
             working = true
             try {
                 val files = render()
-                for ((f, name) in files) {
-                    c.uploads.enqueueFile(f, name, if (name.endsWith(".pdf")) "application/pdf" else "image/jpeg", spaceId, "scan", name.removeSuffix(".pdf").removeSuffix(".jpg"))
+                val script = PhoneOcr.script(c.repo.cachedMe()?.spaces?.firstOrNull { it.id == spaceId }?.defaultLanguage)
+                for (r in files) {
+                    c.uploads.enqueueFile(r.file, r.name, if (r.name.endsWith(".pdf")) "application/pdf" else "image/jpeg", spaceId, "scan", r.name.removeSuffix(".pdf").removeSuffix(".jpg"), r.ocrPages, script)
                 }
+                if (files.any { it.ocrPages != null }) PhoneOcr.prepare(c.context, script)
                 pages.forEach { it.file.delete() }
                 pages = emptyList()
                 title = defaultTitle()

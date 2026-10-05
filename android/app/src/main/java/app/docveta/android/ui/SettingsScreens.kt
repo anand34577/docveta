@@ -671,9 +671,20 @@ fun PhoneSettingsScreen(onBack: () -> Unit) {
     var wifi by remember { mutableStateOf(s.wifiOnlyUploads) }
     var auto by remember { mutableStateOf(s.autoCapture) }
     var lock by remember { mutableStateOf(s.appLock) }
+    var ocr by remember { mutableStateOf(s.phoneOcr) }
     Page("This phone", onBack) {
         SectionLabel("Scanner")
         ToggleRow("Take the picture by itself", "When the page is found and held still.", auto) { auto = it; s.autoCapture = it }
+        SelectField("Read the text on this phone", listOf("auto" to "Automatic", "on" to "Always", "off" to "Never"), ocr) { ocr = it; s.phoneOcr = it }
+        Hint(
+            when (ocr) {
+                "on" -> "Scans are read here before they're sent, so the server doesn't have to. It works offline and in the background, and is skipped in battery saver, on low battery and on phones with little memory."
+                "off" -> "The server reads every scan."
+                else -> "Scans are read here only when the server can't read text itself" +
+                    (if (s.serverReadsText) " (yours can, so the server does it)." else " (yours can't right now, so the phone does it).") +
+                    " Skipped in battery saver, on low battery and on phones with little memory."
+            },
+        )
         SectionLabel("Uploads")
         ToggleRow("Wi-Fi only", "Wait for Wi-Fi before sending, to save mobile data.", wifi) { wifi = it; s.wifiOnlyUploads = it; c.uploads.schedule() }
         SectionLabel("Security")

@@ -78,6 +78,8 @@ dependencies {
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.exifinterface)
     implementation(libs.mlkit.docscan)
+    implementation(libs.mlkit.text)
+    implementation(libs.mlkit.text.devanagari)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

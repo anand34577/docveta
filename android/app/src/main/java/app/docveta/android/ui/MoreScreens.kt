@@ -145,7 +145,7 @@ fun UploadsScreen(onBack: () -> Unit, onOpen: (String) -> Unit) {
                             Text(
                                 when (u.status) {
                                     "done" -> "Uploaded · reading the text…"
-                                    "queued" -> u.error ?: "Waiting · ${formatBytes(u.size)}"
+                                    "queued" -> if (u.ocr == "pending") "Reading the text on this phone…" else u.error ?: "Waiting · ${formatBytes(u.size)}"
                                     "uploading" -> "${(u.progress * 100).toInt()}% of ${formatBytes(u.size)}"
                                     "duplicate" -> "You already have this: ${u.duplicateTitle ?: "a copy"}"
                                     else -> u.error ?: "Failed"

@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 
 /** Hand-wired dependencies: there are few enough that a DI framework would only add weight. */
 class AppContainer(app: Application) {
+    val context: android.content.Context = app
     val cacheDir: java.io.File = app.cacheDir
     val session = SessionStore(SecureStore(app))
 

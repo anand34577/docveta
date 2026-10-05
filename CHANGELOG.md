@@ -5,6 +5,25 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Find in a document** (web and Android): the search button in the viewer, or Ctrl/⌘+F on the
+  web, finds text on every page, not only the pages on screen. Matches are highlighted, and Enter /
+  Shift+Enter (or the arrows) move between them. Case and spaces don't matter, so "amount due"
+  also finds scans whose text is stored word by word.
+- **Android: read a scan's text on the phone.** Settings → This phone → *Read the text on this
+  phone*. The words go into the PDF as an invisible text layer, so the server uses them instead of
+  reading the pages again. *Automatic* (the default) does this only when the server can't read
+  text itself; *Always* does it for every scan. It runs in the background, works offline and
+  carries on if the app is closed. It is skipped in battery saver, on low battery and on phones
+  with little memory, and an upload never waits more than 10 minutes for it: the scan then goes
+  as it is and the server reads it. Hindi, Marathi and other Devanagari languages are read when
+  that is the space's language.
+
+### Fixed
+- Android: the app wouldn't open at all when the server couldn't be reached, so nothing could be
+  scanned. It now opens with the account as last seen and a "Can't reach the server" bar; scans
+  wait in the upload queue and are sent when the server is back.
+
 ## [0.7.0] - 2026-10-05
 
 ### Added

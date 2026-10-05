@@ -2,11 +2,21 @@ import * as React from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { Spinner } from "@/components/ui/misc";
 import { cn } from "@/lib/utils";
+import { findAll, markMatches, squash, squashQuery } from "./pdf-find";
 import { usePinchZoom, useViewState, ViewerToolbar } from "./viewer-toolbar";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+
+/** The match to show: its page, its number on that page, and a counter that changes on every move. */
+interface FindTarget {
+  q: string;
+  page: number;
+  n: number;
+  seq: number;
+}
 
 interface Props {
   url: string;
@@ -17,7 +27,8 @@ interface Props {
 
 /**
  * Lightweight PDF viewer: pages render lazily as they scroll into view, with a text
- * layer for selection and search-term highlighting. Loaded on demand (separate chunk).
+ * layer for selection and search-term highlighting, and Find (Ctrl+F) across all pages, including
+ * ones not drawn yet. Loaded on demand (separate chunk).
  */
 export default function PdfViewer({ url, initialPage, highlight, onPageCount }: Props) {
   const [doc, setDoc] = React.useState<PDFDocumentProxy | null>(null);
@@ -35,6 +46,15 @@ export default function PdfViewer({ url, initialPage, highlight, onPageCount }: 
   pageCountCb.current = onPageCount;
   const highlightKey = (highlight ?? []).join("");
   const terms = React.useMemo(() => (highlightKey ? highlightKey.split("") : []), [highlightKey]);
+  const find = useFind(doc);
+
+  // Show the chosen match: bring its page into view; the page then scrolls to the match itself.
+  React.useEffect(() => {
+    const t = find.target;
+    if (!t || t.page < 1) return;
+    const el = container.current?.querySelector<HTMLElement>(`[data-page="${t.page}"]`);
+    if (el && !el.querySelector(".kz-find-active")) el.scrollIntoView({ block: "start" });
+  }, [find.target]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -93,7 +113,7 @@ export default function PdfViewer({ url, initialPage, highlight, onPageCount }: 
       <div className="relative isolate flex min-w-0 flex-1 flex-col">
         <div
           ref={container}
-          className="flex-1 overflow-auto scrollbar-thin bg-surface-3 pt-4 pb-16 [touch-action:pan-x_pan-y]"
+          className={cn("flex-1 overflow-auto scrollbar-thin bg-surface-3 pb-16 [touch-action:pan-x_pan-y]", find.open ? "pt-16" : "pt-4")}
           onScroll={(e) => {
             const el = e.currentTarget;
             const pages = el.querySelectorAll<HTMLElement>("[data-page]");
@@ -113,12 +133,13 @@ export default function PdfViewer({ url, initialPage, highlight, onPageCount }: 
           ) : (
             <div ref={content} className="px-4">
               {Array.from({ length: doc.numPages }, (_, i) => (
-                <PdfPage key={i} doc={doc} pageNumber={i + 1} scale={scale} rotation={rotation} estimate={shown ?? baseSize} highlight={terms} root={container} />
+                <PdfPage key={i} doc={doc} pageNumber={i + 1} scale={scale} rotation={rotation} estimate={shown ?? baseSize} highlight={terms} find={find.target} root={container} />
               ))}
             </div>
           )}
         </div>
-        {doc && <ViewerToolbar view={view} percent={percent} page={current} pages={doc.numPages} thumbs={thumbs} onThumbs={() => setThumbs((t) => !t)} />}
+        {doc && find.open && <FindBar find={find} />}
+        {doc && <ViewerToolbar view={view} percent={percent} page={current} pages={doc.numPages} thumbs={thumbs} onThumbs={() => setThumbs((t) => !t)} onFind={find.show} />}
       </div>
     </div>
   );
@@ -169,16 +190,33 @@ function Thumb({ doc, n, active, onPick, rotation }: { doc: PDFDocumentProxy; n:
   );
 }
 
-function PdfPage({ doc, pageNumber, scale, rotation, estimate, highlight, root }: {
+function PdfPage({ doc, pageNumber, scale, rotation, estimate, highlight, find, root }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
   scale: number;
   rotation: number;
   estimate: { w: number; h: number };
   highlight?: string[];
+  find?: FindTarget | null;
   root: React.RefObject<HTMLDivElement | null>;
 }) {
   const ref = React.useRef<HTMLDivElement>(null);
+  // The drawn text layer's spans and their own text, for Find to mark up.
+  const spans = React.useRef<{ leaves: HTMLElement[]; originals: string[] } | null>(null);
+  const findRef = React.useRef(find);
+  findRef.current = find;
+  const scrolled = React.useRef(-1);
+  const applyFind = React.useCallback(() => {
+    const s = spans.current;
+    if (!s) return;
+    const f = findRef.current;
+    const active = markMatches(s.leaves, s.originals, f?.q ?? "", f && f.page === pageNumber ? f.n : -1);
+    if (active && f && f.seq !== scrolled.current) {
+      scrolled.current = f.seq;
+      active.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+  }, [pageNumber]);
+  React.useEffect(applyFind, [applyFind, find?.q, find?.page, find?.n, find?.seq]);
   const [visible, setVisible] = React.useState(false);
   const [page, setPage] = React.useState<PDFPageProxy | null>(null);
 
@@ -215,6 +253,7 @@ function PdfPage({ doc, pageNumber, scale, rotation, estimate, highlight, root }
     const task = page.render({ canvas, viewport, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined });
     let textLayer: pdfjs.TextLayer | null = null;
     let cancelled = false;
+    spans.current = null;
     task.promise
       .then(async () => {
         if (cancelled) return;
@@ -228,6 +267,9 @@ function PdfPage({ doc, pageNumber, scale, rotation, estimate, highlight, root }
             if (terms.some((term) => t.includes(term))) s.classList.add("kz-hit");
           });
         }
+        const leaves = Array.from(textDiv.querySelectorAll<HTMLElement>("span")).filter((s) => !s.classList.contains("markedContent"));
+        spans.current = { leaves, originals: leaves.map((s) => s.textContent ?? "") };
+        applyFind();
       })
       .catch(() => undefined);
     return () => {
@@ -235,9 +277,150 @@ function PdfPage({ doc, pageNumber, scale, rotation, estimate, highlight, root }
       task.cancel();
       textLayer?.cancel();
     };
-  }, [page, scale, rotation, highlight]);
+  }, [page, scale, rotation, highlight, applyFind]);
 
   const w = Math.floor(estimate.w * scale);
   const h = Math.floor(estimate.h * scale);
   return <div ref={ref} data-page={pageNumber} className="pdf-page" style={{ width: page ? undefined : w, height: page ? undefined : h, minWidth: 50, minHeight: 50 }} />;
+}
+
+/** Find in document: searches every page's text, not only the pages drawn so far. */
+function useFind(doc: PDFDocumentProxy | null) {
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const [matches, setMatches] = React.useState<{ page: number; n: number }[]>([]);
+  const [index, setIndex] = React.useState(0);
+  const [seq, setSeq] = React.useState(0);
+  const [state, setState] = React.useState<"idle" | "searching" | "done" | "no-text">("idle");
+  const texts = React.useRef(new Map<number, string>());
+  const input = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    texts.current = new Map();
+  }, [doc]);
+
+  React.useEffect(() => {
+    const q = squashQuery(query);
+    if (!doc || !open || !q) {
+      setMatches([]);
+      setState("idle");
+      return;
+    }
+    let cancelled = false;
+    setState("searching");
+    const t = setTimeout(async () => {
+      const found: { page: number; n: number }[] = [];
+      let anyText = false;
+      for (let p = 1; p <= doc.numPages; p++) {
+        let text = texts.current.get(p);
+        if (text === undefined) {
+          const page = await doc.getPage(p);
+          const content = await page.getTextContent();
+          text = squash(content.items.map((i) => ("str" in i ? i.str : ""))).text;
+          texts.current.set(p, text);
+        }
+        if (cancelled) return;
+        if (text) anyText = true;
+        findAll(text, q).forEach((_, n) => found.push({ page: p, n }));
+      }
+      setMatches(found);
+      setIndex(0);
+      setSeq((s) => s + 1);
+      setState(anyText ? "done" : "no-text");
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [doc, open, query]);
+
+  const show = React.useCallback(() => {
+    setOpen(true);
+    requestAnimationFrame(() => {
+      input.current?.focus();
+      input.current?.select();
+    });
+  }, []);
+  const close = React.useCallback(() => setOpen(false), []);
+  const move = React.useCallback(
+    (d: number) => {
+      if (!matches.length) return;
+      setIndex((i) => (i + d + matches.length) % matches.length);
+      setSeq((s) => s + 1);
+    },
+    [matches.length],
+  );
+
+  // Ctrl/⌘+F opens it (pressing it again inside the box gives the browser's own find);
+  // F3 / Ctrl+G go to the next match, with Shift the previous one.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      const typing = e.target instanceof HTMLElement && e.target !== input.current && (e.target.isContentEditable || /^(input|textarea|select)$/i.test(e.target.tagName));
+      if (mod && !e.altKey && key === "f" && e.target !== input.current && !typing) {
+        e.preventDefault();
+        show();
+      } else if (open && (e.key === "F3" || (mod && key === "g"))) {
+        e.preventDefault();
+        move(e.shiftKey ? -1 : 1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, show, move]);
+
+  const m = matches[index];
+  const target = React.useMemo<FindTarget | null>(
+    () => (open && query.trim() ? { q: query, page: m?.page ?? -1, n: m?.n ?? -1, seq } : null),
+    [open, query, m?.page, m?.n, seq],
+  );
+  return { open, show, close, query, setQuery, matches, index, move, state, input, target };
+}
+
+function FindBar({ find }: { find: ReturnType<typeof useFind> }) {
+  const n = find.matches.length;
+  const label =
+    find.state === "searching" ? "Searching…" : find.state === "no-text" ? "No text yet" : find.state === "done" && !n ? "No matches" : n ? `${find.index + 1} of ${n}` : "";
+  const btn = "inline-flex size-8 shrink-0 items-center justify-center rounded-full text-fg/80 hover:bg-surface-2 hover:text-fg disabled:opacity-40 sm:size-7";
+  return (
+    <div role="search" className="absolute inset-x-3 top-3 z-20 flex items-center gap-1 rounded-full border border-border bg-surface/95 py-1 pl-3 pr-1 shadow-md backdrop-blur sm:left-auto sm:w-96">
+      <Search className="size-4 shrink-0 text-subtle" aria-hidden />
+      <input
+        ref={find.input}
+        value={find.query}
+        onChange={(e) => find.setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            find.move(e.shiftKey ? -1 : 1);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            find.close();
+          }
+        }}
+        placeholder="Find in document"
+        aria-label="Find in document"
+        enterKeyHint="search"
+        className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-subtle sm:h-7"
+      />
+      <span
+        className="shrink-0 px-1 text-xs tabular-nums text-muted"
+        aria-live="polite"
+        title={find.state === "no-text" ? "This document has no text to search yet. Scans get it once Docveta has read them." : undefined}
+      >
+        {label}
+      </span>
+      <button type="button" className={btn} onClick={() => find.move(-1)} disabled={!n} aria-label="Previous match" title="Previous (Shift+Enter)">
+        <ChevronUp className="size-4" />
+      </button>
+      <button type="button" className={btn} onClick={() => find.move(1)} disabled={!n} aria-label="Next match" title="Next (Enter)">
+        <ChevronDown className="size-4" />
+      </button>
+      <button type="button" className={btn} onClick={find.close} aria-label="Close find" title="Close (Esc)">
+        <X className="size-4" />
+      </button>
+    </div>
+  );
 }
