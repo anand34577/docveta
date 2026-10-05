@@ -5,6 +5,8 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-05
+
 ### Added
 - **Find in a document** (web and Android): the search button in the viewer, or Ctrl/⌘+F on the
   web, finds text on every page, not only the pages on screen. Matches are highlighted, and Enter /
