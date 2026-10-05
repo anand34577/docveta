@@ -5,6 +5,8 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-05
+
 ### Added
 - **Android app: everything the web app does.** Previously the app covered scanning, the Inbox,
   reading, filing and Ask; the rest needed a browser. New in the app:
