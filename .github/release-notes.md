@@ -10,6 +10,7 @@
 | Mac (Intel) | `docveta-…-darwin-x64.tar.gz` |
 | **Android phone** | `docveta-android-….apk`: scan documents and browse your server (allow installs from your browser or file manager) |
 | Docker, NAS (Synology, Unraid, TrueNAS) | `docker compose up -d` with [docker-compose.yml](https://github.com/anand34577/docveta/blob/main/deploy/docker-compose.yml): nothing to edit |
+| `docveta-ocr-rec_….onnx` | nothing to do: languages the Android app downloads by itself when a scan needs them |
 
 Nothing else to install: on first start, click **Save and start** in your browser to use the
 built-in database (or connect your own PostgreSQL 16+).

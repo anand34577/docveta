@@ -5,6 +5,8 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-05
+
 ### Changed
 - **Android: no more Google ML Kit.** The app no longer needs Google Play services for anything.
 - **Android: reading a scan's text on the phone now uses the server's own OCR** (PaddleOCR, on
