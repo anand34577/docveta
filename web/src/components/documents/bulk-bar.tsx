@@ -8,7 +8,7 @@ import { useSelection } from "@/stores/ui";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { Field, Input, NativeSelect } from "@/components/ui/input";
-import { Checkbox, TagChip } from "@/components/ui/misc";
+import { Checkbox, TagChip, useScrollEdges } from "@/components/ui/misc";
 import { confirm } from "@/components/ui/confirm";
 import { useCurrentUser } from "@/components/app-shell";
 import { spaceLabel } from "@/lib/utils";
@@ -25,6 +25,7 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
   const qc = useQueryClient();
   const [dialog, setDialog] = React.useState<null | "tags" | "move" | "merge">(null);
   const [busy, setBusy] = React.useState(false);
+  const bar = useScrollEdges<HTMLDivElement>();
   const selected = items.filter((d) => ids.has(d.id));
   const n = ids.size;
 
@@ -56,7 +57,7 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
 
   return (
     <>
-      <div className="fixed inset-x-3 bottom-20 z-40 mx-auto flex max-w-2xl items-center gap-1 overflow-x-auto rounded-xl border border-border bg-surface p-1.5 shadow-lg animate-pop lg:bottom-6">
+      <div ref={bar} className="fixed inset-x-3 bottom-20 z-40 mx-auto flex max-w-2xl items-center gap-1 scroll-x rounded-xl border border-border bg-surface p-1.5 shadow-lg animate-pop lg:bottom-6">
         <Button size="sm" variant="ghost" onClick={clear} aria-label="Clear selection">
           <X />
         </Button>

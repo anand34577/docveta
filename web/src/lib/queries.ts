@@ -170,7 +170,7 @@ export function useDirectory() {
 export function useChannels() {
   return useQuery({
     queryKey: keys.channels,
-    queryFn: () => api.get<{ items: Channel[]; event_types: string[] }>("/notification-channels"),
+    queryFn: () => api.get<{ items: Channel[]; event_types: string[]; email_ready?: boolean }>("/notification-channels"),
   });
 }
 

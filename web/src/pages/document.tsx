@@ -229,7 +229,7 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
 
       <aside className={cn("w-full shrink-0 overflow-y-auto scrollbar-thin bg-surface lg:block", compact ? "lg:w-[320px] 2xl:w-[400px]" : "lg:w-[360px] xl:w-[400px]", pane === "details" ? "block" : "hidden")}>
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="sticky top-0 z-10 h-14 items-end overflow-x-auto bg-surface px-3 scrollbar-thin [&>button]:shrink-0">
+          <TabsList className="sticky top-0 z-10 h-14 items-end bg-surface px-3">
             <TabsTrigger value="details">Details</TabsTrigger>
             <TabsTrigger value="notes">Notes{doc.note_count ? ` (${doc.note_count})` : ""}</TabsTrigger>
             <TabsTrigger value="text">Text</TabsTrigger>

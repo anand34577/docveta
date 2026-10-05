@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
-import { Card } from "./ui/misc";
+import { Card, useScrollEdges } from "./ui/misc";
 
 export interface SectionDef {
   id: string;
@@ -18,12 +18,13 @@ export function SettingsLayout({ title, description, base, sections, active, chi
   active: string;
   children: React.ReactNode;
 }) {
+  const nav = useScrollEdges<HTMLElement>();
   return (
     <div className="mx-auto max-w-5xl page-x pb-16 pt-6 sm:pt-8">
       <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
       {description && <p className="mt-1 text-sm text-muted">{description}</p>}
       <div className="mt-6 flex flex-col gap-6 md:flex-row">
-        <nav className="-mx-4 flex gap-1 overflow-x-auto scrollbar-thin border-b border-border px-4 pb-2 sm:-mx-6 sm:px-6 md:mx-0 md:w-52 md:shrink-0 md:flex-col md:border-0 md:px-0 md:pb-0" aria-label="Sections">
+        <nav ref={nav} className="scroll-x -mx-4 flex gap-1 border-b border-border px-4 pb-2 sm:-mx-6 sm:px-6 md:mx-0 md:w-52 md:shrink-0 md:flex-col md:overflow-visible md:border-0 md:px-0 md:pb-0" aria-label="Sections">
           {sections.map((s) => (
             <Link
               key={s.id}

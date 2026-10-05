@@ -42,7 +42,7 @@ export function UploadChooser() {
             >
               <span className={cn("size-2.5 rounded-full", spaceDot(s.color))} />
               <span className="flex-1">{spaceLabel(s)}</span>
-              <span className="text-xs text-subtle">{s.kind === "personal" ? "only you" : `${s.member_count} members`}</span>
+              <span className="text-xs text-subtle">{s.kind === "personal" ? "only you" : `${s.member_count} member${s.member_count === 1 ? "" : "s"}`}</span>
             </button>
           ))}
         </div>

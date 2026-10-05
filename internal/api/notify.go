@@ -49,7 +49,7 @@ func (a *API) registerNotify(mux router) {
 	}))
 	mux.HandleFunc("GET /api/v1/notification-channels", handle(func(r *http.Request, p *auth.Principal) (map[string]any, error) {
 		c, err := a.Notify.Channels(r.Context(), p)
-		return map[string]any{"items": c, "event_types": notify.EventTypes}, err
+		return map[string]any{"items": c, "event_types": notify.EventTypes, "email_ready": a.Notify.EmailReady(r.Context())}, err
 	}))
 	mux.HandleFunc("POST /api/v1/notification-channels", handle(func(r *http.Request, p *auth.Principal) (*notify.Channel, error) {
 		in, err := decode[notify.ChannelInput](r)

@@ -35,10 +35,11 @@ export function SpaceSettingsPage() {
   const space = me.spaces.find((s) => s.id === id);
   if (!space) return <NotFound />;
   const shown = space.kind === "personal" ? sections.filter((s) => s.id !== "members") : sections;
+  if (!shown.some((s) => s.id === section)) return <NotFound />;
   return (
     <SettingsLayout
       title={space.kind === "personal" ? "Personal space" : space.name}
-      description={space.kind === "personal" ? "Only you can see documents here." : `${space.member_count} members · ${space.document_count} documents`}
+      description={space.kind === "personal" ? "Only you can see documents here." : `${space.member_count} member${space.member_count === 1 ? "" : "s"} · ${space.document_count} document${space.document_count === 1 ? "" : "s"}`}
       base={`/spaces/${id}`}
       sections={shown}
       active={section}
@@ -219,14 +220,14 @@ function Members({ space }: { space: Space }) {
         {(members.data ?? []).map((m) => (
           <li key={m.user_id} className="flex flex-wrap items-center gap-3 py-3">
             <Avatar name={m.display_name} />
-            <div className="min-w-0 flex-1">
+            <div className="min-w-48 flex-1">
               <div className="text-sm font-medium">
                 {m.display_name} {m.user_id === me.id && <span className="text-subtle">(you)</span>}
               </div>
               <div className="text-xs text-subtle">{m.email}</div>
             </div>
             {owner ? (
-              <NativeSelect value={m.role} onChange={(e) => setMember(m.user_id, e.target.value as SpaceRole)} className="h-8 w-auto text-[13px]" title={roleInfo[m.role]}>
+              <NativeSelect value={m.role} onChange={(e) => setMember(m.user_id, e.target.value as SpaceRole)} className="ml-auto h-8 w-auto text-[13px]" title={roleInfo[m.role]}>
                 <option value="viewer">Viewer</option>
                 <option value="editor">Editor</option>
                 <option value="owner">Owner</option>
@@ -339,7 +340,7 @@ function Vocabulary({ space, kind }: { space: Space; kind: TaxonomyKind }) {
                   </div>
                 )}
               </div>
-              <span className="text-xs tabular-nums text-subtle">{it.document_count} docs</span>
+              <span className="text-xs tabular-nums text-subtle">{it.document_count} doc{it.document_count === 1 ? "" : "s"}</span>
               {canEdit && (
                 <>
                   <Button size="icon-sm" variant="ghost" onClick={() => setEditing(it)} aria-label={`Edit ${it.name}`}>

@@ -353,7 +353,7 @@ export function SpaceWorkflows({ space }: { space: Space }) {
           {list.map((w) => (
             <li key={w.id} className="flex flex-wrap items-center gap-3 py-3">
               <Switch checked={w.enabled} disabled={!owner} onCheckedChange={(v) => toggle(w, v)} aria-label={`Enable ${w.name}`} />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-48 flex-1">
                 <div className="text-sm font-medium">{w.name}</div>
                 <div className="text-xs text-subtle">
                   When {triggers[w.trigger]}
@@ -361,19 +361,21 @@ export function SpaceWorkflows({ space }: { space: Space }) {
                   {w.last_run_at && `, last ${timeAgo(w.last_run_at)}`}
                 </div>
               </div>
-              <Button size="sm" variant="ghost" onClick={() => setRuns(w)}>
-                History
-              </Button>
-              {owner && (
-                <>
-                  <Button size="icon-sm" variant="ghost" aria-label={`Edit ${w.name}`} onClick={() => setEditing(w)}>
-                    <Pencil />
-                  </Button>
-                  <Button size="icon-sm" variant="ghost" aria-label={`Delete ${w.name}`} onClick={() => remove(w)}>
-                    <Trash2 />
-                  </Button>
-                </>
-              )}
+              <div className="ml-auto flex items-center gap-1">
+                <Button size="sm" variant="ghost" onClick={() => setRuns(w)}>
+                  History
+                </Button>
+                {owner && (
+                  <>
+                    <Button size="icon-sm" variant="ghost" aria-label={`Edit ${w.name}`} onClick={() => setEditing(w)}>
+                      <Pencil />
+                    </Button>
+                    <Button size="icon-sm" variant="ghost" aria-label={`Delete ${w.name}`} onClick={() => remove(w)}>
+                      <Trash2 />
+                    </Button>
+                  </>
+                )}
+              </div>
             </li>
           ))}
         </ul>

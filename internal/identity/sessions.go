@@ -104,7 +104,7 @@ func (s *Service) CreateSession(ctx context.Context, userID uuid.UUID, userAgent
 	known := false
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		// A device counts as known if an earlier session came from the same IP and the
-		// same kind of device; the very first session isn't worth an alert either.
+		// same browser on the same system; the very first session isn't worth an alert.
 		rows, err := tx.Query(ctx, `SELECT ip, user_agent FROM sessions WHERE user_id=$1`, userID)
 		if err != nil {
 			return err
@@ -116,7 +116,7 @@ func (s *Service) CreateSession(ctx context.Context, userID uuid.UUID, userAgent
 				return err
 			}
 			n++
-			known = known || (pIP == ip && shortUA(pUA) == shortUA(userAgent))
+			known = known || (pIP == ip && deviceName(pUA) == deviceName(userAgent))
 		}
 		if err := rows.Err(); err != nil {
 			return err
@@ -138,24 +138,48 @@ func (s *Service) CreateSession(ctx context.Context, userID uuid.UUID, userAgent
 		return token, nil
 	}
 	s.emit(ctx, Event{Type: "security.new_login", UserID: userID, Title: "New sign-in to your account",
-		Body: "Signed in from " + ip + " (" + shortUA(userAgent) + "). If this wasn't you, change your password and sign out other sessions."})
+		Body: "Signed in with " + deviceName(userAgent) + " from " + ip + ". If this wasn't you, change your password and sign out other sessions."})
 	return token, nil
 }
 
-func shortUA(ua string) string {
+// deviceName describes a user agent as "Firefox on Windows", so a second browser on the
+// same computer counts as a new device.
+func deviceName(ua string) string {
+	app := ""
+	switch {
+	case strings.HasPrefix(ua, "DocvetaAndroid"):
+		return "the Android app"
+	case strings.Contains(ua, "Edg/"):
+		app = "Edge"
+	case strings.Contains(ua, "OPR/"):
+		app = "Opera"
+	case strings.Contains(ua, "Firefox/"):
+		app = "Firefox"
+	case strings.Contains(ua, "Chrome/"), strings.Contains(ua, "CriOS/"):
+		app = "Chrome"
+	case strings.Contains(ua, "Safari/"):
+		app = "Safari"
+	}
+	system := ""
 	switch {
 	case strings.Contains(ua, "Android"):
-		return "Android"
+		system = "Android"
 	case strings.Contains(ua, "iPhone"), strings.Contains(ua, "iPad"):
-		return "iOS"
+		system = "iOS"
 	case strings.Contains(ua, "Windows"):
-		return "Windows"
+		system = "Windows"
 	case strings.Contains(ua, "Mac OS"):
-		return "macOS"
+		system = "macOS"
 	case strings.Contains(ua, "Linux"):
-		return "Linux"
+		system = "Linux"
+	}
+	switch {
+	case app != "" && system != "":
+		return app + " on " + system
+	case app != "" || system != "":
+		return app + system
 	case ua == "":
-		return "unknown device"
+		return "an unknown device"
 	}
 	if len(ua) > 40 {
 		return ua[:40]

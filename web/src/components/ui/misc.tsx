@@ -126,15 +126,53 @@ export function SwitchRow({ label, description, checked, onCheckedChange, disabl
 export const Tabs = TB.Root;
 export const TabsContent = TB.Content;
 
-export function TabsList({ className, ...props }: React.ComponentPropsWithoutRef<typeof TB.List>) {
-  return <TB.List className={cn("flex gap-1 border-b border-border", className)} {...props} />;
+/** For a .scroll-x row: marks which edges have more to scroll to (so CSS can fade them) and
+ *  brings the current tab or section into view when the row first shows. */
+export function useScrollEdges<T extends HTMLElement>() {
+  // A callback ref, so it also works for rows that only appear later (like the bulk bar).
+  return React.useCallback((el: T | null) => {
+    if (!el) return;
+    const update = () => {
+      const max = el.scrollWidth - el.clientWidth;
+      const start = el.scrollLeft > 2;
+      const end = el.scrollLeft < max - 2;
+      const more = start && end ? "both" : start ? "start" : end ? "end" : "";
+      if (more) el.dataset.more = more;
+      else delete el.dataset.more;
+    };
+    const current = el.querySelector<HTMLElement>('[aria-current="page"], [data-state="active"]');
+    if (current && el.scrollWidth > el.clientWidth) {
+      const a = current.getBoundingClientRect();
+      const b = el.getBoundingClientRect();
+      el.scrollLeft += a.left + a.width / 2 - (b.left + b.width / 2);
+    }
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    for (const c of el.children) ro.observe(c);
+    return () => {
+      el.removeEventListener("scroll", update);
+      ro.disconnect();
+    };
+  }, []);
 }
 
-export function TabsTrigger({ className, ...props }: React.ComponentPropsWithoutRef<typeof TB.Trigger>) {
+export function TabsList({ className, ...props }: React.ComponentPropsWithoutRef<typeof TB.List>) {
+  const ref = useScrollEdges<HTMLDivElement>();
+  return <TB.List ref={ref} className={cn("scroll-x flex gap-1 border-b border-border", className)} {...props} />;
+}
+
+export function TabsTrigger({ className, onFocus, ...props }: React.ComponentPropsWithoutRef<typeof TB.Trigger>) {
   return (
     <TB.Trigger
+      // A tab chosen by click or arrow keys is scrolled into view when the row is wider than the panel.
+      onFocus={(e) => {
+        e.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" });
+        onFocus?.(e);
+      }}
       className={cn(
-        "relative -mb-px border-b-2 border-transparent px-3 py-2 text-sm font-medium text-muted transition-colors hover:text-fg",
+        "relative -mb-px shrink-0 whitespace-nowrap border-b-2 border-transparent px-3 py-2 text-sm font-medium text-muted transition-colors hover:text-fg",
         "data-[state=active]:border-accent data-[state=active]:text-fg",
         className,
       )}

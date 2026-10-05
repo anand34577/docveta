@@ -35,7 +35,7 @@ export function AdminPage() {
   const me = useCurrentUser();
   const params = useParams({ strict: false }) as { section?: string };
   const active = params.section ?? "users";
-  if (!me.is_admin) return <NotFound />;
+  if (!me.is_admin || !sections.some((s) => s.id === active)) return <NotFound />;
   return (
     <SettingsLayout title="Administration" base="/admin" sections={sections} active={active}>
       {active === "users" && <UsersAdmin />}
@@ -109,7 +109,7 @@ function UsersAdmin() {
           {(users.data ?? []).map((u) => (
             <li key={u.id} className="flex flex-wrap items-center gap-3 py-3">
               <Avatar name={u.display_name} />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-48 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
                   {u.display_name}
                   {u.is_admin && <Badge tone="accent">Admin</Badge>}
@@ -120,22 +120,24 @@ function UsersAdmin() {
                   {u.email} · {u.last_login_at ? `last seen ${timeAgo(u.last_login_at)}` : "never signed in"}
                 </div>
               </div>
-              <Button size="sm" variant="ghost" onClick={() => setDialog(u)}>
-                Edit
-              </Button>
-              {u.id !== me.id && (
-                <>
-                  <Button size="sm" variant="ghost" onClick={() => patch(u, { status: u.status === "active" ? "disabled" : "active" })}>
-                    {u.status === "active" ? "Disable" : "Enable"}
-                  </Button>
-                  <Button size="icon-sm" variant="ghost" title="Turn off their two-step sign-in (if they lost their phone)" onClick={() => resetTwoFactor(u)} aria-label={`Reset two-step sign-in for ${u.display_name}`}>
-                    <ShieldOff />
-                  </Button>
-                  <Button size="icon-sm" variant="ghost" onClick={() => remove(u)} aria-label={`Delete ${u.display_name}`}>
-                    <Trash2 />
-                  </Button>
-                </>
-              )}
+              <div className="ml-auto flex items-center gap-1">
+                <Button size="sm" variant="ghost" onClick={() => setDialog(u)}>
+                  Edit
+                </Button>
+                {u.id !== me.id && (
+                  <>
+                    <Button size="sm" variant="ghost" onClick={() => patch(u, { status: u.status === "active" ? "disabled" : "active" })}>
+                      {u.status === "active" ? "Disable" : "Enable"}
+                    </Button>
+                    <Button size="icon-sm" variant="ghost" title="Turn off their two-step sign-in (if they lost their phone)" onClick={() => resetTwoFactor(u)} aria-label={`Reset two-step sign-in for ${u.display_name}`}>
+                      <ShieldOff />
+                    </Button>
+                    <Button size="icon-sm" variant="ghost" onClick={() => remove(u)} aria-label={`Delete ${u.display_name}`}>
+                      <Trash2 />
+                    </Button>
+                  </>
+                )}
+              </div>
             </li>
           ))}
         </ul>
