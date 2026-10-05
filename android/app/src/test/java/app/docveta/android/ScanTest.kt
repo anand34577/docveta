@@ -3,6 +3,7 @@ package app.docveta.android
 import app.docveta.android.scan.DocumentDetector
 import app.docveta.android.scan.PageFilters
 import app.docveta.android.scan.PdfPageImage
+import app.docveta.android.scan.PdfWord
 import app.docveta.android.scan.PdfWriter
 import app.docveta.android.scan.Pt
 import app.docveta.android.scan.Quad
@@ -271,6 +272,27 @@ class PdfWriterTest {
         // The JPEG bytes are stored untouched.
         val needle = String(jpeg, Charsets.ISO_8859_1)
         assertTrue(text.contains(needle))
+        assertFalse(text.contains("/Font")) // no words read: no text layer
+    }
+
+    @Test
+    fun putsWordsReadOnThePhoneUnderThePictureAsInvisibleText() {
+        val words = listOf(
+            PdfWord("Amount", 100f, 165f, 150f, 45f), PdfWord("due", 265f, 165f, 70f, 45f), PdfWord("1,842.50", 350f, 165f, 170f, 45f, last = true),
+            PdfWord("परीक्षा", 100f, 300f, 200f, 60f), PdfWord("पुस्तिका", 320f, 300f, 220f, 60f, last = true),
+        )
+        val bytes = PdfWriter.toBytes(listOf(PdfPageImage(jpeg, 1240, 1754, words = words)), "Bill")
+        val text = String(bytes, Charsets.ISO_8859_1)
+        assertTrue(text.contains(" 3 Tr")) // invisible
+        assertTrue(text.contains("/ToUnicode"))
+        assertTrue(text.contains("<" + "परीक्षा ".map { String.format("%04X", it.code) }.joinToString("") + ">")) // Hindi as UTF-16, with the space after the word
+        val startxref = Regex("startxref\\n(\\d+)").find(text)!!.groupValues[1].toInt()
+        val entries = Regex("(\\d{10}) 00000 n").findAll(text.substring(startxref)).map { it.groupValues[1].toInt() }.toList()
+        assertEquals(3 + 3 + 4, entries.size)
+        entries.forEachIndexed { i, off -> assertTrue("object ${i + 1} at $off", text.substring(off).startsWith("${i + 1} 0 obj")) }
+        // Kept for checking with other PDF readers (pdf.js, PDFium).
+        java.io.File("build/test-pdf").mkdirs()
+        java.io.File("build/test-pdf/text-layer.pdf").writeBytes(bytes)
     }
 }
 

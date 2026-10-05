@@ -197,3 +197,13 @@ class RepositoryFeaturesTest {
         assertNotEquals(repo.viewableName(d), repo.viewableName(d.copy(hasArchive = true))) // the searchable PDF is ready
     }
 }
+
+class FindTest {
+    @Test
+    fun findsTextIgnoringCaseAndSpacesOnEveryPage() {
+        val pages = listOf(0 to "Electricity bill\nBESCOM electricity  bill", 1 to "Amount due 1,842.50\nElec tricity bill", 2 to "")
+        val found = app.docveta.android.ui.findInPageTexts(pages, "electricity bill")
+        assertEquals(listOf(0, 0, 1), found.map { it.page })
+        assertTrue(app.docveta.android.ui.findInPageTexts(pages, "  ").isEmpty())
+    }
+}

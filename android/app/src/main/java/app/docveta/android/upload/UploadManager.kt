@@ -16,6 +16,7 @@ import app.docveta.android.data.ApiClient
 import app.docveta.android.data.ApiException
 import app.docveta.android.data.AppJson
 import app.docveta.android.data.SessionStore
+import app.docveta.android.scan.PhoneOcr
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -46,6 +47,11 @@ data class UploadItem(
     val duplicateOfId: String? = null,
     val duplicateTitle: String? = null,
     val allowDuplicate: Boolean = false,
+    /** Reading the text on the phone first: pending | done | skipped (null: not asked). */
+    val ocr: String? = null,
+    val ocrDir: String? = null,
+    val ocrScript: String = "latin",
+    val queuedAt: Long = 0,
 ) {
     val active get() = status == "queued" || status == "uploading"
 }
@@ -92,19 +98,33 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
         add(dest, name, mime, spaceId, source, title, id)
     }
 
-    /** Queues a file the app made itself (a scan). It is moved, not copied. */
-    suspend fun enqueueFile(file: File, name: String, mime: String, spaceId: String?, source: String, title: String?): UploadItem = withContext(Dispatchers.IO) {
+    /**
+     * Queues a file the app made itself (a scan). It is moved, not copied. With [ocrPages] (the scan's
+     * pages, see [PhoneOcr]) the phone reads the text into the PDF before it's sent.
+     */
+    suspend fun enqueueFile(file: File, name: String, mime: String, spaceId: String?, source: String, title: String?, ocrPages: File? = null, ocrScript: String = "latin"): UploadItem = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val dest = File(dir, "$id-${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
         if (!file.renameTo(dest)) {
             file.copyTo(dest, overwrite = true)
             file.delete()
         }
-        add(dest, name, mime, spaceId, source, title, id)
+        var pages: File? = null
+        if (ocrPages != null) {
+            pages = File(dir, "$id-pages")
+            if (!ocrPages.renameTo(pages)) {
+                ocrPages.copyRecursively(pages, overwrite = true)
+                ocrPages.deleteRecursively()
+            }
+        }
+        add(dest, name, mime, spaceId, source, title, id, pages, ocrScript)
     }
 
-    private fun add(file: File, name: String, mime: String, spaceId: String?, source: String, title: String?, id: String): UploadItem {
-        val item = UploadItem(id = id, path = file.path, name = name, mime = mime, size = file.length(), spaceId = spaceId, source = source, title = title)
+    private fun add(file: File, name: String, mime: String, spaceId: String?, source: String, title: String?, id: String, ocrDir: File? = null, ocrScript: String = "latin"): UploadItem {
+        val item = UploadItem(
+            id = id, path = file.path, name = name, mime = mime, size = file.length(), spaceId = spaceId, source = source, title = title,
+            ocr = if (ocrDir != null) "pending" else null, ocrDir = ocrDir?.path, ocrScript = ocrScript, queuedAt = System.currentTimeMillis(),
+        )
         _items.update { it + item }
         save()
         schedule()
@@ -117,7 +137,7 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
     }
 
     fun remove(id: String) {
-        _items.value.firstOrNull { it.id == id }?.let { File(it.path).delete() }
+        _items.value.firstOrNull { it.id == id }?.let { File(it.path).delete(); it.ocrDir?.let { d -> File(d).deleteRecursively() } }
         _items.update { l -> l.filterNot { it.id == id } }
         save()
     }
@@ -129,6 +149,11 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
     }
 
     fun schedule() {
+        if (_items.value.any { it.ocr == "pending" }) {
+            // Reading text needs no network: it runs now, even offline, and then hands over to the upload.
+            val read = OneTimeWorkRequestBuilder<PhoneOcrWorker>().build()
+            WorkManager.getInstance(context).enqueueUniqueWork("phone-ocr", ExistingWorkPolicy.KEEP, read)
+        }
         val net = if (session.wifiOnlyUploads) NetworkType.UNMETERED else NetworkType.CONNECTED
         val req = OneTimeWorkRequestBuilder<UploadWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(net).build())
@@ -137,12 +162,31 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
         WorkManager.getInstance(context).enqueueUniqueWork("uploads", ExistingWorkPolicy.APPEND_OR_REPLACE, req)
     }
 
+    /** Reads the text of queued scans on the phone, when wanted and the phone can spare it; see [PhoneOcr]. */
+    suspend fun readText() {
+        while (true) {
+            val item = _items.value.firstOrNull { it.ocr == "pending" } ?: break
+            val pages = item.ocrDir?.let(::File)
+            val ok = pages != null && PhoneOcr.wanted(session.phoneOcr, session.serverReadsText) && PhoneOcr.canRunNow(context) &&
+                runCatching { PhoneOcr.makeSearchable(pages, File(item.path), item.title.orEmpty(), item.ocrScript) }.getOrDefault(false)
+            pages?.deleteRecursively()
+            // Only if the upload hasn't given up waiting meanwhile.
+            change(item.id) { if (it.ocr == "pending") it.copy(ocr = if (ok) "done" else "skipped", ocrDir = null, size = File(it.path).length()) else it }
+        }
+        schedule()
+    }
+
     /** Sends everything that's queued. Returns true when something should be tried again later (no network, say). */
     suspend fun process(): Boolean {
         val uploader = TusUploader(api)
         var retryLater = false
         while (true) {
-            val item = _items.value.firstOrNull { it.status == "queued" } ?: break
+            // A scan whose text is still being read waits, but never for long: then it goes as it is.
+            _items.value.filter { it.ocr == "pending" && System.currentTimeMillis() - it.queuedAt > OCR_PATIENCE_MS }.forEach { stale ->
+                stale.ocrDir?.let { File(it).deleteRecursively() }
+                change(stale.id) { it.copy(ocr = "skipped", ocrDir = null) }
+            }
+            val item = _items.value.firstOrNull { it.status == "queued" && it.ocr != "pending" } ?: break
             val file = File(item.path)
             if (!file.exists()) {
                 change(item.id) { it.copy(status = "error", error = "The file is gone") }
@@ -184,7 +228,19 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
                 }
             }
         }
+        if (_items.value.any { it.status == "queued" && it.ocr == "pending" }) retryLater = true
         return retryLater
+    }
+
+    companion object {
+        const val OCR_PATIENCE_MS = 10 * 60_000L
+    }
+}
+
+class PhoneOcrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    override suspend fun doWork(): Result {
+        (applicationContext as DocvetaApp).container.uploads.readText()
+        return Result.success()
     }
 }
 

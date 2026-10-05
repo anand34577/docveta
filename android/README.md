@@ -34,6 +34,9 @@ page arranging, Ask, spaces (members, tags, correspondents, types, custom fields
 scanning), settings (profile, security, notifications, tokens) and, for administrators, the whole
 Administration area. It can also set up a new server and accept invitation links.
 
+Scanning works without the server: scans wait in the upload queue. The phone can also read a
+scan's text itself (Settings → This phone) and send a searchable PDF.
+
 ## Signing in
 
 Enter the server address, then email and password (and the two-step code if asked). The app

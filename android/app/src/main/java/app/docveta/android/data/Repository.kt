@@ -306,7 +306,10 @@ class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: Fi
 
     /* ------------------------------------------------------------ reading */
 
-    suspend fun me(): Me = api.get("/me")
+    suspend fun me(): Me = api.get<Me>("/me").also { m -> runCatching { session.cachedMe = AppJson.encodeToString(Me.serializer(), m) } }
+
+    /** The account from the last time the server answered, if any. */
+    fun cachedMe(): Me? = session.cachedMe?.let { runCatching { AppJson.decodeFromString(Me.serializer(), it) }.getOrNull() }
     suspend fun stats(): Stats = api.get("/documents/stats")
     suspend fun aiStatus(): AiStatus = runCatching { api.get<AiStatus>("/ai/status") }.getOrDefault(AiStatus())
 

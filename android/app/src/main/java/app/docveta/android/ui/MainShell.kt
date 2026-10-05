@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.DocumentScanner
 import androidx.compose.material.icons.outlined.Inbox
@@ -38,6 +39,7 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -168,9 +170,11 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
     val c = LocalContainer.current
     val nav = rememberNavController()
     val scan = container("scan") { ScanSession(it) }
-    var me by remember { mutableStateOf<Me?>(null) }
+    // Start from the account as last seen, so the app opens (and scans) without the server.
+    var me by remember { mutableStateOf(c.repo.cachedMe()) }
     var stats by remember { mutableStateOf<Stats?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    var offline by remember { mutableStateOf(false) }
     val ai = c.ai
     LaunchedEffect(Unit) { c.refreshAi() }
     val scope = rememberCoroutineScope()
@@ -183,12 +187,15 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
         while (true) {
             try {
                 me = c.repo.me()
-                stats = c.repo.stats()
+                stats = c.repo.stats().also { c.session.serverReadsText = it.ocrAvailable }
                 loadError = null
+                if (offline) c.uploads.schedule() // back online: send what waited
+                offline = false
             } catch (e: Exception) {
+                offline = (e as? app.docveta.android.data.ApiException)?.isNetwork ?: true
                 if (me == null) loadError = e.friendly()
             }
-            delay(30_000)
+            delay(if (offline) 10_000 else 30_000)
         }
     }
 
@@ -200,6 +207,10 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
                 Box(Modifier.weight(1f, fill = false)) {
                     ErrorState(loadError!!) { loadError = null; scope.launch { runCatching { me = c.repo.me() }.onFailure { loadError = it.friendly() } } }
                 }
+                // Scanning doesn't need the server: scans wait in the upload queue until it's back.
+                if (offline) FilledTonalButton({
+                    me = Me(id = "", email = c.session.userEmail.orEmpty(), displayName = c.session.userName.orEmpty())
+                }) { Text("Scan now, upload later") }
                 c.session.serverUrl?.let { Text(it.removePrefix("https://").removePrefix("http://"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 TextButton({ scope.launch { runCatching { c.repo.signOut() }; onSignedOut() } }, Modifier.navigationBarsPadding().padding(bottom = 24.dp)) {
                     Text("Sign out and change server")
@@ -218,11 +229,19 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
 
         Scaffold(contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0), bottomBar = {
             if (inMain) Column {
+                AnimatedVisibility(offline) {
+                    Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerHighest).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.CloudOff, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Can't reach the server. You can still scan; uploads wait until it's back.", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
                 AnimatedVisibility(busy > 0) {
                     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer).clickable { nav.navigate(Route.Uploads) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        if (!offline) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Outlined.CloudOff, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(10.dp))
-                        Text("Uploading $busy file${if (busy == 1) "" else "s"}…", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text(if (offline) "$busy file${if (busy == 1) "" else "s"} waiting to upload" else "Uploading $busy file${if (busy == 1) "" else "s"}…", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
                     }
                 }
                 BottomBar(nav, route, stats?.inbox ?: 0, ai.value.chat)

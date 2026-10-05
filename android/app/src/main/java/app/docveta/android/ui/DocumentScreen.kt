@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.AlternateEmail
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -327,6 +328,7 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit, onOpenDoc
     var unlock by remember { mutableStateOf(false) }
     var shareLink by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    val find = remember { PdfFindState() }
     val canEdit = doc != null && me.spaces.firstOrNull { it.id == doc.space.id }?.canWrite == true && doc.deletedAt == null
 
     LaunchedEffect(vm.message) {
@@ -347,6 +349,7 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit, onOpenDoc
                 actions = {
                     if (doc != null) {
                         if (doc.inbox && canEdit) IconButton({ vm.review { onBack() } }) { Icon(Icons.Outlined.DoneAll, "Mark as reviewed") }
+                        if (doc.isPdf || doc.hasArchive || (doc.hasDerived && !doc.isImage)) IconButton({ tab = 0; find.open = true }) { Icon(Icons.Outlined.Search, "Find in document") }
                         if (doc.deletedAt != null) {
                             IconButton({ vm.restore() }) { Icon(Icons.Outlined.RestoreFromTrash, "Restore") }
                         } else {
@@ -396,7 +399,7 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit, onOpenDoc
                         }
                     }
                     when (current) {
-                        "preview" -> Preview(vm, doc, ctx, scope, startPage)
+                        "preview" -> Preview(vm, doc, ctx, scope, startPage, find)
                         "details" -> Details(vm, doc, canEdit)
                         "notes" -> NotesTab(vm, canEdit)
                         "text" -> TextTab(doc)
@@ -414,11 +417,13 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit, onOpenDoc
 }
 
 @Composable
-private fun Preview(vm: DocViewModel, doc: Document, ctx: Context, scope: kotlinx.coroutines.CoroutineScope, startPage: Int) {
+private fun Preview(vm: DocViewModel, doc: Document, ctx: Context, scope: kotlinx.coroutines.CoroutineScope, startPage: Int, find: PdfFindState) {
+    val c = LocalContainer.current
     val f = vm.file
+    val isPdf = f != null && f.extension.equals("pdf", ignoreCase = true)
     Box(Modifier.fillMaxSize()) {
         when {
-            f != null && f.extension.equals("pdf", ignoreCase = true) -> PdfView(f, startPage = startPage)
+            isPdf -> PdfView(f!!, startPage = startPage, find = find, pageTexts = { c.repo.pages(doc.id).map { it.pageNo - 1 to it.text } })
             f != null -> ImagePreview(f)
             vm.fileError != null -> ErrorState(vm.fileError!!) { vm.load() }
             doc.isPdf || doc.isImage || doc.hasDerived || doc.hasArchive -> Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -435,6 +440,8 @@ private fun Preview(vm: DocViewModel, doc: Document, ctx: Context, scope: kotlin
             Spacer(Modifier.width(8.dp))
             Text(stageLabel(doc.processingStage) + "…", color = MaterialTheme.colorScheme.inverseOnSurface, style = MaterialTheme.typography.labelMedium)
         }
+        if (find.open && isPdf) FindBar(find, Modifier.align(Alignment.TopCenter))
+        androidx.activity.compose.BackHandler(find.open) { find.close() }
     }
 }
 

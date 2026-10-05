@@ -1,10 +1,14 @@
 package app.docveta.android.ui
 
+import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.os.Build
+import android.os.ext.SdkExtensions
 import android.graphics.Color as AColor
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import android.util.LruCache
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -55,6 +59,7 @@ import java.io.File
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -91,9 +96,27 @@ class PdfPages(file: File) : AutoCloseable {
         }
     }
 
+    /** Every match of [query] with where it is on its page. Only where [canSearch]. */
+    @SuppressLint("NewApi")
+    suspend fun search(query: String): List<PdfMatch> = withContext(Dispatchers.Default) {
+        val out = ArrayList<PdfMatch>()
+        for (i in 0 until count) {
+            coroutineContext.ensureActive()
+            lock.withLock { renderer.openPage(i).use { p -> p.searchText(query).forEach { m -> out.add(PdfMatch(i, m.bounds)) } } }
+        }
+        out
+    }
+
     override fun close() {
         runCatching { renderer.close() }
         runCatching { fd.close() }
+    }
+
+    companion object {
+        /** Android can find text in a PDF itself from Android 15, or 12-14 with a recent system update. */
+        val canSearch: Boolean by lazy {
+            Build.VERSION.SDK_INT >= 35 || (Build.VERSION.SDK_INT >= 31 && runCatching { SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 13 }.getOrDefault(false))
+        }
     }
 }
 
@@ -151,7 +174,14 @@ fun Modifier.pinchZoom(maxScale: Float = 5f, onScale: (Float) -> Unit = {}): Mod
 
 /** All pages of a PDF in a scrolling column, with pinch zoom. */
 @Composable
-fun PdfView(file: File, modifier: Modifier = Modifier, startPage: Int = 0, onPage: (Int, Int) -> Unit = { _, _ -> }) {
+fun PdfView(
+    file: File,
+    modifier: Modifier = Modifier,
+    startPage: Int = 0,
+    onPage: (Int, Int) -> Unit = { _, _ -> },
+    find: PdfFindState? = null,
+    pageTexts: (suspend () -> List<Pair<Int, String>>)? = null,
+) {
     val pages = remember(file) { runCatching { PdfPages(file) }.getOrNull() }
     DisposableEffect(pages) { onDispose { pages?.close() } }
     if (pages == null) {
@@ -168,17 +198,70 @@ fun PdfView(file: File, modifier: Modifier = Modifier, startPage: Int = 0, onPag
         }
     }
     LaunchedEffect(current) { onPage(current, pages.count) }
+    // Find: Android's own search gives the places on the page; without it (or when the file has no
+    // text layer yet) the server's text of each page still says which pages match.
+    if (find != null) LaunchedEffect(find.open, find.query) {
+        val q = find.query.trim()
+        if (!find.open || q.isEmpty()) {
+            find.matches = emptyList(); find.searched = false; find.searching = false
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(250)
+        find.searching = true
+        try {
+            var found = if (PdfPages.canSearch) runCatching { pages.search(q) }.getOrDefault(emptyList()) else emptyList()
+            var anyText = found.isNotEmpty()
+            if (found.isEmpty() && pageTexts != null) {
+                val texts = runCatching { pageTexts() }.getOrDefault(emptyList())
+                anyText = texts.any { it.second.isNotBlank() }
+                found = findInPageTexts(texts, q)
+            } else if (found.isEmpty()) anyText = true
+            find.show(found, anyText)
+        } finally {
+            find.searching = false
+        }
+    }
+    val density = LocalDensity.current
     BoxWithConstraints(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant)) {
         val widthPx = with(LocalDensity.current) { min(maxWidth.toPx() * 1.6f, 1800f).toInt() }
-        LazyColumn(Modifier.fillMaxSize().pinchZoom(), state = state, contentPadding = PaddingValues(vertical = 12.dp)) {
-            itemsIndexed(List(pages.count) { it }) { i, _ ->
-                val ratio by produceState(1.41f, pages, i) {
-                    val (w, h) = pages.size(i)
-                    value = h.toFloat() / w
+        // Bring the chosen match to the upper third of the screen.
+        if (find != null) {
+            val viewH = with(density) { maxHeight.toPx() }
+            val itemW = with(density) { (maxWidth - 20.dp).toPx() }
+            LaunchedEffect(find.seq) {
+                val m = find.current ?: return@LaunchedEffect
+                val top = m.rects.minOfOrNull { it.top }
+                val offset = if (top == null) 0 else {
+                    val (w, _) = pages.size(m.page)
+                    (top / w * itemW - viewH / 3).toInt().coerceAtLeast(0)
                 }
+                state.animateScrollToItem(m.page, offset)
+            }
+        }
+        LazyColumn(Modifier.fillMaxSize().pinchZoom(), state = state, contentPadding = PaddingValues(top = if (find?.open == true) 76.dp else 12.dp, bottom = 12.dp)) {
+            itemsIndexed(List(pages.count) { it }) { i, _ ->
+                val size by produceState(1f to 1.41f, pages, i) {
+                    val (w, h) = pages.size(i)
+                    value = w.toFloat() to h.toFloat()
+                }
+                val ratio = size.second / size.first
                 val bmp by produceState<Bitmap?>(null, pages, i, widthPx) { value = runCatching { pages.render(i, widthPx) }.getOrNull() }
                 Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp).aspectRatio(1f / ratio), shadowElevation = 2.dp, color = androidx.compose.ui.graphics.Color.White) {
                     bmp?.let { Image(it.asImageBitmap(), "Page ${i + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.FillWidth) }
+                    val hits = find?.matches?.withIndex()?.filter { it.value.page == i && it.value.rects.isNotEmpty() }.orEmpty()
+                    if (hits.isNotEmpty()) Canvas(Modifier.fillMaxSize()) {
+                        val k = this.size.width / size.first
+                        for ((n, m) in hits) {
+                            val active = n == find?.index
+                            for (r in m.rects) {
+                                drawRect(
+                                    if (active) androidx.compose.ui.graphics.Color(0x99FF8A00) else androidx.compose.ui.graphics.Color(0x66FFD400),
+                                    topLeft = Offset(r.left * k, r.top * k),
+                                    size = androidx.compose.ui.geometry.Size(r.width() * k, r.height() * k),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -96,6 +96,21 @@ class SessionStore(private val kv: KeyValueStore) {
         get() = kv.get("auto_capture") != "0"
         set(v) = kv.put("auto_capture", if (v) null else "0")
 
+    /** Read scans' text on the phone: auto (when the server can't) | on | off. */
+    var phoneOcr: String
+        get() = kv.get("phone_ocr") ?: "auto"
+        set(v) = kv.put("phone_ocr", v)
+
+    /** Whether the server could read text from pictures, as of the last time it answered. */
+    var serverReadsText: Boolean
+        get() = kv.get("server_ocr") != "0"
+        set(v) = kv.put("server_ocr", if (v) null else "0")
+
+    /** The account as last loaded (JSON), so the app opens, and scans, while the server can't be reached. */
+    var cachedMe: String?
+        get() = kv.get("me")
+        set(v) = kv.put("me", v)
+
     val signedIn: Boolean get() = !token.isNullOrBlank() && !serverUrl.isNullOrBlank()
 
     fun signOut() {
@@ -104,5 +119,6 @@ class SessionStore(private val kv: KeyValueStore) {
         tokenScopes = null
         userName = null
         userEmail = null
+        cachedMe = null
     }
 }

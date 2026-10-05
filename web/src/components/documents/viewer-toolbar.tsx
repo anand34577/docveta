@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Maximize, Minus, MoveHorizontal, PanelLeft, Plus, RotateCw } from "lucide-react";
+import { Maximize, Minus, MoveHorizontal, PanelLeft, Plus, RotateCw, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type FitMode = "width" | "page";
@@ -91,13 +91,14 @@ function ToolButton({ label, active, className, ...props }: React.ButtonHTMLAttr
  * be selected, so tapping it never selects document text (z-20 inside the viewer's isolated
  * stacking context; select-none; touch-action: manipulation stops double-tap word selection).
  */
-export function ViewerToolbar({ view, percent, page, pages, thumbs, onThumbs }: {
+export function ViewerToolbar({ view, percent, page, pages, thumbs, onThumbs, onFind }: {
   view: ReturnType<typeof useViewState>;
   percent: number;
   page?: number;
   pages?: number;
   thumbs?: boolean;
   onThumbs?: () => void;
+  onFind?: () => void;
 }) {
   const { fit, setFit, setZoom, setRotation } = view;
   return (
@@ -107,6 +108,14 @@ export function ViewerToolbar({ view, percent, page, pages, thumbs, onThumbs }: 
           <ToolButton label="Page thumbnails" active={thumbs} onClick={onThumbs} className="hidden sm:inline-flex">
             <PanelLeft className="size-4 sm:size-3.5" />
           </ToolButton>
+        )}
+        {onFind && (
+          <>
+            <ToolButton label="Find in document (Ctrl+F)" onClick={onFind}>
+              <Search className="size-4 sm:size-3.5" />
+            </ToolButton>
+            <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
+          </>
         )}
         <ToolButton label="Fit width" active={fit === "width" && view.zoom === 1} onClick={() => setFit("width")}>
           <MoveHorizontal className="size-4 sm:size-3.5" />
