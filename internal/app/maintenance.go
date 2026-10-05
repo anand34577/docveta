@@ -91,7 +91,7 @@ func (w *MaintenanceWorker) storageAlert(ctx context.Context) {
 }
 
 // blobGCGrace keeps unreferenced blobs for a while so backups (DB first, then blobs)
-// are always consistent and in-flight uploads are never collected (DESIGN §19.1).
+// are always consistent and in-flight uploads are never collected.
 const blobGCGrace = 7 * 24 * time.Hour
 
 func (w *MaintenanceWorker) gcBlobs(ctx context.Context) error {

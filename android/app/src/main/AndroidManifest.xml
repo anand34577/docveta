@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Saving an export to Downloads on Android 8 and 9 (newer versions need no permission). -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <!-- Android 17+: needed to reach a server on the local network (192.168.x.x, 10.x.x.x, .local). -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 

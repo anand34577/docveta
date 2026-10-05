@@ -5,8 +5,9 @@ PostgreSQL. Please keep changes in that spirit.
 
 ## Before you start
 
-- Look at [docs/ROADMAP.md](docs/ROADMAP.md) for what's planned and
-  [docs/DESIGN.md](docs/DESIGN.md) for how things fit together.
+- Look at the [issues](https://github.com/anand34577/docveta/issues) for what's planned. The
+  [worker protocol](docs/workers.md) and the [API spec](internal/api/openapi.yaml) show how the
+  pieces fit together.
 - For anything bigger than a bug fix, open an issue first so we can agree on the
   approach.
 - Security problems: see [SECURITY.md](SECURITY.md), not the issue tracker.

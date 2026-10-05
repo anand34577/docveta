@@ -23,12 +23,10 @@ text (on your graphics card, an NPU or the CPU), organises them, and finds them 
 - **One binary, every platform** — the server and web app in a single file for Windows,
   Linux and macOS (x64, ARM64, ARMv7, x86), with a built-in database. Windows installer,
   one-command Linux install, Docker Compose with nothing to edit.
-- **Android app** — scanner with edge detection, resumable uploads, Inbox, search, Ask and
-  single sign-on; the web app is installable too.
+- **Android app** — everything the web app does, plus a scanner with edge detection and
+  resumable uploads; the web app is installable too.
 
-> Status: **beta (0.5)**. See [docs/DESIGN.md](docs/DESIGN.md) for the design, its
-> *Implementation status* section for what's built, [docs/ROADMAP.md](docs/ROADMAP.md) for what
-> remains, and [CHANGELOG.md](CHANGELOG.md) for what changed.
+> Status: **beta**. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 ## Install
 
@@ -53,7 +51,7 @@ Text recognition is included and picks your GPU, NPU or processor by itself. See
 
 More: [configuration](https://github.com/anand34577/docveta/wiki/Configuration) ·
 [backups](https://github.com/anand34577/docveta/wiki/Backup-and-restore) ·
-[worker protocol](docs/workers.md) · [API spec](internal/api/openapi.yaml) · [design](docs/DESIGN.md).
+[worker protocol](docs/workers.md) · [API spec](internal/api/openapi.yaml).
 
 ## Development
 

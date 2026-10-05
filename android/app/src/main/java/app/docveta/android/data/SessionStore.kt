@@ -49,6 +49,11 @@ class SessionStore(private val kv: KeyValueStore) {
         get() = kv.get("token_id")
         set(v) = kv.put("token_id", v)
 
+    /** The permissions of the stored token, comma-separated (null for sign-ins from older versions). */
+    var tokenScopes: String?
+        get() = kv.get("token_scopes")
+        set(v) = kv.put("token_scopes", v)
+
     var userName: String?
         get() = kv.get("user_name")
         set(v) = kv.put("user_name", v)
@@ -82,6 +87,11 @@ class SessionStore(private val kv: KeyValueStore) {
         get() = kv.get("scan_filter")
         set(v) = kv.put("scan_filter", v)
 
+    /** system | light | dark, mirrored from the account so the sign-in screen matches too. */
+    var theme: String
+        get() = kv.get("theme") ?: "system"
+        set(v) = kv.put("theme", v)
+
     var autoCapture: Boolean
         get() = kv.get("auto_capture") != "0"
         set(v) = kv.put("auto_capture", if (v) null else "0")
@@ -91,6 +101,7 @@ class SessionStore(private val kv: KeyValueStore) {
     fun signOut() {
         token = null
         tokenId = null
+        tokenScopes = null
         userName = null
         userEmail = null
     }

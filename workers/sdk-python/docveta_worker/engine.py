@@ -1,4 +1,4 @@
-"""Engine interface and canonical result types (ocr-result/v1, see DESIGN §11.4)."""
+"""Engine interface and canonical result types (ocr-result/v1)."""
 
 from __future__ import annotations
 

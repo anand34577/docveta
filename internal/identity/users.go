@@ -1,4 +1,4 @@
-// Package identity implements users, sessions, API tokens and OIDC login (DESIGN §15).
+// Package identity implements users, sessions, API tokens and OIDC login.
 package identity
 
 import (

@@ -476,6 +476,13 @@ func (s *Service) SetSMTPSettings(ctx context.Context, p *auth.Principal, c SMTP
 	return out, err
 }
 
+// EmailReady reports whether the server can send email, so the app can say so before
+// someone sets up an email channel that would never deliver.
+func (s *Service) EmailReady(ctx context.Context) bool {
+	c, _, err := s.smtp(ctx)
+	return err == nil && c.Enabled && c.Host != ""
+}
+
 // SendEmailTo sends one email with the saved SMTP settings (invitations).
 func (s *Service) SendEmailTo(ctx context.Context, to string, m Message) error {
 	c, pw, err := s.smtp(ctx)

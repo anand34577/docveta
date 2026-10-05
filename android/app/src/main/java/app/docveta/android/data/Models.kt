@@ -4,6 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 
 // Shapes of the Docveta REST API (see /api/v1/openapi.yaml). Every field the app doesn't need is left out.
 
@@ -15,14 +16,21 @@ data class Space(
     val id: String,
     val name: String,
     val kind: String = "shared", // personal | shared
+    val description: String = "",
     val color: String = "indigo",
     val role: String = "viewer", // owner | editor | viewer
     @SerialName("member_count") val memberCount: Int = 0,
     @SerialName("document_count") val documentCount: Int = 0,
+    @SerialName("split_on_separators") val splitOnSeparators: Boolean = false,
+    @SerialName("read_asn_barcodes") val readAsnBarcodes: Boolean = false,
+    @SerialName("ai_policy") val aiPolicy: String = "off", // off | local_only | any
+    @SerialName("ai_apply_mode") val aiApplyMode: String = "suggest", // suggest | auto
+    @SerialName("default_language") val defaultLanguage: String = "en",
 ) {
     val isPersonal get() = kind == "personal"
     val label get() = if (isPersonal) "Personal" else name
     val canWrite get() = role != "viewer"
+    val isOwner get() = role == "owner"
 }
 
 @Serializable
@@ -32,6 +40,10 @@ data class Me(
     @SerialName("display_name") val displayName: String,
     @SerialName("is_admin") val isAdmin: Boolean = false,
     @SerialName("date_format") val dateFormat: String = "DD/MM/YYYY",
+    val timezone: String = "UTC",
+    val locale: String = "en",
+    val theme: String = "system",
+    @SerialName("has_password") val hasPassword: Boolean = true,
     val spaces: List<Space> = emptyList(),
 )
 
@@ -86,17 +98,33 @@ data class Document(
     @SerialName("deleted_at") val deletedAt: String? = null,
     val snippet: List<Segment> = emptyList(),
     @SerialName("matched_page") val matchedPage: Int? = null,
+    val language: String = "",
+    val asn: Long? = null,
+    @SerialName("physical_location") val physicalLocation: String = "",
+    val owner: Ref? = null,
+    @SerialName("updated_at") val updatedAt: String = "",
 ) {
     val isPdf get() = mimeType == "application/pdf"
     val isImage get() = mimeType.startsWith("image/")
+    /** Pages can be turned, reordered and removed (PDFs), or a picture turned (JPEG/PNG). */
+    val pagesEditable get() = isPdf || mimeType == "image/jpeg" || mimeType == "image/png"
 }
 
 @Serializable
 data class DocumentList(
     val items: List<Document> = emptyList(),
     val total: Int? = null,
+    @SerialName("total_capped") val totalCapped: Boolean = false,
     @SerialName("next_cursor") val nextCursor: String? = null,
     val mode: String? = null,
+    val facets: Facets? = null,
+)
+
+@Serializable
+data class Facets(
+    val tags: Map<String, Int> = emptyMap(),
+    val correspondents: Map<String, Int> = emptyMap(),
+    val types: Map<String, Int> = emptyMap(),
 )
 
 @Serializable
@@ -118,6 +146,9 @@ data class Taxonomy(
     val name: String,
     val color: String = "",
     @SerialName("document_count") val documentCount: Int = 0,
+    @SerialName("match_algorithm") val matchAlgorithm: String = "none", // none | any | all | exact | regex | fuzzy
+    @SerialName("match_pattern") val matchPattern: String = "",
+    @SerialName("case_sensitive") val caseSensitive: Boolean = false,
 )
 
 @Serializable
@@ -185,10 +216,364 @@ data class AiStatus(val enabled: Boolean = false, val chat: Boolean = false, val
 data class VersionInfo(
     @SerialName("version_no") val versionNo: Int,
     val note: String = "",
+    @SerialName("created_by") val createdBy: Ref? = null,
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("size_bytes") val sizeBytes: Long = 0,
+    @SerialName("mime_type") val mimeType: String = "",
     val current: Boolean = false,
 )
+
+@Serializable
+data class HistoryEntry(
+    val id: String,
+    val actor: Ref? = null,
+    @SerialName("actor_type") val actorType: String = "",
+    val action: String,
+    val details: JsonObject = JsonObject(emptyMap()),
+    @SerialName("created_at") val createdAt: String = "",
+)
+
+@Serializable
+data class PageText(val text: String = "", @SerialName("page_no") val pageNo: Int, val confidence: Double? = null, val rotation: Int = 0)
+
+@Serializable
+data class SimilarDoc(val document: Document, val score: Double = 0.0, val reason: String = "details")
+
+@Serializable
+data class CustomField(
+    val id: String,
+    @SerialName("space_id") val spaceId: String,
+    val name: String,
+    @SerialName("data_type") val dataType: String = "text",
+    val options: FieldOptions = FieldOptions(),
+    @SerialName("document_count") val documentCount: Int = 0,
+)
+
+@Serializable
+data class FieldOptions(val choices: List<String> = emptyList(), val currency: String? = null)
+
+@Serializable
+data class BulkResult(val succeeded: Int = 0, val failed: List<BulkFailure> = emptyList(), val remaining: Int = 0)
+
+@Serializable
+data class BulkFailure(val id: String = "", val message: String = "")
+
+@Serializable
+data class SavedView(
+    val id: String,
+    @SerialName("space_id") val spaceId: String? = null,
+    val name: String,
+    val query: JsonObject = JsonObject(emptyMap()),
+    val pinned: Boolean = false,
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    @SerialName("can_edit") val canEdit: Boolean = true,
+)
+
+/* ---------------------------------------------------------------- spaces */
+
+@Serializable
+data class Member(
+    @SerialName("user_id") val userId: String,
+    val email: String = "",
+    @SerialName("display_name") val displayName: String = "",
+    val role: String = "viewer",
+)
+
+@Serializable
+data class DirectoryEntry(val id: String, val email: String = "", @SerialName("display_name") val displayName: String = "")
+
+@Serializable
+data class AiStats(val accepted: Int = 0, val rejected: Int = 0, val pending: Int = 0, @SerialName("accept_rate") val acceptRate: Double = 0.0)
+
+@Serializable
+data class Workflow(
+    val id: String,
+    @SerialName("space_id") val spaceId: String,
+    val name: String,
+    val enabled: Boolean = true,
+    val trigger: String = "added", // added | processed | updated | schedule
+    @SerialName("schedule_time") val scheduleTime: String = "",
+    val conditions: JsonObject = JsonObject(emptyMap()),
+    val actions: List<JsonObject> = emptyList(),
+    @SerialName("last_run_at") val lastRunAt: String? = null,
+    @SerialName("run_count") val runCount: Int = 0,
+)
+
+@Serializable
+data class WorkflowRun(
+    val id: String,
+    @SerialName("document_id") val documentId: String? = null,
+    @SerialName("document_title") val documentTitle: String = "",
+    val status: String = "done",
+    val summary: String = "",
+    @SerialName("ran_at") val ranAt: String = "",
+)
+
+/* ---------------------------------------------------------------- account */
+
+@Serializable
+data class Channel(
+    val id: String,
+    val system: Boolean = false,
+    val name: String,
+    val type: String, // gotify | email | ntfy | webhook | apprise
+    val config: Map<String, String> = emptyMap(),
+    val events: List<String> = emptyList(),
+    val enabled: Boolean = true,
+    @SerialName("last_error") val lastError: String = "",
+)
+
+@Serializable
+data class ChannelList(val items: List<Channel> = emptyList(), @SerialName("event_types") val eventTypes: List<String> = emptyList(), @SerialName("email_ready") val emailReady: Boolean = true)
+
+@Serializable
+data class WebSessionInfo(
+    val id: String,
+    @SerialName("user_agent") val userAgent: String = "",
+    val ip: String = "",
+    @SerialName("last_seen_at") val lastSeenAt: String = "",
+    val current: Boolean = false,
+)
+
+@Serializable
+data class ApiToken(
+    val id: String,
+    val name: String,
+    val prefix: String = "",
+    val scopes: List<String> = emptyList(),
+    @SerialName("expires_at") val expiresAt: String? = null,
+    @SerialName("last_used_at") val lastUsedAt: String? = null,
+)
+
+@Serializable
+data class Identity(val id: String, val provider: String = "", val email: String = "", @SerialName("created_at") val createdAt: String = "")
+
+@Serializable
+data class TwoFactorStatus(val enabled: Boolean = false, @SerialName("recovery_codes_left") val recoveryCodesLeft: Int = 0)
+
+@Serializable
+data class TwoFactorSetup(val secret: String = "", val uri: String = "", val qr: String = "")
+
+@Serializable
+data class RecoveryCodes(@SerialName("recovery_codes") val codes: List<String> = emptyList())
+
+@Serializable
+data class NotificationPrefs(
+    @SerialName("quiet_enabled") val quietEnabled: Boolean = false,
+    @SerialName("quiet_start") val quietStart: String = "22:00",
+    @SerialName("quiet_end") val quietEnd: String = "07:00",
+)
+
+@Serializable
+data class InvitePreview(
+    val email: String? = null,
+    @SerialName("display_name") val displayName: String = "",
+    @SerialName("invited_by") val invitedBy: String = "",
+    @SerialName("expires_at") val expiresAt: String = "",
+    @SerialName("password_login") val passwordLogin: Boolean = true,
+)
+
+/* ---------------------------------------------------------------- administration */
+
+@Serializable
+data class AdminUser(
+    val id: String,
+    val email: String,
+    @SerialName("display_name") val displayName: String,
+    @SerialName("is_admin") val isAdmin: Boolean = false,
+    val status: String = "active",
+    @SerialName("has_password") val hasPassword: Boolean = true,
+    @SerialName("last_login_at") val lastLoginAt: String? = null,
+)
+
+@Serializable
+data class Capability(val task_type: String = "", val engine: String = "", val languages: List<String> = emptyList(), val tags: List<String> = emptyList(), val concurrency: Int = 0)
+
+@Serializable
+data class Worker(
+    val id: String,
+    val name: String,
+    val enabled: Boolean = true,
+    val version: String = "",
+    val host: String = "",
+    val capabilities: List<Capability> = emptyList(),
+    @SerialName("last_seen_at") val lastSeenAt: String? = null,
+    val online: Boolean = false,
+    @SerialName("active_tasks") val activeTasks: Int = 0,
+    @SerialName("done_24h") val done24h: Int = 0,
+    @SerialName("failed_24h") val failed24h: Int = 0,
+)
+
+@Serializable
+data class WorkerToken(val token: String = "")
+
+@Serializable
+data class TaskView(
+    val id: String,
+    @SerialName("document_id") val documentId: String = "",
+    @SerialName("document_title") val documentTitle: String = "",
+    val type: String = "",
+    val status: String = "",
+    @SerialName("page_from") val pageFrom: Int? = null,
+    @SerialName("page_to") val pageTo: Int? = null,
+    val attempt: Int = 1,
+    val worker: String? = null,
+    @SerialName("last_error") val lastError: String = "",
+)
+
+@Serializable
+data class QueueStats(val queued: Int = 0, val leased: Int = 0, @SerialName("failed_24h") val failed24h: Int = 0, @SerialName("done_24h") val done24h: Int = 0, @SerialName("pages_done_24h") val pagesDone24h: Int = 0)
+
+@Serializable
+data class TaskList(val items: List<TaskView> = emptyList(), val stats: QueueStats = QueueStats())
+
+@Serializable
+data class ProcessingSettings(
+    @SerialName("prefer_tags") val preferTags: List<String> = emptyList(),
+    @SerialName("fallback_after_minutes") val fallbackAfterMinutes: Int = 0,
+    @SerialName("page_batch_size") val pageBatchSize: Int = 20,
+    @SerialName("skip_ocr_with_text") val skipOcrWithText: Boolean = true,
+    val archive: Boolean = true,
+    @SerialName("max_attempts") val maxAttempts: Int = 3,
+    @SerialName("lease_seconds") val leaseSeconds: Int = 600,
+    @SerialName("worker_offline_minutes") val workerOfflineMinutes: Int = 5,
+)
+
+@Serializable
+data class OidcConfig(
+    val enabled: Boolean = false,
+    val issuer: String = "",
+    @SerialName("client_id") val clientId: String = "",
+    val scopes: List<String> = emptyList(),
+    @SerialName("button_label") val buttonLabel: String = "",
+    @SerialName("auto_provision") val autoProvision: Boolean = false,
+    @SerialName("allowed_groups") val allowedGroups: List<String> = emptyList(),
+    @SerialName("admin_groups") val adminGroups: List<String> = emptyList(),
+    @SerialName("groups_claim") val groupsClaim: String = "groups",
+    @SerialName("link_by_verified_email") val linkByVerifiedEmail: Boolean = false,
+    @SerialName("disable_password_login") val disablePasswordLogin: Boolean = false,
+    @SerialName("has_client_secret") val hasClientSecret: Boolean = false,
+    @SerialName("redirect_uri") val redirectUri: String? = null,
+)
+
+@Serializable
+data class SmtpConfig(
+    val enabled: Boolean = false,
+    val host: String = "",
+    val port: Int = 587,
+    val security: String = "starttls",
+    val username: String = "",
+    val from: String = "",
+    @SerialName("has_password") val hasPassword: Boolean = false,
+)
+
+@Serializable
+data class ServerSettings(
+    @SerialName("public_url") val publicUrl: String = "",
+    @SerialName("allow_local_targets") val allowLocalTargets: Boolean = false,
+    @SerialName("base_url") val baseUrl: String = "",
+    @SerialName("base_url_fixed") val baseUrlFixed: Boolean = false,
+    val detected: String = "",
+    @SerialName("allow_local_env") val allowLocalEnv: Boolean = false,
+)
+
+@Serializable
+data class SystemInfo(
+    val version: String = "",
+    @SerialName("go_version") val goVersion: String = "",
+    val platform: String = "",
+    @SerialName("database_bytes") val databaseBytes: Long = 0,
+    @SerialName("storage_free_bytes") val storageFreeBytes: Long = -1,
+    val documents: Long = 0,
+    val pages: Long = 0,
+    val users: Int = 0,
+    @SerialName("storage_bytes") val storageBytes: Long = 0,
+    val queue: QueueStats = QueueStats(),
+    @SerialName("workers_online") val workersOnline: Int = 0,
+    @SerialName("workers_total") val workersTotal: Int = 0,
+)
+
+@Serializable
+data class AuditEntry(
+    val id: Long,
+    val at: String = "",
+    @SerialName("actor_name") val actorName: String = "",
+    @SerialName("actor_type") val actorType: String = "",
+    val action: String = "",
+    val ip: String = "",
+    val details: JsonObject? = null,
+)
+
+@Serializable
+data class AiProvider(
+    val id: String,
+    val name: String,
+    @SerialName("base_url") val baseUrl: String = "",
+    @SerialName("chat_model") val chatModel: String = "",
+    @SerialName("embedding_model") val embeddingModel: String = "",
+    @SerialName("is_local") val isLocal: Boolean = false,
+    @SerialName("is_default") val isDefault: Boolean = false,
+    val enabled: Boolean = true,
+    @SerialName("timeout_seconds") val timeoutSeconds: Int = 60,
+    @SerialName("max_concurrency") val maxConcurrency: Int = 2,
+    @SerialName("has_api_key") val hasApiKey: Boolean = false,
+    @SerialName("last_error") val lastError: String = "",
+    @SerialName("last_ok_at") val lastOkAt: String? = null,
+)
+
+@Serializable
+data class AiTestResult(
+    val ok: Boolean = false,
+    val error: String? = null,
+    @SerialName("chat_model_found") val chatModelFound: Boolean? = null,
+    @SerialName("embedding_model_found") val embeddingModelFound: Boolean? = null,
+)
+
+@Serializable
+data class InviteSpace(@SerialName("space_id") val spaceId: String, val role: String = "editor", val name: String? = null)
+
+@Serializable
+data class Invite(
+    val id: String,
+    val email: String? = null,
+    @SerialName("display_name") val displayName: String = "",
+    val spaces: List<InviteSpace> = emptyList(),
+    @SerialName("invited_by") val invitedBy: String = "",
+    @SerialName("expires_at") val expiresAt: String = "",
+    val status: String = "pending",
+)
+
+@Serializable
+data class InviteCreated(val link: String = "", @SerialName("email_sent") val emailSent: Boolean = false, @SerialName("email_error") val emailError: String? = null)
+
+@Serializable
+data class WatchedFolder(
+    val id: String,
+    val path: String,
+    @SerialName("space_id") val spaceId: String = "",
+    val enabled: Boolean = true,
+    val recursive: Boolean = true,
+    val subfolders: String = "none",
+    @SerialName("tag_ids") val tagIds: List<String> = emptyList(),
+    @SerialName("after_import") val afterImport: String = "move",
+    @SerialName("stable_seconds") val stableSeconds: Int = 5,
+    @SerialName("last_scan_at") val lastScanAt: String? = null,
+    @SerialName("last_error") val lastError: String = "",
+    @SerialName("imported_count") val importedCount: Int = 0,
+    @SerialName("failed_count") val failedCount: Int = 0,
+)
+
+@Serializable
+data class FolderList(val items: List<WatchedFolder> = emptyList(), val roots: List<String> = emptyList())
+
+@Serializable
+data class ScanResult(val imported: Int = 0, val failed: Int = 0, val skipped: Int = 0)
+
+@Serializable
+data class OfficeInfo(val url: String = "", @SerialName("from_env") val fromEnv: Boolean = false, val enabled: Boolean = false)
+
+@Serializable
+data class Queued(val queued: Int = 0)
 
 @Serializable
 data class Items<T>(val items: List<T> = emptyList())
@@ -203,7 +588,7 @@ data class LoginReply(
 data class NewToken(val secret: String, val token: TokenRef? = null)
 
 @Serializable
-data class TokenRef(val id: String)
+data class TokenRef(val id: String, val scopes: List<String> = emptyList())
 
 @Serializable
 data class ApiProblem(

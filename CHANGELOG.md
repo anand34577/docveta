@@ -5,6 +5,57 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Android app: everything the web app does.** Previously the app covered scanning, the Inbox,
+  reading, filing and Ask; the rest needed a browser. New in the app:
+  - Documents: filters for sender, type, date range (incl. financial year), untagged and status;
+    sorting; **saved views** (save, pin, open, change, rename, reorder, delete); hold to
+    **select several** and mark reviewed, change tags, move to another space, merge into one PDF,
+    share, reprocess or move to Trash (restore / delete forever in Trash); **Upload files** from the
+    phone (not only scans and the share sheet); *All reviewed* now covers the whole Inbox.
+  - A document: custom fields, space, language, where the paper is, archive number; **Text**,
+    **Versions** (upload a new version, restore, share an old one), **Similar** and **History**
+    tabs; **Arrange pages** (turn, reorder, delete, copy pages into a new document); share the
+    searchable PDF; re-read text (force OCR); ask AI for suggestions; *Ask about this document*;
+    @mentions in notes.
+  - Spaces: create; name, colour, description, language; members and roles; leave or delete; tags,
+    correspondents and document types with automatic matching and merging; custom fields;
+    workflows (editor and run history); AI policy and statistics; separator sheets and ASN labels.
+  - Settings: profile (name, date format, time zone, light/dark theme), password, two-step
+    sign-in (turn on with *Add to authenticator app*, recovery codes, turn off), single sign-on
+    accounts, signed-in browsers, API tokens, notification channels and quiet hours.
+  - Administration: users and invitations, workers and the task queue, processing settings, AI
+    providers, watched folders, Office conversion, single sign-on, email, alert channels, export,
+    server address and health, audit log.
+  - First start of a new server (create the administrator) and accepting an invitation link.
+
+### Changed
+- Android: administrators' phones get a token with the admin permission at sign-in. Phones signed
+  in before can turn it on in Administration by confirming the password.
+- Android: changes the server only allows from a fresh sign-in (password, two-step sign-in, new API
+  tokens) ask for the password and use a short-lived session; the phone's token can't make them.
+
+### Fixed
+- **New sign-in alerts** weren't sent when someone signed in with another browser on the same
+  computer: only a new IP address or operating system counted as a new device. The browser now
+  counts too, and the alert says which one ("Firefox on Windows").
+- Notification channels: an email channel now warns when the server can't send email yet
+  (Administration → Email isn't set up), instead of saving a channel that never delivers.
+  People who aren't administrators no longer see administrator-only events (worker offline, low
+  disk space) in the list; *Low disk space* says when it fires (under 5 GB free).
+- Web on phones: rows in Users, notification channels, API tokens, AI providers, watched folders,
+  workflows and members squeezed the name into a narrow column; their buttons now move to their
+  own line. Tab rows that scroll sideways fade at the edge that has more, and the current section
+  is scrolled into view.
+- Web: a mistyped settings, administration or space settings address showed an empty page; it
+  now shows *Page not found*. "1 documents" and "1 members" read correctly.
+- Web: the document's tab row (Details, Notes, Text…) showed scrollbars, including a vertical
+  one. Tab rows, the settings section links, the shared-link list and the bulk action bar now
+  scroll sideways only, without a drawn scrollbar, and a chosen tab scrolls into view.
+- Android: a document's file was downloaded again after every title or tag change; it is now kept
+  until the file itself changes, and old copies are removed.
+- Android: opening a document while it was processing could start several refresh loops.
+
 ## [0.6.1] - 2026-10-05
 
 ### Fixed

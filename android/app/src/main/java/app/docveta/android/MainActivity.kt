@@ -59,7 +59,8 @@ class MainActivity : FragmentActivity() {
         locked = container.session.appLock && container.session.signedIn
         handle(intent)
         setContent {
-            DocvetaTheme {
+            val mode by container.theme
+            DocvetaTheme(dark = when (mode) { "dark" -> true; "light" -> false; else -> androidx.compose.foundation.isSystemInDarkTheme() }) {
                 CompositionLocalProvider(LocalContainer provides container) {
                     var signedIn by remember { mutableStateOf(container.session.signedIn) }
                     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {

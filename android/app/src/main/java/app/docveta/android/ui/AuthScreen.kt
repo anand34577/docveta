@@ -52,12 +52,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.docveta.android.data.InvitePreview
 import app.docveta.android.data.ServerStatus
 import app.docveta.android.data.SignIn
 import app.docveta.android.data.normalizeServerUrl
 import kotlinx.coroutines.launch
 
-private enum class Step { Server, Login, Code, Token }
+private enum class Step { Server, Login, Code, Token, Setup, Invite }
 
 /** The result of single sign-on, handed over by MainActivity when the browser opens docveta://sso. */
 class SsoInbox {
@@ -83,6 +84,11 @@ fun AuthScreen(sso: SsoInbox, onSignedIn: () -> Unit) {
     var token by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var name by remember { mutableStateOf("") }
+    var sharedSpace by remember { mutableStateOf("") }
+    var inviteLink by remember { mutableStateOf("") }
+    var inviteToken by remember { mutableStateOf("") }
+    var invite by remember { mutableStateOf<InvitePreview?>(null) }
 
     fun run(block: suspend () -> Unit) {
         busy = true
@@ -102,8 +108,11 @@ fun AuthScreen(sso: SsoInbox, onSignedIn: () -> Unit) {
         val url = normalizeServerUrl(server) ?: throw IllegalArgumentException("Enter the address of your Docveta, like docs.example.com")
         base = url
         status = c.repo.checkServer(url)
-        if (status!!.setupNeeded) error = "This server hasn't been set up yet. Open it in a browser first to create the administrator."
-        else step = if (status!!.passwordLogin || status!!.oidc.enabled) Step.Login else Step.Token
+        step = when {
+            status!!.setupNeeded -> Step.Setup
+            status!!.passwordLogin || status!!.oidc.enabled -> Step.Login
+            else -> Step.Token
+        }
     }
 
     fun startSso() {
@@ -123,6 +132,21 @@ fun AuthScreen(sso: SsoInbox, onSignedIn: () -> Unit) {
             sso.code = null
             run { c.repo.signInWithSso(got); onSignedIn() }
         }
+    }
+
+    /** An invitation link looks like https://docs.example.com/invite/<token>: the server and the token in one. */
+    fun openInvite() = run {
+        val link = inviteLink.trim()
+        val m = Regex("^(.*?)/invite/([A-Za-z0-9_-]+)/?$").find(link) ?: throw IllegalArgumentException("Paste the whole invitation link, like https://docs.example.com/invite/…")
+        val url = normalizeServerUrl(m.groupValues[1]) ?: throw IllegalArgumentException("That link doesn't contain a server address")
+        base = url
+        server = url
+        inviteToken = m.groupValues[2]
+        val p = c.repo.invitePreview(url, inviteToken)
+        invite = p
+        name = p.displayName
+        if (!p.email.isNullOrBlank()) email = p.email
+        step = Step.Invite
     }
 
     fun signIn() = run {
@@ -147,6 +171,8 @@ fun AuthScreen(sso: SsoInbox, onSignedIn: () -> Unit) {
                     Step.Login -> "Sign in"
                     Step.Code -> "Two-step sign-in"
                     Step.Token -> "Sign in with a token"
+                    Step.Setup -> "Set up Docveta"
+                    Step.Invite -> "You're invited"
                 },
                 style = MaterialTheme.typography.headlineMedium,
             )
@@ -157,6 +183,8 @@ fun AuthScreen(sso: SsoInbox, onSignedIn: () -> Unit) {
                     Step.Login -> "to ${base.removePrefix("https://").removePrefix("http://")}"
                     Step.Code -> "Enter the 6-digit code from your authenticator app, or a recovery code."
                     Step.Token -> "Create an access token in Docveta on the web (Settings, API tokens) and paste it here."
+                    Step.Setup -> "This server is new. Create the administrator account; you can invite everyone else later."
+                    Step.Invite -> invite?.let { "${it.invitedBy} invited you to ${base.removePrefix("https://").removePrefix("http://")}. Choose your name and password." }.orEmpty()
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -173,6 +201,36 @@ fun AuthScreen(sso: SsoInbox, onSignedIn: () -> Unit) {
                             supportingText = { if (server.trim().startsWith("http://")) Text("Not encrypted: only use this on your own network.") },
                         )
                         PrimaryButton("Continue", busy, enabled = server.isNotBlank()) { checkServer() }
+                        OutlinedTextField(
+                            inviteLink, { inviteLink = it }, label = { Text("Or paste an invitation link") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go), keyboardActions = KeyboardActions(onGo = { openInvite() }),
+                        )
+                        if (inviteLink.isNotBlank()) TextButton({ openInvite() }, Modifier.align(Alignment.CenterHorizontally), enabled = !busy) { Text("Open invitation") }
+                    }
+                    Step.Setup -> {
+                        OutlinedTextField(name, { name = it }, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(email, { email = it }, label = { Text("Email") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next))
+                        OutlinedTextField(
+                            password, { password = it }, label = { Text("Password") }, singleLine = true, modifier = Modifier.fillMaxWidth(), supportingText = { Text("At least 10 characters") },
+                            visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            trailingIcon = { IconButton({ show = !show }) { Icon(if (show) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (show) "Hide password" else "Show password") } },
+                        )
+                        OutlinedTextField(sharedSpace, { sharedSpace = it }, label = { Text("A shared space (optional)") }, placeholder = { Text("e.g. Family, Acme Traders") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                            supportingText = { Text("For documents several people share. You also get a private personal space.") })
+                        PrimaryButton("Create administrator", busy, enabled = name.isNotBlank() && email.isNotBlank() && password.length >= 10) { run { c.repo.setup(base, name, email, password, sharedSpace); onSignedIn() } }
+                    }
+                    Step.Invite -> {
+                        val fixedEmail = invite?.email
+                        OutlinedTextField(name, { name = it }, label = { Text("Your name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(email, { if (fixedEmail.isNullOrBlank()) email = it }, label = { Text("Email") }, singleLine = true, enabled = fixedEmail.isNullOrBlank(), modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
+                        if (invite?.passwordLogin != false) OutlinedTextField(
+                            password, { password = it }, label = { Text("Choose a password") }, singleLine = true, modifier = Modifier.fillMaxWidth(), supportingText = { Text("At least 10 characters") },
+                            visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            trailingIcon = { IconButton({ show = !show }) { Icon(if (show) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (show) "Hide password" else "Show password") } },
+                        ) else Text("This server uses single sign-on. Open the invitation link in a browser to accept it.", style = MaterialTheme.typography.bodyMedium)
+                        if (invite?.passwordLogin != false) PrimaryButton("Accept invitation", busy, enabled = name.isNotBlank() && email.isNotBlank() && password.length >= 10) {
+                            run { c.repo.acceptInvite(base, inviteToken, name, if (fixedEmail.isNullOrBlank()) email else null, password); onSignedIn() }
+                        }
                     }
                     Step.Login -> {
                         if (status?.oidc?.enabled == true) {

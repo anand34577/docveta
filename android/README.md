@@ -26,6 +26,14 @@ repository **secrets** (not variables): `ANDROID_KEYSTORE_BASE64` (`base64 -w0 r
 `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The version comes from
 the tag. Keep the keystore: updates must be signed with the same key.
 
+## What's in the app
+
+Everything the web app does: Inbox, documents with filters, saved views and bulk actions, the
+document viewer with details, custom fields, notes, text, versions, similar documents, history and
+page arranging, Ask, spaces (members, tags, correspondents, types, custom fields, workflows, AI,
+scanning), settings (profile, security, notifications, tokens) and, for administrators, the whole
+Administration area. It can also set up a new server and accept invitation links.
+
 ## Signing in
 
 Enter the server address, then email and password (and the two-step code if asked). The app
@@ -36,4 +44,10 @@ that only offer single sign-on: create a token in the web app (Settings, API tok
 
 - The built-in scanner's page detection is brightness-based: white paper on a white desk falls back to adjustable
   corners (see `DocumentDetector`).
-- The interface is English only for now; admin and space settings are in the web app.
+- The interface is English only for now (so is the web app).
+- Changing the password, two-step sign-in and creating API tokens ask for your password: the
+  server only allows these from a fresh sign-in, never with the phone's stored token. People who
+  sign in only with single sign-on do these in a browser.
+- Phones signed in before administration came to the app: Administration asks for the password
+  once to get a token with the admin permission.
+- Works online only; there is no offline copy of the library yet.

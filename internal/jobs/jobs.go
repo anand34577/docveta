@@ -1,6 +1,6 @@
 // Package jobs defines background job arguments and a small wrapper around the River
 // client. Jobs are inserted in the same transaction as the data they act on, so state
-// and work can never diverge (DESIGN ADR-006, ADR-019).
+// and work can never diverge.
 package jobs
 
 import (

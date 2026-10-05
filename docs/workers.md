@@ -4,7 +4,7 @@ Processing workers (OCR engines and the searchable-PDF builder) run outside the 
 server, on any machine, in any language. They **pull** work over HTTPS, so they can sit
 behind NAT and scale by simply starting more of them. The Python SDK
 (`workers/sdk-python`) implements everything below; read this if you write a worker in
-another language. Design rationale: [DESIGN.md §11](DESIGN.md#11-processing-engines-ocr--pluggable-worker-architecture).
+another language.
 
 ## Authentication
 

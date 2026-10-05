@@ -8,7 +8,7 @@ import { browserImage, cn, fileKind, formatBytes, formatDocDate } from "@/lib/ut
 import { LogoMark } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
-import { EmptyState, Spinner } from "@/components/ui/misc";
+import { EmptyState, Spinner, useScrollEdges } from "@/components/ui/misc";
 import { ImageViewer } from "@/components/documents/image-viewer";
 
 const PdfViewer = React.lazy(() => import("@/components/documents/pdf-viewer"));
@@ -19,6 +19,7 @@ export function PublicSharePage() {
   const qc = useQueryClient();
   const share = useQuery({ queryKey: ["public-share", token], queryFn: () => api.get<PublicShare>(`/public/shares/${token}`), retry: false });
   const [active, setActive] = React.useState<string | null>(null);
+  const nav = useScrollEdges<HTMLElement>();
 
   React.useEffect(() => {
     document.title = share.data?.title ? `${share.data.title}: shared document` : "Shared document";
@@ -55,7 +56,7 @@ export function PublicSharePage() {
       ) : (
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
           {docs.length > 1 && (
-            <nav aria-label="Documents" className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-surface p-2 md:w-64 md:flex-col md:overflow-y-auto md:border-b-0 md:border-r">
+            <nav ref={nav} aria-label="Documents" className="scroll-x flex shrink-0 gap-1 border-b border-border bg-surface p-2 md:w-64 md:flex-col md:overflow-y-auto md:border-b-0 md:border-r">
               {docs.map((d) => (
                 <button key={d.id} onClick={() => setActive(d.id)} className={cn("min-w-40 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-2 md:min-w-0", d.id === doc?.id && "bg-surface-2 font-medium")}>
                   <span className="line-clamp-2">{d.title}</span>

@@ -1,4 +1,4 @@
-"""HTTP client for the Docveta worker protocol v1 (DESIGN §11.3)."""
+"""HTTP client for the Docveta worker protocol v1."""
 
 from __future__ import annotations
 

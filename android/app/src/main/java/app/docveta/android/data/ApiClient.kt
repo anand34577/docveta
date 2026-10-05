@@ -20,6 +20,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 
@@ -107,6 +108,20 @@ class ApiClient(
 
     suspend inline fun <reified T> patch(path: String, body: String, headers: Map<String, String> = emptyMap()): T =
         AppJson.decodeFromString(send("PATCH", path, body = body, headers = headers))
+
+    suspend inline fun <reified T> put(path: String, body: String): T =
+        AppJson.decodeFromString(send("PUT", path, body = body))
+
+    /** Sends a file as multipart/form-data (field "file"), with extra text fields first. */
+    suspend fun sendFile(path: String, file: File, mime: String, name: String, fields: Map<String, String> = emptyMap()): String {
+        val body = okhttp3.MultipartBody.Builder().setType(okhttp3.MultipartBody.FORM).apply {
+            fields.forEach { (k, v) -> addFormDataPart(k, v) }
+            addFormDataPart("file", name, file.asRequestBody(mime.toMediaType()))
+        }.build()
+        val req = Request.Builder().url(url(path)).post(body).header("Accept", "application/json").build()
+        val client = authed.newBuilder().writeTimeout(10, TimeUnit.MINUTES).readTimeout(5, TimeUnit.MINUTES).build()
+        return execute(req, client) { it.body?.string().orEmpty() }
+    }
 
     suspend fun delete(path: String, query: Map<String, String?> = emptyMap()) {
         send("DELETE", path, query)

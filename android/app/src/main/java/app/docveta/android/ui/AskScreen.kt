@@ -78,7 +78,7 @@ private val citeRe = Regex("""\[(\d{1,2})]""")
 /** Ask a question and get an answer written from your own documents, with every claim pointing at its page. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AskScreen(onOpenDoc: (String, Int) -> Unit) {
+fun AskScreen(onOpenDoc: (String, Int) -> Unit, documentId: String? = null, onBack: (() -> Unit)? = null) {
     val c = LocalContainer.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -107,7 +107,7 @@ fun AskScreen(onOpenDoc: (String, Int) -> Unit) {
         val answer = Turn(false, "", pending = true).also { turns.add(it) }
         job = scope.launch {
             try {
-                c.repo.ask(question, convId, null).collect { e ->
+                c.repo.ask(question, convId, null, documentId).collect { e ->
                     when (e) {
                         is AskEvent.Status -> answer.stage = e.stage
                         is AskEvent.Citations -> answer.citations = e.list
@@ -139,8 +139,9 @@ fun AskScreen(onOpenDoc: (String, Int) -> Unit) {
     }
 
     Column(Modifier.fillMaxSize().imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Ask", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+        Row(Modifier.fillMaxWidth().padding(start = if (onBack != null) 4.dp else 16.dp, end = 4.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) BackButton(onBack)
+            Text(if (documentId != null) "Ask about this document" else "Ask", Modifier.weight(1f), style = if (documentId != null) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium)
             IconButton({ stop(); turns.clear(); convId = null }) { Icon(Icons.Outlined.AddComment, "New conversation") }
             IconButton({ history = true; loadHistory() }) { Icon(Icons.Outlined.History, "Earlier conversations") }
         }
@@ -148,10 +149,10 @@ fun AskScreen(onOpenDoc: (String, Int) -> Unit) {
             if (turns.isEmpty()) item {
                 Column(Modifier.fillMaxWidth().padding(top = 32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.AutoAwesome, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) }
-                    Text("Ask your documents", style = MaterialTheme.typography.titleLarge)
-                    Text("Answers come only from your own documents, and show where they were found.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp))
+                    Text(if (documentId != null) "Ask this document" else "Ask your documents", style = MaterialTheme.typography.titleLarge)
+                    Text(if (documentId != null) "Answers come only from this document, and show the page they were found on." else "Answers come only from your own documents, and show where they were found.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp))
                     Spacer(Modifier.height(6.dp))
-                    examples.forEach { e -> Text(e, Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { ask(e) }.background(MaterialTheme.colorScheme.surfaceContainer).padding(14.dp), style = MaterialTheme.typography.bodyMedium) }
+                    (if (documentId != null) listOf("Summarise this document", "What are the important dates?", "How much has to be paid, and by when?") else examples).forEach { e -> Text(e, Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { ask(e) }.background(MaterialTheme.colorScheme.surfaceContainer).padding(14.dp), style = MaterialTheme.typography.bodyMedium) }
                 }
             }
             itemsIndexed(turns) { i, t ->

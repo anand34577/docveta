@@ -1,6 +1,6 @@
 // Package pipeline orchestrates document processing: preprocessing in the core,
 // OCR and archive generation by external workers (pull-based lease protocol),
-// merging results, indexing and classification (DESIGN §10, §11).
+// merging results, indexing and classification.
 package pipeline
 
 import (

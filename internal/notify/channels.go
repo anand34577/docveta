@@ -1,6 +1,6 @@
 // Package notify delivers domain events to users: in-app (with live updates over
 // Server-Sent Events) and external channels — Gotify, email (SMTP), ntfy and signed
-// webhooks (DESIGN §17).
+// webhooks.
 package notify
 
 import (

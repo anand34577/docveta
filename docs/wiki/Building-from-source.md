@@ -65,5 +65,4 @@ publishes a GitHub release. *Actions → Release → Run workflow* makes a draft
 testing.
 
 More: [CONTRIBUTING.md](https://github.com/anand34577/docveta/blob/main/CONTRIBUTING.md),
-[design](https://github.com/anand34577/docveta/blob/main/docs/DESIGN.md),
 [worker protocol](https://github.com/anand34577/docveta/blob/main/docs/workers.md).

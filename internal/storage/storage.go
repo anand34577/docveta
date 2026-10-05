@@ -1,4 +1,4 @@
-// Package storage implements the content-addressed blob store (DESIGN §19.1).
+// Package storage implements the content-addressed blob store.
 // Blobs are immutable and addressed by SHA-256, which gives de-duplication and
 // makes backups consistent: a blob is never modified, only added or (after a
 // grace period) garbage collected.

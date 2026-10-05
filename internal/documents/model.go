@@ -1,5 +1,5 @@
 // Package documents implements documents: ingestion, metadata, files, notes, history,
-// trash and indexing of metadata for search (DESIGN §5.1, §10).
+// trash and indexing of metadata for search.
 package documents
 
 import (

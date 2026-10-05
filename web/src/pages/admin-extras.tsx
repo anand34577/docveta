@@ -85,7 +85,7 @@ export function AIAdmin() {
             {list.map((p) => (
               <li key={p.id} className="flex flex-wrap items-center gap-3 py-3">
                 <Switch checked={p.enabled} onCheckedChange={(v) => toggle(p, v)} aria-label={`Enable ${p.name}`} />
-                <div className="min-w-0 flex-1">
+                <div className="min-w-48 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
                     {p.name}
                     {p.is_default && <Badge tone="accent">Default</Badge>}
@@ -96,15 +96,17 @@ export function AIAdmin() {
                   </div>
                   {p.last_error ? <div className="mt-0.5 text-xs text-danger">Last error: {p.last_error}</div> : p.last_ok_at ? <div className="text-xs text-success">Worked {timeAgo(p.last_ok_at)}</div> : null}
                 </div>
-                <Button size="sm" variant="ghost" onClick={() => test(p)}>
-                  <Zap /> Test
-                </Button>
-                <Button size="icon-sm" variant="ghost" aria-label={`Edit ${p.name}`} onClick={() => setEditing(p)}>
-                  <Pencil />
-                </Button>
-                <Button size="icon-sm" variant="ghost" aria-label={`Remove ${p.name}`} onClick={() => remove(p)}>
-                  <Trash2 />
-                </Button>
+                <div className="ml-auto flex items-center gap-1">
+                  <Button size="sm" variant="ghost" onClick={() => test(p)}>
+                    <Zap /> Test
+                  </Button>
+                  <Button size="icon-sm" variant="ghost" aria-label={`Edit ${p.name}`} onClick={() => setEditing(p)}>
+                    <Pencil />
+                  </Button>
+                  <Button size="icon-sm" variant="ghost" aria-label={`Remove ${p.name}`} onClick={() => remove(p)}>
+                    <Trash2 />
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>
@@ -264,22 +266,24 @@ export function FoldersAdmin() {
           {folders.data!.items.map((f) => (
             <li key={f.id} className="flex flex-wrap items-center gap-3 py-3">
               <Switch checked={f.enabled} onCheckedChange={(v) => toggle(f, v)} aria-label={`Watch ${f.path}`} />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-48 flex-1">
                 <div className="truncate font-mono text-[13px] font-medium">{f.path}</div>
                 <div className="text-xs text-subtle">
                   into {spaceName(f.space_id)} · {f.imported_count} imported{f.failed_count ? `, ${f.failed_count} failed` : ""} · {f.last_scan_at ? `checked ${timeAgo(f.last_scan_at)}` : "not checked yet"}
                 </div>
                 {f.last_error && <div className="mt-0.5 text-xs text-danger">{f.last_error}</div>}
               </div>
-              <Button size="sm" variant="ghost" onClick={() => scan(f)}>
-                <RefreshCw /> Check now
-              </Button>
-              <Button size="icon-sm" variant="ghost" aria-label="Edit" onClick={() => setEditing(f)}>
-                <Pencil />
-              </Button>
-              <Button size="icon-sm" variant="ghost" aria-label="Stop watching" onClick={() => remove(f)}>
-                <Trash2 />
-              </Button>
+              <div className="ml-auto flex items-center gap-1">
+                <Button size="sm" variant="ghost" onClick={() => scan(f)}>
+                  <RefreshCw /> Check now
+                </Button>
+                <Button size="icon-sm" variant="ghost" aria-label="Edit" onClick={() => setEditing(f)}>
+                  <Pencil />
+                </Button>
+                <Button size="icon-sm" variant="ghost" aria-label="Stop watching" onClick={() => remove(f)}>
+                  <Trash2 />
+                </Button>
+              </div>
             </li>
           ))}
         </ul>

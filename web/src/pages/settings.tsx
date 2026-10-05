@@ -17,6 +17,7 @@ import { confirm } from "@/components/ui/confirm";
 import { TwoFactorCard } from "@/components/two-factor";
 import { QuietHours } from "@/components/quiet-hours";
 import { ViewsManager } from "@/components/views-manager";
+import { NotFound } from "./not-found";
 
 const sections = [
   { id: "profile", label: "Profile", icon: <User /> },
@@ -29,6 +30,7 @@ const sections = [
 export function SettingsPage() {
   const params = useParams({ strict: false }) as { section?: string };
   const active = params.section ?? "profile";
+  if (!sections.some((s) => s.id === active)) return <NotFound />;
   return (
     <SettingsLayout title="Settings" base="/settings" sections={sections} active={active}>
       {active === "profile" && <Profile />}
@@ -283,7 +285,7 @@ const eventLabels: Record<string, string> = {
   "security.token_created": "New API token",
   "worker.offline": "Processing worker offline (admins)",
   "worker.online": "Processing worker back online (admins)",
-  "storage.low": "Low disk space (admins)",
+  "storage.low": "Low disk space, under 5 GB free (admins)",
   "security.2fa_changed": "Two-step sign-in changed",
   "import.failed": "A watched-folder file couldn't be imported",
   "workflow.notice": "Workflow messages",
@@ -342,34 +344,40 @@ export function Notifications({ system }: { system?: boolean }) {
           {list.map((c) => (
             <li key={c.id} className="flex flex-wrap items-center gap-3 py-3">
               <Switch checked={c.enabled} onCheckedChange={(v) => toggle(c, v)} aria-label={`Enable ${c.name}`} />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-48 flex-1">
                 <div className="text-sm font-medium">
                   {c.name} <Badge>{channelTypes[c.type].label}</Badge>
                 </div>
                 <div className="text-xs text-subtle">{c.events.length ? c.events.map((e) => eventLabels[e] ?? e).join(", ") : "All events"}</div>
                 {c.last_error && <div className="mt-0.5 text-xs text-danger">Last error: {c.last_error}</div>}
+                {c.type === "email" && channels.data?.email_ready === false && !c.last_error && (
+                  <div className="mt-0.5 text-xs text-warning">This server can't send email yet, so nothing will arrive.</div>
+                )}
               </div>
-              <Button size="sm" variant="ghost" onClick={() => test(c)}>
-                Test
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setEditing(c)}>
-                Edit
-              </Button>
-              <Button size="icon-sm" variant="ghost" onClick={() => remove(c)} aria-label="Remove">
-                <Trash2 />
-              </Button>
+              <div className="ml-auto flex items-center gap-1">
+                <Button size="sm" variant="ghost" onClick={() => test(c)}>
+                  Test
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEditing(c)}>
+                  Edit
+                </Button>
+                <Button size="icon-sm" variant="ghost" onClick={() => remove(c)} aria-label="Remove">
+                  <Trash2 />
+                </Button>
+              </div>
             </li>
           ))}
         </ul>
       )}
-      {editing && <ChannelDialog channel={editing === "new" ? null : editing} system={system} eventTypes={channels.data?.event_types ?? []} onClose={() => setEditing(null)} />}
+      {editing && <ChannelDialog channel={editing === "new" ? null : editing} system={system} eventTypes={channels.data?.event_types ?? []} emailReady={channels.data?.email_ready ?? true} onClose={() => setEditing(null)} />}
     </SettingsCard>
     {!system && <QuietHours />}
     </>
   );
 }
 
-function ChannelDialog({ channel, system, eventTypes, onClose }: { channel: Channel | null; system?: boolean; eventTypes: string[]; onClose: () => void }) {
+function ChannelDialog({ channel, system, eventTypes, emailReady, onClose }: { channel: Channel | null; system?: boolean; eventTypes: string[]; emailReady: boolean; onClose: () => void }) {
+  const me = useCurrentUser();
   const qc = useQueryClient();
   const [type, setType] = React.useState<Channel["type"]>(channel?.type ?? "gotify");
   const [name, setName] = React.useState(channel?.name ?? "");
@@ -377,7 +385,8 @@ function ChannelDialog({ channel, system, eventTypes, onClose }: { channel: Chan
   const [events, setEvents] = React.useState<string[]>(channel?.events ?? []);
   const [err, setErr] = React.useState<ApiError | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const shownEvents = eventTypes.filter((e) => (system ? e.startsWith("worker.") || e.startsWith("storage.") : true));
+  const adminEvent = (e: string) => e.startsWith("worker.") || e.startsWith("storage.");
+  const shownEvents = eventTypes.filter((e) => (system ? adminEvent(e) : me?.is_admin || !adminEvent(e)));
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -424,7 +433,15 @@ function ChannelDialog({ channel, system, eventTypes, onClose }: { channel: Chan
               <Input id={`c-${k}`} value={config[k] ?? ""} placeholder={ph} onChange={(e) => setConfig({ ...config, [k]: e.target.value })} />
             </Field>
           ))}
-          {type === "email" && <p className="text-xs text-muted">Email uses the server's SMTP settings (Administration → Email).</p>}
+          {type === "email" &&
+            (emailReady ? (
+              <p className="text-xs text-muted">Email uses the server's SMTP settings (Administration → Email).</p>
+            ) : (
+              <p className="rounded-md bg-warning-soft px-3 py-2 text-xs text-warning">
+                This server can't send email yet, so nothing will arrive.{" "}
+                {me?.is_admin ? "Set it up under Administration → Email first." : "Ask your administrator to set up email."}
+              </p>
+            ))}
           <div>
             <div className="mb-2 text-[13px] font-medium">Send these events</div>
             <div className="grid gap-1.5 sm:grid-cols-2">
@@ -505,7 +522,7 @@ function Tokens() {
         <ul className="divide-y divide-border">
           {tokens.data!.map((t) => (
             <li key={t.id} className="flex flex-wrap items-center gap-3 py-3">
-              <div className="min-w-0 flex-1">
+              <div className="min-w-48 flex-1">
                 <div className="text-sm font-medium">
                   {t.name} <code className="ml-1 text-xs text-subtle">{t.prefix}…</code>
                 </div>
@@ -514,7 +531,7 @@ function Tokens() {
                   {t.expires_at && ` · expires ${formatDateTime(t.expires_at)}`}
                 </div>
               </div>
-              <Button size="sm" variant="danger-ghost" onClick={() => revoke(t)}>
+              <Button className="ml-auto" size="sm" variant="danger-ghost" onClick={() => revoke(t)}>
                 Revoke
               </Button>
             </li>

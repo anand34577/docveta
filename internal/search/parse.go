@@ -1,5 +1,5 @@
 // Package search implements document search: a small query language, PostgreSQL
-// full-text + trigram matching, filters, sorting and keyset pagination (DESIGN §12).
+// full-text + trigram matching, filters, sorting and keyset pagination.
 package search
 
 import (
