@@ -17,7 +17,7 @@ import (
 	"github.com/anand34577/docveta/internal/platform/httpx"
 )
 
-// Worker protocol v1 (DESIGN §11.3). Authenticated with a worker token.
+// Worker protocol v1. Authenticated with a worker token.
 func (a *API) registerWorker(mux router) {
 	worker := func(fn func(w http.ResponseWriter, r *http.Request, p *auth.Principal)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {

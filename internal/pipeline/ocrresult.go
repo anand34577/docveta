@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// OCRResult is the canonical, engine-independent result format "ocr-result/v1"
-// (DESIGN §11.4). Every worker returns this; words/boxes are optional.
+// OCRResult is the canonical, engine-independent result format "ocr-result/v1".
+// Every worker returns this; words/boxes are optional.
 type OCRResult struct {
 	Schema  string         `json:"schema"`
 	Engine  OCREngine      `json:"engine"`

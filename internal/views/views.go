@@ -1,5 +1,5 @@
 // Package views implements saved views ("smart folders"): a saved search with display
-// options, personal or shared with a space (DESIGN FR-O4).
+// options, personal or shared with a space.
 package views
 
 import (
@@ -168,7 +168,7 @@ func (s *Service) Delete(ctx context.Context, p *auth.Principal, id uuid.UUID) e
 }
 
 // ---------------------------------------------------------------------------
-// Delta sync for offline-capable clients (DESIGN §21.3)
+// Delta sync for offline-capable clients
 // ---------------------------------------------------------------------------
 
 type Change struct {

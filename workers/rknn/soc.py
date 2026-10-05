@@ -1,4 +1,4 @@
-"""Rockchip SoC detection and per-SoC NPU runtime profiles (DESIGN §11.7)."""
+"""Rockchip SoC detection and per-SoC NPU runtime profiles."""
 
 from __future__ import annotations
 

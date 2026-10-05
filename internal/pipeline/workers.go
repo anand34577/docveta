@@ -26,7 +26,7 @@ import (
 )
 
 // ProtocolVersion is the worker protocol version implemented by this core. The core
-// supports ProtocolVersion and ProtocolVersion-1 (DESIGN §11.3).
+// supports ProtocolVersion and ProtocolVersion-1.
 const ProtocolVersion = 1
 
 const workerTokenPrefix = "dvt_wrk"
@@ -608,7 +608,7 @@ type CompleteInput struct {
 }
 
 // Complete stores a task's result. Results from stale leases are rejected so a slow
-// "zombie" worker can never overwrite a re-assigned task (DESIGN §11.2).
+// "zombie" worker can never overwrite a re-assigned task.
 func (s *Service) Complete(ctx context.Context, p *auth.Principal, taskID uuid.UUID, in CompleteInput) error {
 	t, err := s.leasedTask(ctx, s.pool, p, taskID, in.LeaseID, false)
 	if err != nil {

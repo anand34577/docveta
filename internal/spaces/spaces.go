@@ -1,5 +1,5 @@
 // Package spaces implements Spaces, memberships and the single authorization policy
-// used by every other package (DESIGN §15.4).
+// used by every other package.
 package spaces
 
 import (

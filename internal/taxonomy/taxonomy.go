@@ -1,5 +1,5 @@
 // Package taxonomy manages per-space vocabularies: tags, correspondents and document
-// types, including their auto-matching rules (DESIGN §5.2, §9.2).
+// types, including their auto-matching rules.
 package taxonomy
 
 import (

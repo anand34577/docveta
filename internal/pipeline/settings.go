@@ -12,7 +12,7 @@ import (
 
 const settingsKey = "processing"
 
-// Settings is the default processing profile (Admin → Processing). DESIGN §11.6.
+// Settings is the default processing profile (Admin → Processing).
 type Settings struct {
 	// PreferTags: OCR tasks are first offered only to workers advertising all these tags
 	// (e.g. ["npu"]). After FallbackAfterMinutes any capable worker may take them.

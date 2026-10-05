@@ -92,7 +92,7 @@ func truncate(s string, n int) string {
 
 // Ingest stores a new document and schedules processing. The blob is durable before
 // the database row is committed, and the processing job is enqueued in the same
-// transaction as the row (DESIGN §10.2, NFR-5).
+// transaction as the row.
 func (s *Service) Ingest(ctx context.Context, p *auth.Principal, in IngestInput, r io.Reader) (*Document, error) {
 	if p == nil || (!p.Has(auth.ScopeUpload) && !p.Has(auth.ScopeWrite)) {
 		return nil, apperr.Forbidden("This token can't upload documents")
@@ -424,7 +424,7 @@ type UpdateInput struct {
 var langRe = regexp.MustCompile(`^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$`)
 
 // Update applies a partial update. ifMatch, when non-nil, must equal the current
-// version (optimistic concurrency, DESIGN §9.5).
+// version (optimistic concurrency).
 func (s *Service) Update(ctx context.Context, p *auth.Principal, id uuid.UUID, in UpdateInput, ifMatch *int) (*Document, error) {
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		return s.updateTx(ctx, tx, p, id, in, ifMatch)
@@ -894,7 +894,7 @@ func (s *Service) Restore(ctx context.Context, p *auth.Principal, id uuid.UUID) 
 }
 
 // Purge permanently deletes a trashed document. Blobs are removed later by garbage
-// collection after a grace period (DESIGN §19.1).
+// collection after a grace period.
 func (s *Service) Purge(ctx context.Context, p *auth.Principal, id uuid.UUID) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		raw, role, err := s.authorize(ctx, tx, p, id, spaces.ActEdit, true)

@@ -37,7 +37,7 @@ func (d *doctorReport) result() error {
 	return nil
 }
 
-// doctor checks an installation without changing it (DESIGN §23.3). It fails if any
+// doctor checks an installation without changing it. It fails if any
 // check failed; warnings don't fail it.
 func doctor(ctx context.Context, cfg *config.Config, args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)

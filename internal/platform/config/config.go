@@ -1,6 +1,6 @@
 // Package config loads bootstrap configuration from environment variables and
 // docveta.conf files (see FileName). Everything a user should be able to change at
-// runtime lives in the database (settings table) instead; see DESIGN §23.3.
+// runtime lives in the database (settings table) instead.
 package config
 
 import (

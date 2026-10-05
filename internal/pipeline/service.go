@@ -392,7 +392,7 @@ func ocrLanguage(lang string) string {
 	return l
 }
 
-// createOCRTasks splits OCR work into page batches and applies routing (DESIGN §11.6).
+// createOCRTasks splits OCR work into page batches and applies routing.
 func (s *Service) createOCRTasks(ctx context.Context, tx pgx.Tx, d *docRow, runID uuid.UUID, pages []int, all bool, priority int, cfg Settings) error {
 	langs := []string{ocrLanguage(d.Language)}
 	tags := cfg.PreferTags
