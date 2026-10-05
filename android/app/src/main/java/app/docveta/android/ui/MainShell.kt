@@ -2,6 +2,17 @@ package app.docveta.android.ui
 
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -90,6 +101,47 @@ private object Route {
     fun doc(id: String, page: Int = 0) = "doc/$id?page=$page"
 }
 
+/*
+ * Screen transitions, following Material motion:
+ * - between bottom-bar tabs: fade through (siblings, no direction);
+ * - opening a screen: shared axis X (slides in from the side, the previous one drifts back);
+ *   going back plays it in reverse and follows the predictive back gesture;
+ * - the scanner (camera, review, crop): slides up like a sheet, down when closed.
+ */
+private val tabRoutes = setOf(Route.Inbox, Route.Docs, Route.Ask, Route.More)
+private fun isScanner(route: String?) = route?.startsWith("scan") == true
+private const val MOTION_MS = 300
+private const val OUT_MS = MOTION_MS * 35 / 100 // the old screen is gone in the first third…
+private val emphasized = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+private fun <T> motion() = tween<T>(MOTION_MS, easing = emphasized)
+private fun fadeInLater() = fadeIn(tween(MOTION_MS - OUT_MS, delayMillis = OUT_MS)) // …before the new one appears
+private fun fadeOutFast() = fadeOut(tween(OUT_MS))
+private fun shift(width: Int) = width / 10 // both screens move a little (Material's ~30 dp)
+
+private fun screenEnter(from: String?, to: String?): EnterTransition = when {
+    from in tabRoutes && to in tabRoutes -> fadeIn(tween(210, delayMillis = 90)) + scaleIn(tween(210, delayMillis = 90), initialScale = 0.96f)
+    isScanner(to) && !isScanner(from) -> slideInVertically(motion()) { it / 3 } + fadeInLater()
+    else -> slideInHorizontally(motion()) { shift(it) } + fadeInLater()
+}
+
+private fun screenExit(from: String?, to: String?): ExitTransition = when {
+    from in tabRoutes && to in tabRoutes -> fadeOut(tween(90))
+    isScanner(to) && !isScanner(from) -> fadeOutFast()
+    else -> slideOutHorizontally(motion()) { -shift(it) } + fadeOutFast()
+}
+
+private fun screenPopEnter(from: String?, to: String?): EnterTransition = when {
+    from in tabRoutes && to in tabRoutes -> fadeIn(tween(210, delayMillis = 90))
+    isScanner(from) && !isScanner(to) -> fadeInLater()
+    else -> slideInHorizontally(motion()) { -shift(it) } + fadeInLater()
+}
+
+private fun screenPopExit(from: String?, to: String?): ExitTransition = when {
+    from in tabRoutes && to in tabRoutes -> fadeOut(tween(90))
+    isScanner(from) && !isScanner(to) -> slideOutVertically(motion()) { it / 3 } + fadeOutFast()
+    else -> slideOutHorizontally(motion()) { shift(it) } + fadeOutFast()
+}
+
 /** Files handed over by Android's share sheet, waiting for the person to pick a space. */
 class ShareInbox {
     var uris by mutableStateOf<List<Uri>>(emptyList())
@@ -156,7 +208,13 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
                 BottomBar(nav, route, stats?.inbox ?: 0, ai.value.chat)
             }
         }) { pad ->
-            NavHost(nav, Route.Inbox, Modifier.padding(pad)) {
+            NavHost(
+                nav, Route.Inbox, Modifier.padding(pad),
+                enterTransition = { screenEnter(initialState.destination.route, targetState.destination.route) },
+                exitTransition = { screenExit(initialState.destination.route, targetState.destination.route) },
+                popEnterTransition = { screenPopEnter(initialState.destination.route, targetState.destination.route) },
+                popExitTransition = { screenPopExit(initialState.destination.route, targetState.destination.route) },
+            ) {
                 composable(Route.Inbox) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { InboxScreen(onOpen = { nav.navigate(Route.doc(it)) }, onScan = { nav.navigate(Route.Scan) }) } }
                 composable(Route.Docs) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { DocumentsScreen(onOpen = { nav.navigate(Route.doc(it)) }, onScan = { nav.navigate(Route.Scan) }) } }
                 composable(Route.Ask) { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().statusBarsPadding()) { AskScreen(onOpenDoc = { id, page -> nav.navigate(Route.doc(id, page)) }) } }

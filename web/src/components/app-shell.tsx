@@ -23,6 +23,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { api, setUnauthorizedHandler } from "@/lib/api";
 import { useAIEnabled, useMe, useSavedViews, useStats, useStatus } from "@/lib/queries";
+import { isAuthPage, safeRedirect } from "@/lib/redirect";
 import { cn, modKey, setDateFormat, spaceDot, spaceLabel } from "@/lib/utils";
 import { applyTheme, useUI } from "@/stores/ui";
 import { useUploads } from "@/stores/uploads";
@@ -66,7 +67,7 @@ export function AppLayout() {
   React.useEffect(() => {
     setUnauthorizedHandler(() => {
       const here = window.location.pathname + window.location.search;
-      if (!window.location.pathname.startsWith("/login")) navigate({ to: "/login", search: { redirect: here } });
+      if (!isAuthPage(window.location.pathname)) navigate({ to: "/login", search: { redirect: safeRedirect(here) } });
     });
   }, [navigate]);
 
@@ -75,10 +76,12 @@ export function AppLayout() {
   }, [status.data, navigate]);
 
   React.useEffect(() => {
-    if (me.error && (me.error as { status?: number }).status === 401) {
-      navigate({ to: "/login", search: { redirect: location.href !== "/" ? location.href : undefined } });
+    // Already on its way to the login page: going again would wrap the URL in another
+    // ?redirect= each time (and send people back to the login page after signing in).
+    if (me.error && (me.error as { status?: number }).status === 401 && !isAuthPage(location.pathname)) {
+      navigate({ to: "/login", search: { redirect: safeRedirect(location.href) } });
     }
-  }, [me.error, navigate, location.href]);
+  }, [me.error, navigate, location.href, location.pathname]);
 
   React.useEffect(() => {
     if (me.data) setDateFormat(me.data.date_format);

@@ -124,8 +124,11 @@ services:
     image: ghcr.io/anand34577/docveta-worker-rknn:${DOCVETA_VERSION:-latest}
     restart: unless-stopped
     depends_on: [docveta]
+    # The NPU is reached through /dev/dri on current kernels (Rockchip 6.1 BSP, Armbian, Ubuntu
+    # Rockchip). Older BSP kernels expose /dev/rknpu instead: if `ls /dev/rknpu` shows it on the
+    # host, add "- /dev/rknpu:/dev/rknpu" below. (Listing a device the host doesn't have stops
+    # the container from starting.)
     devices:
-      - /dev/rknpu:/dev/rknpu
       - /dev/dri:/dev/dri
     environment:
       DOCVETA_URL: http://docveta:8080

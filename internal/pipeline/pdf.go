@@ -161,5 +161,58 @@ func HasUsableText(s string) bool {
 	if total == 0 || replacement*20 > total {
 		return false
 	}
+	if LegacyIndicText(s) {
+		return false // looks like text, reads as nonsense: recognise the page instead
+	}
 	return letters*100/total >= 50
+}
+
+// Characters the Walkman-Chanakya / DV-TT family of pre-Unicode Hindi fonts (used by exam
+// boards, government offices, many Indian publishers) store in place of Devanagari. A PDF
+// typeset in them has a text layer like "¬⁄UËˇÊÊ ¬ÈÁSÃ∑§Ê" for "परीक्षा पुस्तिका". The set
+// leaves out characters ordinary European text uses (ß, ç, é, ’, §, ¿, ﬁ ligatures).
+const chanakyaChars = "¬∑◊⁄ˇ∞∏≈∆˝˛‡Ÿÿ‚¥›‹Œ„÷∫¸´ÅÊÈÁËÃÒÙÓÔÛÚÀÕÉ"
+
+// Words Kruti Dev and similar ASCII-mapped Hindi fonts produce for very common Hindi words
+// (है, का, के, की, में, से, और, यह, कि, तो, भी, नहीं, पर, ने, को, हो, था, लिए, आप, एक).
+var krutiWords = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields("gS gSa dk ds dh esa ls vkSj ;g ;s fd rks Hkh ugha ij us dks gks Fkk FkkA fy, vki ,d djsa djuk tks bl ml") {
+		krutiWords[w] = true
+	}
+}
+
+// LegacyIndicText reports whether text comes from a pre-Unicode Hindi font: it looks like
+// letters and symbols but isn't readable, so search and Ask would see nonsense.
+func LegacyIndicText(s string) bool {
+	nonSpace, odd, oddLines := 0, 0, 0
+	for _, line := range strings.Split(s, "\n") {
+		lineChars, lineOdd := 0, 0
+		for _, r := range line {
+			if unicode.IsSpace(r) {
+				continue
+			}
+			lineChars++
+			if strings.ContainsRune(chanakyaChars, r) {
+				lineOdd++
+			}
+		}
+		nonSpace += lineChars
+		odd += lineOdd
+		if lineOdd >= 3 && lineOdd*5 >= lineChars { // a fifth of the line
+			oddLines++
+		}
+	}
+	if odd >= 12 && (odd*100 >= nonSpace*3 || oddLines >= 3) {
+		return true
+	}
+	words, kruti := 0, 0
+	for _, w := range strings.Fields(s) {
+		words++
+		if krutiWords[strings.TrimRight(w, ".,")] || krutiWords[w] {
+			kruti++
+		}
+	}
+	return kruti >= 6 && kruti*100 >= words*8
 }
