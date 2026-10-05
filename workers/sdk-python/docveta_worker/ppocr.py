@@ -353,7 +353,7 @@ def read_lines(boxes: list[TextBox], read: Callable[[TextBox, str], Optional[Rec
     def conf(r: Optional[RecResult]) -> float:
         return r.confidence if r is not None else 0.0
 
-    primary, others, retry = order[0], order[1:], min_conf + 0.1
+    primary, others = order[0], order[1:]
     if others:
         widest = sorted(range(len(boxes)), key=lambda i: boxes[i].rect[0] - boxes[i].rect[2])[:sample]
         score = {sc: 0.0 for sc in order}
@@ -367,13 +367,12 @@ def read_lines(boxes: list[TextBox], read: Callable[[TextBox, str], Optional[Rec
             # well, and ones that clearly read at least one sampled line (a few Hindi lines).
             clear = {sc for sc in order for i in widest if conf(get(i, sc)) >= alt_conf}
             others = [sc for sc in order if sc != primary and (sc in hinted or sc in clear or score[sc] >= 0.5)]
-            retry = retry_below
-        # When the hinted script is clearly right, only lines it can't read at all are tried
-        # with the other scripts: a Hindi line on an English page, not every faint stamp.
+    # Lines the page's script reads poorly are tried with the others: the English reader turns a
+    # Hindi line into confident-looking Latin letters (0.7-0.8), so a low bar would miss it.
     out: list[tuple[TextBox, RecResult]] = []
     for i, b in enumerate(boxes):
         best = get(i, primary)
-        if conf(best) < retry:
+        if conf(best) < retry_below:
             for sc in others:
                 r = get(i, sc)
                 # Another script must read the line clearly, or noise turns into foreign text.

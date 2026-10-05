@@ -7,18 +7,9 @@ import android.content.IntentFilter
 import android.graphics.BitmapFactory
 import android.os.BatteryManager
 import android.os.PowerManager
-import com.google.android.gms.common.moduleinstall.ModuleInstall
-import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
-import com.google.android.gms.tasks.Task
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.TextRecognizer
-import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
 /** Pages of a scan kept beside the queued PDF until the phone has read their text. */
@@ -26,25 +17,29 @@ import kotlinx.serialization.Serializable
 data class OcrPageFile(val file: String, val width: Int, val height: Int, val gray: Boolean = false)
 
 /**
- * Reading a scan's text on the phone (Google's on-device text recognition, through Play services).
- * The words go into the PDF as an invisible text layer, so the file is searchable on its own and
- * the server uses that text instead of reading the pages again.
+ * Reading a scan's text on the phone, with the same PaddleOCR models as the server's OCR engine
+ * ([OnnxOcr], [OcrModels]): offline, no Google services. The words go into the PDF as an invisible
+ * text layer, so the file is searchable on its own and the server uses that text instead of
+ * reading the pages again.
  *
  * It runs in the background after the scan is queued (it carries on if the app is closed), only
  * on phones that can spare the memory and battery, and never holds an upload back: if anything
  * fails, the scan goes as it is and the server reads it.
  */
 object PhoneOcr {
-    /** Languages written in Devanagari; their recognizer also reads English. */
-    private val devanagariLanguages = setOf("hi", "mr", "ne", "sa", "kok", "mai", "bho", "doi", "brx", "new")
-
-    /** Which recognizer suits a space's language ("" or "auto": guess from the phone). */
+    /**
+     * The script a space's language suggests ("" or "auto": guess from the phone). Only a hint:
+     * each page's script is worked out from its text.
+     */
     fun script(language: String?): String {
-        val lang = language?.lowercase()?.takeIf { it.isNotBlank() && it != "auto" }?.substringBefore('-')
-        if (lang != null) return if (lang in devanagariLanguages) "devanagari" else "latin"
+        val lang = language?.takeIf { it.isNotBlank() && it.lowercase() != "auto" }
+        if (lang != null) return PpOcr.scriptOf(lang) ?: "en"
         val l = java.util.Locale.getDefault()
-        return if (l.language in devanagariLanguages || l.country == "IN") "devanagari" else "latin"
+        return PpOcr.scriptOf(l.language)?.takeIf { it != "en" } ?: if (l.country == "IN") "devanagari" else "en"
     }
+
+    /** Scans queued by older versions say "latin" for English. */
+    private fun normalised(script: String) = if (script == "latin") "en" else script
 
     /** "auto": read here when the server can't read text itself; "on": whenever the phone can; "off": never. */
     fun wanted(mode: String, serverReadsText: Boolean) = when (mode) {
@@ -53,8 +48,12 @@ object PhoneOcr {
         else -> !serverReadsText
     }
 
-    /** Whether the phone can spare it now: not a low-memory phone, not in battery saver, not nearly flat. */
+    /** Whether this phone can read text at all: a 64-bit phone (the app carries no reader for 32-bit ones) and a build with the models. */
+    fun supported(ctx: Context) = android.os.Process.is64Bit() && OcrModels.present(ctx)
+
+    /** Whether the phone can spare it now: a supported phone with the memory, not in battery saver, not nearly flat. */
     fun canRunNow(ctx: Context): Boolean {
+        if (!supported(ctx)) return false
         val am = ctx.getSystemService(ActivityManager::class.java)
         val mem = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
         if (am.isLowRamDevice || mem.totalMem < 2_500_000_000L || mem.lowMemory) return false
@@ -66,68 +65,47 @@ object PhoneOcr {
         return charging || level < 0 || level * 100 / scale >= 20
     }
 
-    private fun recognizer(script: String): TextRecognizer =
-        if (script == "devanagari") TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
-        else TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-
-    /** Asks Play services to fetch the recognizer now, so it's there for the next scan. */
+    /** Gets [script]'s reader ready for the next scan: Tamil, Telugu and Kannada are fetched once (on Wi-Fi). */
     fun prepare(ctx: Context, script: String) {
-        val r = recognizer(script)
-        runCatching { ModuleInstall.getClient(ctx).installModules(ModuleInstallRequest.newBuilder().addApi(r).build()).addOnCompleteListener { r.close() } }
-            .onFailure { r.close() }
+        OcrModels.fetch(ctx, normalised(script), anyNetwork = false)
     }
 
     /**
      * Reads the pages in [dir] and writes [pdf] again with their text. Returns false when there was
-     * nothing to add (no text found, or recognition isn't available on this phone).
+     * nothing to add (no text found, or this build has no models).
      */
-    suspend fun makeSearchable(dir: File, pdf: File, title: String, script: String): Boolean {
-        val list = File(dir, "pages.json").takeIf { it.exists() } ?: return false
+    suspend fun makeSearchable(ctx: Context, dir: File, pdf: File, title: String, script: String): Boolean = withContext(Dispatchers.Default) {
+        val list = File(dir, "pages.json").takeIf { it.exists() } ?: return@withContext false
         val pages = app.docveta.android.data.AppJson.decodeFromString(kotlinx.serialization.builtins.ListSerializer(OcrPageFile.serializer()), list.readText())
-        val r = recognizer(script)
-        try {
+        val scripts = OcrModels.available(ctx)
+        if (scripts.isEmpty()) return@withContext false
+        OnnxOcr({ OcrModels.model(ctx, it) }, { OcrModels.dict(ctx, it) }, scripts).use { ocr ->
             var anyText = false
             val out = pages.map { p ->
                 val jpeg = File(dir, p.file).readBytes()
-                val words = read(r, jpeg, p.width)
+                val words = read(ocr, jpeg, p.width, listOf(normalised(script)))
                 if (words.isNotEmpty()) anyText = true
                 PdfPageImage(jpeg, p.width, p.height, p.gray, words)
             }
-            if (!anyText) return false
+            if (!anyText) return@withContext false
             val tmp = File(pdf.parentFile, pdf.name + ".part")
             tmp.outputStream().use { PdfWriter.write(out, it, title) }
             if (!tmp.renameTo(pdf)) {
                 tmp.copyTo(pdf, overwrite = true)
                 tmp.delete()
             }
-            return true
-        } finally {
-            r.close()
+            true
         }
     }
 
     /** Words on one page, in the page's own pixels. Big pages are read at most 2000 px wide (enough for text, kind to memory). */
-    private suspend fun read(r: TextRecognizer, jpeg: ByteArray, width: Int): List<PdfWord> {
+    private fun read(ocr: OnnxOcr, jpeg: ByteArray, width: Int, hinted: List<String>): List<PdfWord> {
         var sample = 1
         while (width / (sample * 2) >= 2000) sample *= 2
         val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return emptyList()
-        try {
-            val k = width.toFloat() / bmp.width
-            val text = r.process(InputImage.fromBitmap(bmp, 0)).await()
-            return text.textBlocks.flatMap { b -> b.lines }.flatMap { line ->
-                line.elements.mapNotNull { e ->
-                    val box = e.boundingBox ?: return@mapNotNull null
-                    PdfWord(e.text, box.left * k, box.top * k, box.width() * k, box.height() * k, last = e === line.elements.last())
-                }
-            }
-        } finally {
-            bmp.recycle()
-        }
-    }
-
-    private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { c ->
-        addOnSuccessListener { c.resume(it) }
-        addOnFailureListener { c.resumeWithException(it) }
-        addOnCanceledListener { c.cancel() }
+        val k = width.toFloat() / bmp.width
+        val page = ImageIO.toRaster(bmp)
+        bmp.recycle()
+        return ocr.readPage(page, hinted).map { it.copy(x = it.x * k, y = it.y * k, w = it.w * k, h = it.h * k) }
     }
 }

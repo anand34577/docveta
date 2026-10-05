@@ -260,9 +260,14 @@ jobs:
   # base64), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD (Settings,
   # Secrets and variables, Actions, *Secrets* tab: variables are not passed to this job).
   android:
+    needs: models # the app carries the text finder and the English and Devanagari readers
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: models
+          path: workers/onnx/models
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -350,6 +355,8 @@ jobs:
           cp artifacts/android/*.apk dist/
           cp deploy/linux/get-docveta.sh dist/ # releases/latest/download/get-docveta.sh
           (cd artifacts/models && zip -qr "../../dist/docveta-ocr-models-$V.zip" .)
+          # The readers the Android app downloads when a scan needs them (it checks their SHA-256).
+          for f in artifacts/models/rec_*.onnx; do cp "$f" "dist/docveta-ocr-$(basename "$f")"; done
           cd dist && sha256sum * > SHA256SUMS && ls -la
       - name: Create release
         env:

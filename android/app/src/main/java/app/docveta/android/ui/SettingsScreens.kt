@@ -53,6 +53,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -95,6 +98,9 @@ import app.docveta.android.data.unlinkIdentity
 import app.docveta.android.data.updateProfile
 import app.docveta.android.data.updateView
 import app.docveta.android.data.RecoveryCodes
+import app.docveta.android.scan.OcrModels
+import app.docveta.android.scan.PhoneOcr
+import app.docveta.android.scan.PpOcr
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -675,19 +681,55 @@ fun PhoneSettingsScreen(onBack: () -> Unit) {
     Page("This phone", onBack) {
         SectionLabel("Scanner")
         ToggleRow("Take the picture by itself", "When the page is found and held still.", auto) { auto = it; s.autoCapture = it }
-        SelectField("Read the text on this phone", listOf("auto" to "Automatic", "on" to "Always", "off" to "Never"), ocr) { ocr = it; s.phoneOcr = it }
-        Hint(
-            when (ocr) {
-                "on" -> "Scans are read here before they're sent, so the server doesn't have to. It works offline and in the background, and is skipped in battery saver, on low battery and on phones with little memory."
-                "off" -> "The server reads every scan."
-                else -> "Scans are read here only when the server can't read text itself" +
-                    (if (s.serverReadsText) " (yours can, so the server does it)." else " (yours can't right now, so the phone does it).") +
-                    " Skipped in battery saver, on low battery and on phones with little memory."
-            },
-        )
+        if (!PhoneOcr.supported(c.context)) Hint("This phone can't read scans' text itself (it needs a 64-bit phone); the server reads them.")
+        else PhoneOcrSettings(ocr) { ocr = it; s.phoneOcr = it }
         SectionLabel("Uploads")
         ToggleRow("Wi-Fi only", "Wait for Wi-Fi before sending, to save mobile data.", wifi) { wifi = it; s.wifiOnlyUploads = it; c.uploads.schedule() }
         SectionLabel("Security")
         ToggleRow("Lock the app", "Ask for your fingerprint, face or screen lock when opening Docveta.", lock) { lock = it; s.appLock = it }
     }
+}
+
+/** Reading text on the phone: when, and in which languages (Tamil, Telugu and Kannada are downloaded once). */
+@Composable
+private fun PhoneOcrSettings(ocr: String, onChange: (String) -> Unit) {
+    val c = LocalContainer.current
+    val s = c.session
+    val ctx = c.context
+    SelectField("Read the text on this phone", listOf("auto" to "Automatic", "on" to "Always", "off" to "Never"), ocr) { onChange(it) }
+    Hint(
+        when (ocr) {
+            "on" -> "Scans are read here before they're sent, so the server doesn't have to. It works offline and in the background, and is skipped in battery saver, on low battery and on phones with little memory."
+            "off" -> "The server reads every scan."
+            else -> "Scans are read here only when the server can't read text itself" +
+                (if (s.serverReadsText) " (yours can, so the server does it)." else " (yours can't right now, so the phone does it).") +
+                " Skipped in battery saver, on low battery and on phones with little memory."
+        },
+    )
+    if (ocr == "off") return
+    SectionLabel("Languages it reads")
+    // Re-read when a download finishes or a language is removed.
+    var changed by remember { mutableStateOf(0) }
+    val available = remember(changed) { OcrModels.available(ctx) }
+    val downloadable = remember(changed) { OcrModels.downloadable(ctx) }
+    for (script in PpOcr.SCRIPTS.filter { it in available || it in downloadable }) key(script) {
+        val name = OcrModels.NAMES.getValue(script)
+        val downloading by OcrModels.fetching(ctx, script).collectAsState(false)
+        LaunchedEffect(downloading) { if (!downloading) changed++ }
+        val bundled = script == "en" || script == "devanagari"
+        ItemRow(
+            name,
+            detail = when {
+                script in available -> if (bundled) "Included" else "Downloaded"
+                downloading -> "Downloading… (about 9 MB)"
+                else -> "Not on this phone (about 9 MB)"
+            },
+        ) {
+            when {
+                script in available && !bundled -> TextButton({ OcrModels.remove(ctx, script); changed++ }) { Text("Remove") }
+                script !in available && !downloading -> TextButton({ OcrModels.fetch(ctx, script, anyNetwork = true) }) { Text("Download") }
+            }
+        }
+    }
+    Hint("Each page's language is recognised from its text. Text in a language that isn't here yet isn't read on the phone; that language is downloaded on Wi-Fi for the next scans.")
 }

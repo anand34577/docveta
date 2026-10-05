@@ -4,22 +4,54 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Finds the page in a photo: a paper rectangle against a darker (or lighter) surface.
+ * Finds the page in a photo. Two ways, on small greyscale copies:
  *
- * Works on a small greyscale copy: blur, split light from dark with Otsu's threshold, take the
- * biggest connected blob, and fit the four-sided shape that best covers its convex hull. No native
- * code and no Google services, so it behaves the same on every phone and is unit-tested on the JVM.
+ * - by brightness: blur, split light from dark with Otsu's threshold, take the biggest connected
+ *   blob and fit the four-sided shape that best covers its convex hull. Good for paper on a
+ *   darker (or lighter) surface;
+ * - by outline ([PageEdges]): straight lines among the edges, combined into the four-sided shape
+ *   best backed by real edges. This finds a white page on a light desk or on busy fabric.
  *
- * ponytail: brightness-based only. White paper on a white desk, or a page lying on busy fabric,
- * returns null and the crop screen starts from an adjustable default instead. A gradient-based
- * second pass (Canny + Hough lines) is the upgrade if that proves common.
+ * Every candidate is scored the same way and the winner's sides are fitted to the edges, so
+ * corners land within a pixel or so. No native code and no Google services, so it behaves the
+ * same on every phone and is unit-tested on the JVM.
  */
 object DocumentDetector {
     private const val WORK_SIDE = 240
 
+    /** Size of the copy the outline is looked for in: the live camera uses the default, a still photo can afford more. */
+    const val LIVE_EDGE_SIDE = 320
+    const val PHOTO_EDGE_SIDE = 640
+
     /** [luma] is row-major 8-bit brightness, [w] x [h]. The result is in that picture's coordinates. */
-    fun detect(luma: ByteArray, w: Int, h: Int): Quad? {
+    fun detect(luma: ByteArray, w: Int, h: Int, edgeSide: Int = LIVE_EDGE_SIDE): Quad? {
         if (w < 32 || h < 32 || luma.size < w * h) return null
+        val byBrightness = byBrightness(luma, w, h)
+
+        val small = downscale(luma, w, h, edgeSide)
+        val blurred = boxBlur(boxBlur(small.px, small.w, small.h), small.w, small.h)
+        val edges = EdgeMap.of(blurred, small.w, small.h)
+        val toSmall = small.w.toFloat() / w
+        val candidates = ArrayList<Pair<Quad, Boolean>>() // quad in the small copy, found by brightness
+        byBrightness?.let { candidates.add(it.scaled(toSmall, small.h.toFloat() / h) to true) }
+        PageEdges.candidates(edges, blurred).forEach { candidates.add(it.quad to false) }
+        var best: Quad? = null
+        var bestScore = 0f
+        for ((q, bright) in candidates) {
+            // The fitted corners when they still make a plausible page, else the rough ones.
+            val refined = PageEdges.refine(q, edges, blurred)
+            val (quad, s) = PageEdges.score(refined, edges, blurred, bright)?.let { refined to it }
+                ?: PageEdges.score(q, edges, blurred, bright)?.let { q to it }
+                ?: continue
+            if (s > bestScore) {
+                bestScore = s
+                best = quad
+            }
+        }
+        return best?.scaled(w.toFloat() / small.w, h.toFloat() / small.h)
+    }
+
+    private fun byBrightness(luma: ByteArray, w: Int, h: Int): Quad? {
         val small = downscale(luma, w, h, WORK_SIDE)
         val sw = small.w
         val sh = small.h
@@ -36,9 +68,9 @@ object DocumentDetector {
         return q.scaled(w.toFloat() / sw, h.toFloat() / sh)
     }
 
-    private class Small(val w: Int, val h: Int, val px: ByteArray)
+    internal class Small(val w: Int, val h: Int, val px: ByteArray)
 
-    private fun downscale(src: ByteArray, w: Int, h: Int, side: Int): Small {
+    internal fun downscale(src: ByteArray, w: Int, h: Int, side: Int): Small {
         val f = max(w, h).toFloat() / side
         if (f <= 1f) return Small(w, h, src.copyOf(w * h))
         val sw = max(1, (w / f).toInt())
@@ -58,7 +90,7 @@ object DocumentDetector {
         return Small(sw, sh, out)
     }
 
-    private fun boxBlur(src: ByteArray, w: Int, h: Int): ByteArray {
+    internal fun boxBlur(src: ByteArray, w: Int, h: Int): ByteArray {
         val tmp = IntArray(w * h)
         for (y in 0 until h) for (x in 0 until w) {
             var s = 0

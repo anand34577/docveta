@@ -55,8 +55,12 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
         c.session.scanFilter = k.name
     }
 
-    /** Adds a captured or imported photo: made upright, saved at a sensible size, page found. */
-    fun add(open: () -> java.io.InputStream, orientation: Int, onAdded: (ScanPage) -> Unit = {}) {
+    /**
+     * Adds a captured or imported photo: made upright, saved at a sensible size, page found. When
+     * the edges can't be found, a camera shot starts from a slightly inset frame (it surely shows
+     * some table), an imported picture from the whole picture (it is often a scan already).
+     */
+    fun add(open: () -> java.io.InputStream, orientation: Int, fromGallery: Boolean = false, onAdded: (ScanPage) -> Unit = {}) {
         viewModelScope.launch {
             working = true
             try {
@@ -69,8 +73,9 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
                     val px = IntArray(bmp.width * bmp.height)
                     bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
                     for (i in px.indices) luma[i] = luminance(px[i]).toByte()
-                    val found = DocumentDetector.detect(luma, bmp.width, bmp.height)
-                    val p = ScanPage(id, f, bmp.width, bmp.height, found ?: Quad.inset(bmp.width.toFloat(), bmp.height.toFloat()), found != null, filterForNew)
+                    val found = DocumentDetector.detect(luma, bmp.width, bmp.height, DocumentDetector.PHOTO_EDGE_SIDE)
+                    val fallback = if (fromGallery) Quad.full(bmp.width.toFloat(), bmp.height.toFloat()) else Quad.inset(bmp.width.toFloat(), bmp.height.toFloat())
+                    val p = ScanPage(id, f, bmp.width, bmp.height, found ?: fallback, found != null, filterForNew)
                     bmp.recycle()
                     p
                 }
@@ -91,33 +96,7 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
 
     fun addUri(uri: Uri, resolver: android.content.ContentResolver, onAdded: (ScanPage) -> Unit = {}) {
         val orientation = ImageIO.orientationOf { resolver.openInputStream(uri)!! }
-        add({ resolver.openInputStream(uri)!! }, orientation, onAdded)
-    }
-
-    /** Adds the pages ML Kit's scanner returned, in order, then calls [onDone]. They are already cropped and cleaned up, so they're kept whole and unfiltered. */
-    fun addScanned(uris: List<Uri>, resolver: android.content.ContentResolver, onDone: () -> Unit) {
-        viewModelScope.launch {
-            working = true
-            try {
-                val added = withContext(Dispatchers.Default) {
-                    uris.map { uri ->
-                        val bmp = ImageIO.decodeUpright({ resolver.openInputStream(uri)!! }, ImageIO.orientationOf { resolver.openInputStream(uri)!! }, MAX_SOURCE)
-                        val id = UUID.randomUUID().toString()
-                        val f = File(dir, "$id.jpg")
-                        ImageIO.saveJpeg(bmp, f)
-                        val p = ScanPage(id, f, bmp.width, bmp.height, Quad.full(bmp.width.toFloat(), bmp.height.toFloat()), true, PageFilters.Kind.ORIGINAL)
-                        bmp.recycle()
-                        p
-                    }
-                }
-                pages = pages + added
-                onDone()
-            } catch (e: Exception) {
-                error = "Couldn't use the scanned pages"
-            } finally {
-                working = false
-            }
-        }
+        add({ resolver.openInputStream(uri)!! }, orientation, fromGallery = true, onAdded = onAdded)
     }
 
     fun update(id: String, f: (ScanPage) -> ScanPage) {
@@ -144,7 +123,7 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
             val px = IntArray(bmp.width * bmp.height)
             bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
             val luma = ByteArray(px.size) { luminance(px[it]).toByte() }
-            val found = DocumentDetector.detect(luma, bmp.width, bmp.height)
+            val found = DocumentDetector.detect(luma, bmp.width, bmp.height, DocumentDetector.PHOTO_EDGE_SIDE)
             bmp.recycle()
             found
         }

@@ -69,8 +69,9 @@ val FilterLabels = listOf(
 )
 
 /**
- * Adjust where the page is: four corner handles over the photo, a magnifier while dragging, and
- * "Auto" to let Docveta have another go. Nothing changes the photo itself; only the corners are saved.
+ * Adjust where the page is: four corner handles over the photo, a handle in the middle of each side
+ * to slide that whole edge, a magnifier while dragging, and "Auto" to let Docveta have another go.
+ * Nothing changes the photo itself; only the corners are saved.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -86,7 +87,7 @@ fun CropScreen(session: ScanSession, pageId: String, onBack: () -> Unit) {
     var scale by remember(pageId) { mutableStateOf(1f) } // preview pixels per original pixel
     var preview by remember { mutableStateOf<Bitmap?>(null) }
     var showing by remember { mutableStateOf(false) }
-    var active by remember { mutableStateOf(-1) }
+    var active by remember { mutableStateOf(-1) } // 0..3 a corner, 4..7 the side starting at corner (active - 4)
     var finding by remember { mutableStateOf(false) }
     var turns by remember(pageId) { mutableStateOf(page.turns) }
     var filter by remember(pageId) { mutableStateOf(page.filter) }
@@ -108,7 +109,7 @@ fun CropScreen(session: ScanSession, pageId: String, onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(Color(0xFF111318))) {
         TopAppBar(
-            title = { Text(if (showing) "Result" else "Adjust the corners") }, navigationIcon = { BackButton { onBack() } },
+            title = { Text(if (showing) "Result" else "Fit the page") }, navigationIcon = { BackButton { onBack() } },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, titleContentColor = Color.White, navigationIconContentColor = Color.White, actionIconContentColor = Color.White),
             actions = { TextButton({ commit(); onBack() }) { Text("Done", color = Color.White) } },
         )
@@ -126,21 +127,39 @@ fun CropScreen(session: ScanSession, pageId: String, onBack: () -> Unit) {
                     // Corner positions in box pixels.
                     fun toBox(p: Pt) = Offset(ox + p.x * scale * k, oy + p.y * scale * k)
                     fun fromBox(o: Offset) = Pt(((o.x - ox) / (scale * k)).coerceIn(0f, page.width.toFloat()), ((o.y - oy) / (scale * k)).coerceIn(0f, page.height.toFloat()))
+                    fun midpoint(q: Quad, side: Int) = toBox(q.points[side]).let { a -> val b = toBox(q.points[(side + 1) % 4]); Offset((a.x + b.x) / 2f, (a.y + b.y) / 2f) }
+                    fun handle(q: Quad, i: Int) = if (i < 4) toBox(q.points[i]) else midpoint(q, i - 4)
                     Canvas(
                         Modifier.fillMaxSize().pointerInput(pageId, k, ox, oy, scale) {
                             val grab = 56.dp.toPx()
                             detectDragGestures(
                                 onDragStart = { start ->
-                                    val pts = quad.points.map { toBox(it) }
-                                    val i = pts.indices.minBy { (pts[it] - start).getDistance() }
-                                    active = if ((pts[i] - start).getDistance() <= grab * 1.6f) i else -1
+                                    // Corners win when both are in reach: they're the finer control.
+                                    val corner = (0 until 4).minBy { (handle(quad, it) - start).getDistance() }
+                                    val side = (4 until 8).minBy { (handle(quad, it) - start).getDistance() }
+                                    active = when {
+                                        (handle(quad, corner) - start).getDistance() <= grab * 1.6f -> corner
+                                        (handle(quad, side) - start).getDistance() <= grab * 1.2f -> side
+                                        else -> -1
+                                    }
                                 },
                                 onDragEnd = { active = -1 },
                                 onDragCancel = { active = -1 },
                                 onDrag = { change, delta ->
                                     if (active >= 0) {
                                         change.consume()
-                                        val moved = quad.moved(active, fromBox(toBox(quad.points[active]) + delta))
+                                        val moved = if (active < 4) quad.moved(active, fromBox(toBox(quad.points[active]) + delta))
+                                        else {
+                                            // Slide the side along its own normal, so it keeps its angle.
+                                            val i = active - 4
+                                            val j = (i + 1) % 4
+                                            val a = toBox(quad.points[i])
+                                            val b = toBox(quad.points[j])
+                                            val len = (b - a).getDistance().coerceAtLeast(1f)
+                                            val n = Offset(-(b.y - a.y) / len, (b.x - a.x) / len)
+                                            val push = n * (delta.x * n.x + delta.y * n.y)
+                                            quad.moved(i, fromBox(a + push)).moved(j, fromBox(b + push))
+                                        }
                                         if (moved.isConvex()) quad = moved // a bow-tie isn't a page
                                     }
                                 },
@@ -155,6 +174,11 @@ fun CropScreen(session: ScanSession, pageId: String, onBack: () -> Unit) {
                         // Dim everything outside the page.
                         clipPath(path, ClipOp.Difference) { drawRect(Color.Black.copy(alpha = 0.55f), Offset(ox, oy), Size(img.width * k, img.height * k)) }
                         drawPath(path, Color(0xFF6C8CFF), style = Stroke(width = 2.5.dp.toPx()))
+                        for (i in 4 until 8) {
+                            val c = handle(quad, i)
+                            drawCircle(Color.White, 9.dp.toPx(), c)
+                            drawCircle(if (i == active) Color(0xFF22C55E) else Color(0xFF4F6BED), 6.dp.toPx(), c)
+                        }
                         quad.points.forEachIndexed { i, pt ->
                             val c = toBox(pt)
                             drawCircle(Color.White, 14.dp.toPx(), c)
@@ -162,7 +186,7 @@ fun CropScreen(session: ScanSession, pageId: String, onBack: () -> Unit) {
                         }
                         // Magnifier: shows the area under the finger, in the corner farthest from it.
                         if (active >= 0) {
-                            val c = toBox(quad.points[active])
+                            val c = handle(quad, active)
                             val r = 56.dp.toPx()
                             val left = c.x < size.width / 2
                             val centre = Offset(if (left) size.width - r - 8.dp.toPx() else r + 8.dp.toPx(), r + 8.dp.toPx())

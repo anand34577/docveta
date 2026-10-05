@@ -2,12 +2,12 @@
 
 Kotlin + Jetpack Compose client for a Docveta server.
 
-Scanning uses Google's ML Kit document scanner (live edge detection, crop, clean-up, gallery
-import) where Google Play services are available (`scan/MlKitScan.kt`). Its pages go into the
-app's own review: reorder, one combined PDF or separate pictures, upload to the server. Phones
-without Play services fall back to the built-in scanner (page detection, crop, perspective
-correction, filters, PDF writer), plain Kotlin in `app/src/main/java/app/docveta/android/scan/`,
-unit-tested on the JVM.
+Scanning is the app's own: live page detection, automatic capture, gallery import, crop with corner
+and edge handles, perspective correction, filters and the PDF writer are plain Kotlin in
+`app/src/main/java/app/docveta/android/scan/`, unit-tested on the JVM. No Google Play services or
+native libraries are needed, so it works the same on every phone, offline. Pages are found by
+brightness (paper against a darker or lighter surface) and by outline (straight edges, so a white
+page on a light desk or busy cloth is found too); see `DocumentDetector` and `PageEdges`.
 
 ## Build
 
@@ -16,8 +16,13 @@ Needs JDK 17 and the Android SDK (platform 34). Create `local.properties` with
 
 ```
 ./gradlew assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
-./gradlew testDebugUnitTest    # scanner, upload and API tests
+./gradlew testDebugUnitTest    # scanner, OCR, upload and API tests
+./gradlew connectedDebugAndroidTest  # reads a page with the real models on a phone or emulator
 ```
+
+The OCR models are taken from `workers/onnx/models` (or `DOCVETA_OCR_MODELS`): build them with
+`workers/onnx/convert.py`, or unpack a release's `docveta-ocr-models-<version>.zip` there. Without
+them the app still builds; it just leaves reading text to the server.
 
 ## Releases
 
@@ -35,7 +40,10 @@ scanning), settings (profile, security, notifications, tokens) and, for administ
 Administration area. It can also set up a new server and accept invitation links.
 
 Scanning works without the server: scans wait in the upload queue. The phone can also read a
-scan's text itself (Settings → This phone) and send a searchable PDF.
+scan's text itself (Settings → This phone) and send a searchable PDF. It uses the same PaddleOCR
+models as the server's OCR engine, on ONNX Runtime (`scan/PpOcr.kt`, `scan/OnnxOcr.kt`), offline
+and without Google services. English and Devanagari come with the app; Tamil, Telugu and Kannada
+are downloaded once from the release when needed. 32-bit phones leave reading to the server.
 
 ## Signing in
 
@@ -45,8 +53,8 @@ that only offer single sign-on: create a token in the web app (Settings, API tok
 
 ## Known limits
 
-- The built-in scanner's page detection is brightness-based: white paper on a white desk falls back to adjustable
-  corners (see `DocumentDetector`).
+- A page the scanner can't find (white paper on an equally white desk, say) opens the crop screen
+  so the corners can be placed by hand.
 - The interface is English only for now (so is the web app).
 - Changing the password, two-step sign-in and creating API tokens ask for your password: the
   server only allows these from a fresh sign-in, never with the phone's stored token. People who

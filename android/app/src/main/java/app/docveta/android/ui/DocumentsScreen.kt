@@ -667,7 +667,7 @@ fun StatsBanner() {
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).background(androidx.compose.ui.graphics.Color(0x22F59E0B), RoundedCornerShape(12.dp)).padding(12.dp), verticalAlignment = Alignment.Top) {
         Icon(Icons.Outlined.Warning, null, tint = androidx.compose.ui.graphics.Color(0xFFB77900), modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(10.dp))
-        val phone = LocalContainer.current.session.phoneOcr != "off"
+        val phone = LocalContainer.current.session.phoneOcr != "off" && app.docveta.android.scan.PhoneOcr.supported(androidx.compose.ui.platform.LocalContext.current)
         Text(
             "No text-reading worker is connected. Scans and photos wait until one is; PDFs with real text are searchable already." +
                 if (phone) " Scans from this phone are read here." else "",

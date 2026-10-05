@@ -5,6 +5,28 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Android: no more Google ML Kit.** The app no longer needs Google Play services for anything.
+- **Android: reading a scan's text on the phone now uses the server's own OCR** (PaddleOCR, on
+  ONNX Runtime), so phone and server read pages the same way. Each page's language is worked out
+  from its text, and a Hindi line on an English form is read as Hindi. English and Devanagari
+  (Hindi, Marathi, Nepali…) come with the app; **Tamil, Telugu and Kannada**, new on the phone,
+  are downloaded once (about 9 MB each) when a space needs them, or in Settings → This phone.
+  The app is larger (about 36 MB). 32-bit phones leave reading text to the server.
+- OCR engine: a line the page's main language reads poorly is now tried in the other languages
+  too, so Hindi lines on English forms (and the other way round) are no longer lost.
+- **Android: scanning no longer uses Google's ML Kit document scanner.** The app's own scanner
+  does it all, on every phone, offline and without Google Play services. Finding the page is
+  better: besides paper against a darker surface, it now finds a white page on a light desk or on
+  busy cloth by its outline, and places the corners to within a pixel or two.
+- Android: cropping a scan has a handle in the middle of each side to slide that whole edge, as
+  well as the corner handles. A photo whose page couldn't be found opens the crop screen right
+  away; a picture from the gallery whose edges can't be found keeps the whole picture instead of
+  being trimmed.
+
+### Fixed
+- Android: the shutter button stayed greyed out after a photo couldn't be saved.
+
 ## [0.8.0] - 2026-10-05
 
 ### Added
