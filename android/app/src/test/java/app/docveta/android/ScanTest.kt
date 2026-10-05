@@ -20,8 +20,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** A "document": white paper with rows of dark text-like marks and a border box. */
-private fun paper(w: Int, h: Int): Raster {
+/** A "document": white paper with rows of dark text-like marks and (unless told otherwise) a border box. */
+private fun paper(w: Int, h: Int, border: Boolean = true): Raster {
     val px = IntArray(w * h) { -1 }
     fun dark(x: Int, y: Int) { px[y * w + x] = 0xFF202020.toInt() }
     // Text lines: short dashes every 14 px.
@@ -35,13 +35,15 @@ private fun paper(w: Int, h: Int): Raster {
         }
         y += 18
     }
-    for (x in 8 until w - 8) { dark(x, 8); dark(x, h - 9) }
-    for (yy in 8 until h - 8) { dark(8, yy); dark(w - 9, yy) }
+    if (border) {
+        for (x in 8 until w - 8) { dark(x, 8); dark(x, h - 9) }
+        for (yy in 8 until h - 8) { dark(8, yy); dark(w - 9, yy) }
+    }
     return Raster(w, h, px)
 }
 
 /** Photographs [doc] onto a [bg]-coloured table: the page lands on [quad] in a w x h picture, with noise. */
-private fun photo(doc: Raster, quad: Quad, w: Int, h: Int, bg: Int, noise: Int = 6, seed: Long = 1): Raster {
+private fun photo(doc: Raster, quad: Quad, w: Int, h: Int, bg: Int, noise: Int = 6, seed: Long = 1, surface: ((Int, Int) -> Int)? = null): Raster {
     val hm = Rectifier.homography(
         doubleArrayOf(quad.tl.x.toDouble(), quad.tl.y.toDouble(), quad.tr.x.toDouble(), quad.tr.y.toDouble(), quad.br.x.toDouble(), quad.br.y.toDouble(), quad.bl.x.toDouble(), quad.bl.y.toDouble()),
         doubleArrayOf(0.0, 0.0, doc.w.toDouble(), 0.0, doc.w.toDouble(), doc.h.toDouble(), 0.0, doc.h.toDouble()),
@@ -52,7 +54,7 @@ private fun photo(doc: Raster, quad: Quad, w: Int, h: Int, bg: Int, noise: Int =
         val d = hm[6] * x + hm[7] * y + 1.0
         val u = (hm[0] * x + hm[1] * y + hm[2]) / d
         val v = (hm[3] * x + hm[4] * y + hm[5]) / d
-        var c = bg
+        var c = surface?.invoke(x, y) ?: bg
         if (u >= 0 && v >= 0 && u < doc.w && v < doc.h) c = doc.px[v.toInt() * doc.w + u.toInt()]
         val n = if (noise > 0) rnd.nextInt(noise * 2 + 1) - noise else 0
         fun ch(shift: Int) = (((c shr shift) and 0xFF) + n).coerceIn(0, 255)
@@ -92,6 +94,48 @@ class DetectorTest {
         val found = DocumentDetector.detect(img.luma(), img.w, img.h)
         assertNotNull(found)
         assertTrue(cornersClose(found!!, truth, 0.03f * hypot(720f, 600f)))
+    }
+
+    @Test
+    fun findsAWhitePageOnANearlyWhiteDesk() {
+        // Too little brightness difference for the brightness pass: only the outline gives it away.
+        val truth = Quad(Pt(130f, 70f), Pt(590f, 105f), Pt(570f, 560f), Pt(110f, 520f))
+        val img = photo(paper(420, 594, border = false), truth, 720, 600, 0xFFEEEEEE.toInt(), noise = 4)
+        val found = DocumentDetector.detect(img.luma(), img.w, img.h) // the live camera's size
+        assertNotNull("page not found", found)
+        assertTrue("corners off: $found vs $truth", cornersClose(found!!, truth, 0.015f * hypot(720f, 600f)))
+    }
+
+    @Test
+    fun findsAWhitePageWithABorderPrintedCloseToItsEdge() {
+        // The ruled border is a stronger line than the paper's own edge; the corners must still go to the paper.
+        val truth = Quad(Pt(130f, 70f), Pt(590f, 105f), Pt(570f, 560f), Pt(110f, 520f))
+        val img = photo(doc, truth, 720, 600, 0xFFEEEEEE.toInt(), noise = 4)
+        val found = DocumentDetector.detect(img.luma(), img.w, img.h, DocumentDetector.PHOTO_EDGE_SIDE)
+        assertNotNull("page not found", found)
+        assertTrue("corners off: $found vs $truth", cornersClose(found!!, truth, 0.01f * hypot(720f, 600f)))
+    }
+
+    @Test
+    fun findsAPageOnBusyFabric() {
+        // Blotchy cloth as bright as the paper in places, so no clean light/dark split exists.
+        val rnd = Random(7)
+        val cells = IntArray(120 * 100) { 90 + rnd.nextInt(166) }
+        val cloth = { x: Int, y: Int -> val v = cells[(y / 6) * 120 + x / 6]; (0xFF shl 24) or (v shl 16) or (v shl 8) or v }
+        val truth = Quad(Pt(160f, 80f), Pt(560f, 120f), Pt(575f, 540f), Pt(135f, 505f))
+        val img = photo(doc, truth, 720, 600, 0, surface = cloth)
+        val found = DocumentDetector.detect(img.luma(), img.w, img.h, DocumentDetector.PHOTO_EDGE_SIDE)
+        assertNotNull("page not found", found)
+        assertTrue("corners off: $found vs $truth", cornersClose(found!!, truth, 0.015f * hypot(720f, 600f)))
+    }
+
+    @Test
+    fun putsTheCornersWithinAFewPixels() {
+        val truth = Quad(Pt(150.3f, 90.6f), Pt(560.8f, 130.2f), Pt(590.1f, 520.4f), Pt(120.7f, 470.9f))
+        val img = photo(doc, truth, 720, 600, 0xFF2A2A2A.toInt())
+        val found = DocumentDetector.detect(img.luma(), img.w, img.h, DocumentDetector.PHOTO_EDGE_SIDE)!!
+        val worst = found.points.zip(truth.points).maxOf { (p, q) -> p.dist(q) }
+        assertTrue("worst corner $worst px off: $found", worst < 4f)
     }
 
     @Test

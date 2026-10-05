@@ -50,7 +50,7 @@ data class UploadItem(
     /** Reading the text on the phone first: pending | done | skipped (null: not asked). */
     val ocr: String? = null,
     val ocrDir: String? = null,
-    val ocrScript: String = "latin",
+    val ocrScript: String = "en",
     val queuedAt: Long = 0,
 ) {
     val active get() = status == "queued" || status == "uploading"
@@ -102,7 +102,7 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
      * Queues a file the app made itself (a scan). It is moved, not copied. With [ocrPages] (the scan's
      * pages, see [PhoneOcr]) the phone reads the text into the PDF before it's sent.
      */
-    suspend fun enqueueFile(file: File, name: String, mime: String, spaceId: String?, source: String, title: String?, ocrPages: File? = null, ocrScript: String = "latin"): UploadItem = withContext(Dispatchers.IO) {
+    suspend fun enqueueFile(file: File, name: String, mime: String, spaceId: String?, source: String, title: String?, ocrPages: File? = null, ocrScript: String = "en"): UploadItem = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val dest = File(dir, "$id-${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
         if (!file.renameTo(dest)) {
@@ -120,7 +120,7 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
         add(dest, name, mime, spaceId, source, title, id, pages, ocrScript)
     }
 
-    private fun add(file: File, name: String, mime: String, spaceId: String?, source: String, title: String?, id: String, ocrDir: File? = null, ocrScript: String = "latin"): UploadItem {
+    private fun add(file: File, name: String, mime: String, spaceId: String?, source: String, title: String?, id: String, ocrDir: File? = null, ocrScript: String = "en"): UploadItem {
         val item = UploadItem(
             id = id, path = file.path, name = name, mime = mime, size = file.length(), spaceId = spaceId, source = source, title = title,
             ocr = if (ocrDir != null) "pending" else null, ocrDir = ocrDir?.path, ocrScript = ocrScript, queuedAt = System.currentTimeMillis(),
@@ -168,7 +168,7 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
             val item = _items.value.firstOrNull { it.ocr == "pending" } ?: break
             val pages = item.ocrDir?.let(::File)
             val ok = pages != null && PhoneOcr.wanted(session.phoneOcr, session.serverReadsText) && PhoneOcr.canRunNow(context) &&
-                runCatching { PhoneOcr.makeSearchable(pages, File(item.path), item.title.orEmpty(), item.ocrScript) }.getOrDefault(false)
+                runCatching { PhoneOcr.makeSearchable(context, pages, File(item.path), item.title.orEmpty(), item.ocrScript) }.getOrDefault(false)
             pages?.deleteRecursively()
             // Only if the upload hasn't given up waiting meanwhile.
             change(item.id) { if (it.ocr == "pending") it.copy(ocr = if (ok) "done" else "skipped", ocrDir = null, size = File(it.path).length()) else it }

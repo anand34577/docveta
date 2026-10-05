@@ -134,6 +134,17 @@ class ScriptDetectionTest(unittest.TestCase):
         self.assertEqual(script, "en")
         self.assertEqual([r.text for _, r in found], [t for _, t in truth.values()])
 
+    def test_hindi_line_the_english_reader_garbles_confidently(self):
+        # The real English model reads भारत सरकार as "HRd HRQR" at 0.76: still worth a second look.
+        def read(box, script):
+            i = int((box.rect[1] - 10) // 40)
+            if i == 4:
+                return ppocr.RecResult("HRd HRQR" if script == "en" else "भारत सरकार", 0.76 if script == "en" else 0.99, [])
+            return ppocr.RecResult(f"line {i}", 0.99 if script == "en" else 0.9, [])
+        found, script = ppocr.read_lines([_box(i) for i in range(5)], read, ["en"], ["en", "devanagari"])
+        self.assertEqual(script, "en")
+        self.assertEqual(found[4][1].text, "भारत सरकार")
+
     def test_noise_is_not_turned_into_another_script(self):
         def read(box, script):
             return ppocr.RecResult("~~", 0.55 if script == "en" else 0.6, [])  # unreadable for everyone

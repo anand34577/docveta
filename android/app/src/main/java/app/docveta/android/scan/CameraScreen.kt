@@ -81,10 +81,11 @@ private data class Seen(val quad: Quad?, val w: Int, val h: Int, val steady: Boo
 
 /**
  * The scanner camera: finds the page on every frame, outlines it live, and (if wanted) takes the
- * picture by itself once the page has been held still for a moment.
+ * picture by itself once the page has been held still for a moment. A shot whose edges couldn't be
+ * found opens [onEdit] straight away, so the corners can be placed by hand.
  */
 @Composable
-fun CameraScreen(session: ScanSession, onDone: () -> Unit, onClose: () -> Unit) {
+fun CameraScreen(session: ScanSession, onDone: () -> Unit, onEdit: (String) -> Unit, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val c = LocalContainer.current
     var granted by remember { mutableStateOf(ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
@@ -93,7 +94,7 @@ fun CameraScreen(session: ScanSession, onDone: () -> Unit, onClose: () -> Unit) 
     LaunchedEffect(Unit) { if (!granted) ask.launch(Manifest.permission.CAMERA) }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        if (granted) LiveCamera(session, c.session.autoCapture, onDone, onClose, onPickGallery = { gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
+        if (granted) LiveCamera(session, c.session.autoCapture, onDone, onEdit, onClose, onPickGallery = { gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
         else Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Docveta needs the camera to scan documents.", color = Color.White, style = MaterialTheme.typography.bodyLarge)
             Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") }
@@ -104,7 +105,7 @@ fun CameraScreen(session: ScanSession, onDone: () -> Unit, onClose: () -> Unit) 
 }
 
 @Composable
-private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () -> Unit, onClose: () -> Unit, onPickGallery: () -> Unit) {
+private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () -> Unit, onEdit: (String) -> Unit, onClose: () -> Unit, onPickGallery: () -> Unit) {
     val ctx = LocalContext.current
     val container = LocalContainer.current
     val lifecycle = LocalLifecycleOwner.current
@@ -131,7 +132,10 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
                 lastShot = System.currentTimeMillis()
                 flash = true
                 tracker.reset()
-                session.addFile(file) { capturing = false }
+                session.addFile(file) { page ->
+                    capturing = false
+                    if (!page.detected) onEdit(page.id)
+                }
                 main.postDelayed({ flash = false }, 120)
             }
 
@@ -175,6 +179,7 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
         }
     }
     LaunchedEffect(torch, camera) { camera?.cameraControl?.enableTorch(torch) }
+    LaunchedEffect(session.error) { if (session.error != null) capturing = false } // the shot couldn't be used
     LaunchedEffect(seenNow.steady, auto) {
         if (auto && seenNow.steady && !capturing && System.currentTimeMillis() - lastShot > 2500) shoot()
     }
@@ -215,7 +220,7 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
         Text(
             when {
                 capturing -> "Saving…"
-                seenNow.quad == null -> "Place the page on a darker surface"
+                seenNow.quad == null -> "Fit the whole page in view"
                 seenNow.steady -> if (auto) "Got it" else "Tap the button"
                 else -> if (auto) "Hold steady…" else "Page found"
             },
