@@ -73,3 +73,15 @@ func TestClaimVerified(t *testing.T) {
 		}
 	}
 }
+
+func TestSafeReturnTo(t *testing.T) {
+	for in, want := range map[string]string{
+		"": "/", "/documents?q=bill": "/documents?q=bill", "//evil.com": "/", "https://evil.com": "/",
+		"/login": "/", "/login?redirect=%2Flogin%3Fredirect%3D%252F": "/", "/setup": "/", "/invite/abc": "/",
+		"/settings/security": "/settings/security", "/loginfo": "/loginfo",
+	} {
+		if got := safeReturnTo(in); got != want {
+			t.Errorf("safeReturnTo(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

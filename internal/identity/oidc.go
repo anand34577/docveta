@@ -259,8 +259,14 @@ func randomString() string {
 }
 
 // safeReturnTo only allows same-origin relative paths to prevent open redirects.
+// Sign-in pages are never a place to return to: older web apps sent "/login?redirect=…" here,
+// which put people back on the login page after signing in.
 func safeReturnTo(p string) string {
 	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.HasPrefix(p, "/\\") {
+		return "/"
+	}
+	path, _, _ := strings.Cut(p, "?")
+	if path == "/login" || path == "/setup" || strings.HasPrefix(path, "/login/") || strings.HasPrefix(path, "/invite/") {
 		return "/"
 	}
 	return p

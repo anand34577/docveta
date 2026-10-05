@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/misc";
 import { AuthFrame } from "./setup";
+import { safeRedirect } from "@/lib/redirect";
 
 export function LoginPage() {
   const search = useSearch({ from: "/login" });
@@ -26,7 +27,7 @@ export function LoginPage() {
     if (status.data?.setup_needed) navigate({ to: "/setup" });
   }, [status.data, navigate]);
 
-  const redirect = search.redirect && search.redirect.startsWith("/") && !search.redirect.startsWith("//") ? search.redirect : "/";
+  const redirect = safeRedirect(search.redirect) ?? "/";
 
   React.useEffect(() => {
     if (me.data) navigate({ to: redirect, replace: true }); // already signed in

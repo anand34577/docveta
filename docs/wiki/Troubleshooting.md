@@ -94,3 +94,9 @@ set DOCVETA_PASSWORD=new-long-password
 Open an [issue](https://github.com/anand34577/docveta/issues) with the output of
 `docveta doctor`, your system and Docveta version (`docveta version`), and the relevant log lines.
 Remove passwords from what you paste.
+
+## Hindi text shows as symbols like "¬⁄UËˇÊÊ" or "dk ds esa"
+
+The PDF was typeset with a pre-Unicode Hindi font (Walkman-Chanakya, DV-TT, Kruti Dev). Its text
+layer stores font codes, not Hindi. Docveta 0.6.1 and later detect this and read those pages with
+OCR instead. For documents added earlier, open the document and choose **⋯ → Process again**.

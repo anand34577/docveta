@@ -5,6 +5,21 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Signing in with single sign-on from the login page returned people to the login page, and the
+  address grew with every attempt (`/login?redirect=/login?redirect=…`). The app no longer
+  redirects to the login page from the login page, and sign-in pages are never used as the place
+  to return to (old nested links are unwrapped).
+- Hindi in PDFs typeset with pre-Unicode fonts (Walkman-Chanakya, DV-TT, Kruti Dev: common in exam
+  papers and government documents) came out as symbols like "¬⁄UËˇÊÊ", because Docveta trusted the
+  PDF's text layer. Such pages are now recognised with OCR instead. Run **Process again** on
+  documents added before.
+
+### Changed
+- Android: the app stays in portrait, and screens move like other Android apps: opening a screen
+  slides it in from the side (Back reverses it and follows the back gesture), bottom-bar tabs fade
+  through, and the scanner slides up from the bottom.
+
 ## [0.6.0] - 2026-10-04
 
 ### Added
