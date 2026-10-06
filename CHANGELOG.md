@@ -11,6 +11,10 @@ All notable changes to Docveta. The format follows
   pages, which come out smaller and sharper than as JPEG), and separate pages upload as PNG.
   Colour pages can be several times larger. The choice is remembered.
 
+### Changed
+- README: hero image, screenshots of the web app (light, dark, phone) and a social preview
+  image in `docs/images/`.
+
 ## [0.10.0] - 2026-10-06
 
 ### Changed
