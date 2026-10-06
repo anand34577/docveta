@@ -5,6 +5,8 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-06
+
 ### Changed
 - **Android: much better page detection.** The scanner now finds a page's corners with
   DocAligner, an open-source model (Apache-2.0, on the ONNX Runtime the app already carries; still
