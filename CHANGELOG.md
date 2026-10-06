@@ -5,6 +5,8 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-06
+
 ### Added
 - **Android: lossless scans.** Before uploading a scan you can choose "Smaller file" (JPEG, as
   before) or "Lossless": the PDF then keeps every pixel (Flate; 1 bit per pixel for black & white
