@@ -127,6 +127,14 @@ fun ReviewScreen(session: ScanSession, onAddMore: () -> Unit, onEdit: (String) -
                 SegmentedButton(session.asPdf, { session.asPdf = true }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("One PDF") }
                 SegmentedButton(!session.asPdf, { session.asPdf = false }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Separate pages") }
             }
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                SegmentedButton(!session.lossless, { session.chooseLossless(false) }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Smaller file") }
+                SegmentedButton(session.lossless, { session.chooseLossless(true) }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Lossless") }
+            }
+            if (session.lossless) Text(
+                "Every pixel is kept. Black & white pages get smaller and sharper; colour pages can be several times larger.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Button({ session.submit(onUploaded) }, Modifier.fillMaxWidth().height(52.dp), enabled = !session.working && session.pages.isNotEmpty(), shape = RoundedCornerShape(14.dp)) {
                 if (session.working) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)

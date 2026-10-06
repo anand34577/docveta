@@ -5,6 +5,12 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Android: lossless scans.** Before uploading a scan you can choose "Smaller file" (JPEG, as
+  before) or "Lossless": the PDF then keeps every pixel (Flate; 1 bit per pixel for black & white
+  pages, which come out smaller and sharper than as JPEG), and separate pages upload as PNG.
+  Colour pages can be several times larger. The choice is remembered.
+
 ## [0.10.0] - 2026-10-06
 
 ### Changed

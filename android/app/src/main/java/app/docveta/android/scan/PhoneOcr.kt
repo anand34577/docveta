@@ -12,9 +12,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
-/** Pages of a scan kept beside the queued PDF until the phone has read their text. */
+/**
+ * Pages of a scan kept beside the queued PDF until the phone has read their text. [file] is the
+ * JPEG that is read; a lossless scan keeps the page's Flate pixels ([PdfWriter.lossless]) in [raw].
+ */
 @Serializable
-data class OcrPageFile(val file: String, val width: Int, val height: Int, val gray: Boolean = false)
+data class OcrPageFile(val file: String, val width: Int, val height: Int, val gray: Boolean = false, val raw: String? = null, val bits: Int = 8)
 
 /**
  * Reading a scan's text on the phone, with the same PaddleOCR models as the server's OCR engine
@@ -85,7 +88,8 @@ object PhoneOcr {
                 val jpeg = File(dir, p.file).readBytes()
                 val words = read(ocr, jpeg, p.width, listOf(normalised(script)))
                 if (words.isNotEmpty()) anyText = true
-                PdfPageImage(jpeg, p.width, p.height, p.gray, words)
+                val raw = p.raw?.let { File(dir, it).readBytes() }
+                PdfPageImage(raw ?: jpeg, p.width, p.height, p.gray, words, flate = raw != null, bits = p.bits)
             }
             if (!anyText) return@withContext false
             val tmp = File(pdf.parentFile, pdf.name + ".part")
