@@ -69,11 +69,7 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
                     val id = UUID.randomUUID().toString()
                     val f = File(dir, "$id.jpg")
                     ImageIO.saveJpeg(bmp, f)
-                    val luma = ByteArray(bmp.width * bmp.height)
-                    val px = IntArray(bmp.width * bmp.height)
-                    bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-                    for (i in px.indices) luma[i] = luminance(px[i]).toByte()
-                    val found = DocumentDetector.detect(luma, bmp.width, bmp.height, DocumentDetector.PHOTO_EDGE_SIDE)
+                    val found = findPage(bmp)
                     val fallback = if (fromGallery) Quad.full(bmp.width.toFloat(), bmp.height.toFloat()) else Quad.inset(bmp.width.toFloat(), bmp.height.toFloat())
                     val p = ScanPage(id, f, bmp.width, bmp.height, found ?: fallback, found != null, filterForNew)
                     bmp.recycle()
@@ -120,13 +116,14 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
         val p = pages.firstOrNull { it.id == id } ?: return null
         return withContext(Dispatchers.Default) {
             val bmp = ImageIO.decodeUpright(p.file, MAX_SOURCE)
-            val px = IntArray(bmp.width * bmp.height)
-            bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-            val luma = ByteArray(px.size) { luminance(px[it]).toByte() }
-            val found = DocumentDetector.detect(luma, bmp.width, bmp.height, DocumentDetector.PHOTO_EDGE_SIDE)
+            val found = findPage(bmp)
             bmp.recycle()
             found
         }
+    }
+
+    private fun findPage(bmp: Bitmap): Quad? {
+        return PageFinder.page(PageFinder.get(c.context), ImageIO.toRaster(bmp), DocumentDetector.PHOTO_EDGE_SIDE)
     }
 
     /** The page as it will come out, at preview size. */

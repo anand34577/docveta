@@ -1,6 +1,7 @@
 package app.docveta.android
 
 import app.docveta.android.scan.DocumentDetector
+import app.docveta.android.scan.PageFinder
 import app.docveta.android.scan.PageFilters
 import app.docveta.android.scan.PdfPageImage
 import app.docveta.android.scan.PdfWord
@@ -209,6 +210,82 @@ class DetectorTest {
     }
 }
 
+/** The DocAligner model (assets/scan) on ONNX Runtime for the desktop, through the same path as the app. */
+class PageFinderTest {
+    private val finder = PageFinder(java.io.File("src/main/assets/scan/docaligner.onnx").readBytes())
+
+    private fun find(img: Raster) = PageFinder.page(finder, img)
+
+    /** A real camera frame, as a gzipped binary PPM (P6) in the test resources. */
+    private fun frame(name: String): Raster {
+        val bytes = java.util.zip.GZIPInputStream(javaClass.getResourceAsStream("/$name.ppm.gz")!!).readBytes()
+        val header = String(bytes, 0, 32, Charsets.US_ASCII).split(Regex("\\s+"))
+        val w = header[1].toInt()
+        val h = header[2].toInt()
+        val start = bytes.size - 3 * w * h
+        fun at(i: Int) = bytes[start + i].toInt() and 0xFF
+        return Raster(w, h, IntArray(w * h) { (0xFF shl 24) or (at(3 * it) shl 16) or (at(3 * it + 1) shl 8) or at(3 * it + 2) })
+    }
+
+    /** Random tilted pages on light, wooden and busy surfaces: worst-corner error, as a share of the picture's diagonal. */
+    private fun scenes(n: Int, seed: Long): List<Pair<Raster, Quad>> {
+        val rnd = Random(seed)
+        val plain = paper(420, 594, border = false)
+        return List(n) { i ->
+            fun j() = rnd.nextFloat() * 110f - 55f
+            val truth = Quad(Pt(150f + j(), 70f + j()), Pt(570f + j(), 80f + j()), Pt(590f + j(), 540f + j()), Pt(130f + j(), 530f + j()))
+            val img = when (i % 3) {
+                0 -> photo(plain, truth, 720, 600, 0xFFE0E0E0.toInt(), noise = 4, seed = i.toLong())
+                1 -> photo(doc, truth, 720, 600, 0, seed = i.toLong()) { x, _ -> val v = (150 + 30 * kotlin.math.sin(x / 6.0)).toInt(); (0xFF shl 24) or (v shl 16) or ((v * 3 / 4) shl 8) or (v / 2) }
+                else -> { val cells = IntArray(130 * 110) { 60 + rnd.nextInt(196) }; photo(plain, truth, 720, 600, 0, seed = i.toLong()) { x, y -> val v = cells[(y / 6) * 130 + x / 6]; (0xFF shl 24) or (v shl 16) or (v shl 8) or v } }
+            }
+            img to truth
+        }
+    }
+
+    private fun worst(found: Quad?, truth: Quad) = found?.points?.zip(truth.points)?.maxOf { (p, q) -> p.dist(q) } ?: Float.MAX_VALUE
+
+    private val doc = paper(420, 594)
+
+    @Test
+    fun findsPagesTheEdgesAloneMiss() {
+        // Edges and brightness alone miss about a third of these (20 of 60 when this was written).
+        val e = scenes(60, 11).map { (img, t) -> worst(find(img), t) }.sorted()
+        assertTrue("missed ${e.count { it > 15f }} of 60: $e", e.count { it > 15f } <= 2)
+        assertTrue("median worst corner ${e[30]} px", e[30] < 3f)
+    }
+
+    @Test
+    fun trustsTheModelWhenItSeesNoPage() {
+        // A blurry surface: edges alone outline a "page" in it.
+        val img = frame("blur-no-page")
+        assertNotNull(DocumentDetector.detect(img.luma(), img.w, img.h))
+        assertNull(find(img))
+    }
+
+    @Test
+    fun givesUpWithoutAPage() {
+        val rnd = Random(3)
+        val flat = Raster(640, 480, IntArray(640 * 480) { val v = 120 + rnd.nextInt(9); (0xFF shl 24) or (v shl 16) or (v shl 8) or v })
+        assertNull(find(flat))
+    }
+
+    @Test
+    fun findsAPageThatFillsTheWholeFrame() {
+        val q = find(photo(doc, Quad.full(720f, 600f), 720, 600, 0xFFFFFFFF.toInt()))!!
+        assertTrue("$q", q.differenceTo(Quad.full(720f, 600f)) < 0.04f)
+    }
+
+    @Test
+    fun resizeKeepsFlatColoursAndAveragesDetail() {
+        val grey = PageFinder.resize(Raster(1000, 700, IntArray(1000 * 700) { 0xFF336699.toInt() }), 256, 256)
+        assertTrue(grey.all { it == 0xFF336699.toInt() })
+        // Single-pixel stripes shrunk 4x come out as their average.
+        val stripes = PageFinder.resize(Raster(1024, 1024, IntArray(1024 * 1024) { if (it % 2 == 0) -1 else 0xFF000000.toInt() }), 256, 256)
+        assertEquals(128.0, stripes.map { it and 0xFF }.average(), 2.0)
+    }
+}
+
 class QuadTest {
     @Test
     fun ordersCornersWhateverTheInputOrder() {
@@ -268,6 +345,30 @@ class FilterTest {
         assertTrue(at(w - 10, 50) > 235)
         // Ink stays dark.
         assertTrue(at(160, 195) < 90)
+    }
+
+    @Test
+    fun enhanceKeepsTheColourOfALargePrintedArea() {
+        // A magazine cover: orange over most of it, a white margin and a black strip at the bottom.
+        val w = 400
+        val h = 520
+        val orange = 0xFFDC8C28.toInt()
+        val px = IntArray(w * h) { i ->
+            val x = i % w
+            val y = i / w
+            when {
+                y >= 460 -> 0xFF181818.toInt()
+                x < 20 || x >= w - 20 || y < 20 -> 0xFFE6E6E6.toInt()
+                else -> orange
+            }
+        }
+        val out = PageFilters.enhance(Raster(w, h, px))
+        fun ch(p: Int, s: Int) = (p shr s) and 0xFF
+        val o = out.px[250 * w + 200]
+        // Orange stays orange: not lifted towards white (this used to give about 255, 255, 255).
+        for (s in listOf(16, 8, 0)) assertEquals("channel $s: ${Integer.toHexString(o)}", ch(orange, s).toFloat(), ch(o, s).toFloat(), 30f)
+        assertTrue(ch(out.px[490 * w + 200], 16) < 30) // the strip stays black
+        assertTrue(ch(out.px[10 * w + 200], 16) > 240) // the margin is white
     }
 
     @Test
@@ -337,28 +438,5 @@ class PdfWriterTest {
         // Kept for checking with other PDF readers (pdf.js, PDFium).
         java.io.File("build/test-pdf").mkdirs()
         java.io.File("build/test-pdf/text-layer.pdf").writeBytes(bytes)
-    }
-}
-
-class LumaTest {
-    @Test
-    fun stripsRowPadding() {
-        // 3 x 2 picture, rows padded to 5 bytes.
-        val plane = byteArrayOf(1, 2, 3, 99, 99, 4, 5, 6, 99, 99)
-        assertEquals(listOf<Byte>(1, 2, 3, 4, 5, 6), app.docveta.android.scan.Luma.tight(plane, 3, 2, 5).toList())
-    }
-
-    @Test
-    fun rotatesAFrameTheWayAPersonHoldsThePhone() {
-        val src = byteArrayOf(1, 2, 3, 4, 5, 6) // 3 x 2
-        val (a, w, h) = app.docveta.android.scan.Luma.rotate(src, 3, 2, 90)
-        assertEquals(2 to 3, w to h)
-        assertEquals(listOf<Byte>(4, 1, 5, 2, 6, 3), a.toList())
-        val (b, bw, bh) = app.docveta.android.scan.Luma.rotate(src, 3, 2, 180)
-        assertEquals(3 to 2, bw to bh)
-        assertEquals(listOf<Byte>(6, 5, 4, 3, 2, 1), b.toList())
-        val (c, cw, ch) = app.docveta.android.scan.Luma.rotate(src, 3, 2, 270)
-        assertEquals(2 to 3, cw to ch)
-        assertEquals(listOf<Byte>(3, 6, 2, 5, 1, 4), c.toList())
     }
 }

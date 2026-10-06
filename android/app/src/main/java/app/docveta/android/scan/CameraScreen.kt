@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -122,6 +123,11 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
     val previewView = remember { PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT) } }
     val tracker = remember { QuadTracker(stillFrames = 7) }
     var lastShot by remember { mutableStateOf(0L) }
+    // Leaving the screen closes the camera, and CameraX drops a picture still being taken: Done,
+    // the thumbnail and Back wait for the page to be added, then go.
+    var leaving by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun leave(go: () -> Unit) { if (capturing) leaving = go else go() }
+    BackHandler(enabled = capturing) { leaving = onClose }
 
     fun shoot() {
         if (capturing) return
@@ -134,13 +140,15 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
                 tracker.reset()
                 session.addFile(file) { page ->
                     capturing = false
-                    if (!page.detected) onEdit(page.id)
+                    val go = leaving.also { leaving = null }
+                    if (go != null) go() else if (!page.detected) onEdit(page.id)
                 }
                 main.postDelayed({ flash = false }, 120)
             }
 
             override fun onError(e: ImageCaptureException) {
                 capturing = false
+                leaving = null // stay, so the message is seen
                 session.error = "The camera couldn't take the picture"
             }
         })
@@ -158,13 +166,12 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
                     val now = System.currentTimeMillis()
                     if (now - lastRun >= 120) {
                         lastRun = now
-                        val plane = image.planes[0]
-                        val buf = plane.buffer
-                        val bytes = ByteArray(buf.remaining()).also { buf.get(it) }
-                        val tight = Luma.tight(bytes, image.width, image.height, plane.rowStride, plane.pixelStride)
-                        val (up, w, h) = Luma.rotate(tight, image.width, image.height, image.imageInfo.rotationDegrees)
-                        val q = tracker.update(DocumentDetector.detect(up, w, h))
-                        seen.value = Seen(q, w, h, tracker.isSteady)
+                        // In colour, for the model; turned the way the person holds the phone.
+                        val frame = image.toBitmap()
+                        val up = PageFilters.rotate(ImageIO.toRaster(frame), image.imageInfo.rotationDegrees / 90)
+                        frame.recycle()
+                        val q = tracker.update(PageFinder.page(PageFinder.get(ctx), up))
+                        seen.value = Seen(q, up.w, up.h, tracker.isSteady)
                     }
                 } finally {
                     image.close()
@@ -179,7 +186,7 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
         }
     }
     LaunchedEffect(torch, camera) { camera?.cameraControl?.enableTorch(torch) }
-    LaunchedEffect(session.error) { if (session.error != null) capturing = false } // the shot couldn't be used
+    LaunchedEffect(session.error) { if (session.error != null) { capturing = false; leaving = null } } // the shot couldn't be used
     LaunchedEffect(seenNow.steady, auto) {
         if (auto && seenNow.steady && !capturing && System.currentTimeMillis() - lastShot > 2500) shoot()
     }
@@ -232,14 +239,14 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                 val last = session.pages.lastOrNull()
                 if (last == null) RoundIcon(Icons.Outlined.PhotoLibrary, "Choose photos", onClick = onPickGallery)
-                else Box(Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)).border(2.dp, Color.White, RoundedCornerShape(12.dp)).clickable(onClick = onDone)) {
+                else Box(Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)).border(2.dp, Color.White, RoundedCornerShape(12.dp)).clickable { leave(onDone) }) {
                     AsyncImage(last.file, null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
                     Text(session.pages.size.toString(), Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.primary, CircleShape).padding(horizontal = 6.dp), color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.labelSmall)
                 }
             }
             Box(Modifier.size(76.dp).clip(CircleShape).border(4.dp, Color.White, CircleShape).padding(6.dp).clip(CircleShape).background(if (capturing || session.working) Color.Gray else Color.White).clickable(enabled = !capturing) { shoot() })
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                if (session.pages.isNotEmpty()) Button(onDone, shape = RoundedCornerShape(50)) { Text("Done") }
+                if (session.pages.isNotEmpty()) Button({ leave(onDone) }, shape = RoundedCornerShape(50)) { Text("Done") }
                 else Spacer(Modifier.size(1.dp))
             }
         }
