@@ -87,6 +87,11 @@ class SessionStore(private val kv: KeyValueStore) {
         get() = kv.get("scan_filter")
         set(v) = kv.put("scan_filter", v)
 
+    /** Scans keep every pixel (Flate in the PDF, PNG pictures) instead of JPEG. */
+    var scanLossless: Boolean
+        get() = kv.get("scan_lossless") == "1"
+        set(v) = kv.put("scan_lossless", if (v) "1" else null)
+
     /** system | light | dark, mirrored from the account so the sign-in screen matches too. */
     var theme: String
         get() = kv.get("theme") ?: "system"

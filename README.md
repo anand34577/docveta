@@ -1,5 +1,9 @@
 # Docveta
 
+<p align="center">
+  <img src="docs/images/hero.png" alt="Docveta: self-hosted document management, on desktop, dark mode and phone" width="100%">
+</p>
+
 **Your documents, organised and searchable.** Docveta is a lightweight,
 self-hosted document management system for households, small organisations and teams.
 Capture bills, IDs, contracts, certificates and records from any device; Docveta reads the
@@ -27,6 +31,19 @@ text (on your graphics card, an NPU or the CPU), organises them, and finds them 
   resumable uploads; the web app is installable too.
 
 > Status: **beta**. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Home](docs/images/home.png)<br>**Home**: what is new, what needs review | ![All documents](docs/images/documents.png)<br>**Library**: thumbnails, tags, filters, saved views |
+| ![Search](docs/images/search.png)<br>**Search as you type**, with highlighted snippets | ![Document](docs/images/document.png)<br>**Document view**: preview, details, notes, text, versions, history |
+| ![Inbox](docs/images/inbox.png)<br>**Inbox**: review, tag and file new documents | ![Dark mode](docs/images/documents-dark.png)<br>**Dark mode**, automatic |
+
+<p align="center">
+  <img src="docs/images/mobile-home.png" alt="Docveta on a phone" width="240">
+  <img src="docs/images/mobile-documents.png" alt="Docveta documents on a phone" width="240">
+</p>
 
 ## Install
 

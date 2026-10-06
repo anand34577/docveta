@@ -421,6 +421,34 @@ class PdfWriterTest {
     }
 
     @Test
+    fun storesLosslessPagesAsFlateAtTheSmallestDepth() {
+        fun inflate(b: ByteArray) = java.util.zip.InflaterInputStream(b.inputStream()).readBytes()
+        val k = 0xFF shl 24
+        // Black and white: 1 bit per pixel, white = 1, rows padded to a byte.
+        val bw = PdfWriter.lossless(Raster(9, 2, IntArray(18) { if (it % 2 == 0) -1 else k }))
+        assertEquals(1, bw.bits)
+        assertTrue(bw.gray && bw.flate)
+        assertEquals(listOf(0xAA, 0x80, 0x55, 0x00), inflate(bw.data).map { it.toInt() and 0xFF })
+        // Gray: 8 bits, each row "Up" (2) then the difference from the row above.
+        val gray = PdfWriter.lossless(Raster(2, 2, intArrayOf(k or 0x101010, k or 0x202020, k or 0x151515, k or 0x202020)))
+        assertEquals(8, gray.bits)
+        assertTrue(gray.gray)
+        assertEquals(listOf(2, 0x10, 0x20, 2, 0x05, 0x00), inflate(gray.data).map { it.toInt() and 0xFF })
+        // Colour: RGB, and the PDF says how to undo the predictor.
+        val rgb = PdfWriter.lossless(Raster(1, 1, intArrayOf(k or 0x102030)))
+        assertFalse(rgb.gray)
+        assertEquals(listOf(2, 0x10, 0x20, 0x30), inflate(rgb.data).map { it.toInt() and 0xFF })
+        val text = String(PdfWriter.toBytes(listOf(rgb, bw)), Charsets.ISO_8859_1)
+        assertTrue(text.contains("/DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 1 >>"))
+        assertTrue(text.contains("/DeviceGray /BitsPerComponent 1 /Filter /FlateDecode /Length"))
+        // Kept for checking with other PDF readers: a colour gradient page and a black and white page.
+        val grad = PdfWriter.lossless(Raster(64, 48, IntArray(64 * 48) { k or ((it % 64) * 4 shl 16) or ((it / 64) * 5 shl 8) or 0x80 }))
+        val stripes = PdfWriter.lossless(Raster(50, 40, IntArray(50 * 40) { if ((it % 50) / 5 % 2 == 0) -1 else k }))
+        java.io.File("build/test-pdf").mkdirs()
+        java.io.File("build/test-pdf/lossless.pdf").writeBytes(PdfWriter.toBytes(listOf(grad, stripes)))
+    }
+
+    @Test
     fun putsWordsReadOnThePhoneUnderThePictureAsInvisibleText() {
         val words = listOf(
             PdfWord("Amount", 100f, 165f, 150f, 45f), PdfWord("due", 265f, 165f, 70f, 45f), PdfWord("1,842.50", 350f, 165f, 170f, 45f, last = true),

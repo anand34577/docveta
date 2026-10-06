@@ -57,6 +57,9 @@ object ImageIO {
 
     fun jpeg(b: Bitmap, quality: Int): ByteArray = ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, quality, it) }.toByteArray()
 
+    /** Lossless; opaque, so it is written as RGB without an alpha channel. */
+    fun png(b: Bitmap): ByteArray = ByteArrayOutputStream().also { b.setHasAlpha(false); b.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+
     fun saveJpeg(b: Bitmap, file: File, quality: Int = 92) {
         file.parentFile?.mkdirs()
         file.outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, quality, it) }

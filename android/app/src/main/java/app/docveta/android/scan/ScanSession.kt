@@ -42,6 +42,8 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
     var spaceId by mutableStateOf<String?>(null)
     var asPdf by mutableStateOf(true)
     var filterForNew by mutableStateOf(initialFilter())
+    var lossless by mutableStateOf(c.session.scanLossless)
+        private set
     var working by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
@@ -53,6 +55,11 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
     fun chooseFilterForNew(k: PageFilters.Kind) {
         filterForNew = k
         c.session.scanFilter = k.name
+    }
+
+    fun chooseLossless(v: Boolean) {
+        lossless = v
+        c.session.scanLossless = v
     }
 
     /**
@@ -68,7 +75,7 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
                     val bmp = ImageIO.decodeUpright(open, orientation, MAX_SOURCE)
                     val id = UUID.randomUUID().toString()
                     val f = File(dir, "$id.jpg")
-                    ImageIO.saveJpeg(bmp, f)
+                    ImageIO.saveJpeg(bmp, f, 100) // near-lossless: the final page is encoded again
                     val found = findPage(bmp)
                     val fallback = if (fromGallery) Quad.full(bmp.width.toFloat(), bmp.height.toFloat()) else Quad.inset(bmp.width.toFloat(), bmp.height.toFloat())
                     val p = ScanPage(id, f, bmp.width, bmp.height, found ?: fallback, found != null, filterForNew)
@@ -158,18 +165,22 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
             bmp.recycle()
             val done = finish(raster, p.quad, p, 2339)
             val finalBmp = ImageIO.toBitmap(done)
-            val jpg = ImageIO.jpeg(finalBmp, 85)
-            finalBmp.recycle()
             if (pdf) {
-                images.add(PdfPageImage(jpg, done.w, done.h))
+                // ponytail: every page is held in memory until the PDF is written; lossless colour
+                // pages are a few MB each, so stream them to files first if long scans run out of memory.
+                val img = if (lossless) PdfWriter.lossless(done) else PdfPageImage(ImageIO.jpeg(finalBmp, 85), done.w, done.h)
+                images.add(img)
                 if (ocrPages != null) {
-                    File(ocrPages, "p$i.jpg").writeBytes(jpg)
-                    ocrList.add(OcrPageFile("p$i.jpg", done.w, done.h))
+                    File(ocrPages, "p$i.jpg").writeBytes(if (lossless) ImageIO.jpeg(finalBmp, 90) else img.data)
+                    val raw = if (lossless) "p$i.bin".also { File(ocrPages, it).writeBytes(img.data) } else null
+                    ocrList.add(OcrPageFile("p$i.jpg", done.w, done.h, img.gray, raw, img.bits))
                 }
             } else {
-                val f = File(dir, "out-${UUID.randomUUID()}.jpg").also { it.writeBytes(jpg) }
-                out.add(Rendered(f, "$base ${i + 1}.jpg"))
+                val ext = if (lossless) "png" else "jpg"
+                val f = File(dir, "out-${UUID.randomUUID()}.$ext").also { it.writeBytes(if (lossless) ImageIO.png(finalBmp) else ImageIO.jpeg(finalBmp, 85)) }
+                out.add(Rendered(f, "$base ${i + 1}.$ext"))
             }
+            finalBmp.recycle()
         }
         if (pdf) {
             val f = File(dir, "out-${UUID.randomUUID()}.pdf")
@@ -190,7 +201,8 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
                 val files = render()
                 val script = PhoneOcr.script(c.repo.cachedMe()?.spaces?.firstOrNull { it.id == spaceId }?.defaultLanguage)
                 for (r in files) {
-                    c.uploads.enqueueFile(r.file, r.name, if (r.name.endsWith(".pdf")) "application/pdf" else "image/jpeg", spaceId, "scan", r.name.removeSuffix(".pdf").removeSuffix(".jpg"), r.ocrPages, script)
+                    val mime = when (r.name.substringAfterLast('.')) { "pdf" -> "application/pdf"; "png" -> "image/png"; else -> "image/jpeg" }
+                    c.uploads.enqueueFile(r.file, r.name, mime, spaceId, "scan", r.name.substringBeforeLast('.'), r.ocrPages, script)
                 }
                 if (files.any { it.ocrPages != null }) PhoneOcr.prepare(c.context, script)
                 pages.forEach { it.file.delete() }

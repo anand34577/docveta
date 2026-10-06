@@ -2,16 +2,21 @@ package app.docveta.android.scan
 
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
+import java.util.zip.Deflater
+import java.util.zip.DeflaterOutputStream
 
-/** One scanned page: a JPEG, its size in pixels, and the words read on it (if the phone read them). */
-class PdfPageImage(val jpeg: ByteArray, val width: Int, val height: Int, val gray: Boolean = false, val words: List<PdfWord> = emptyList())
+/**
+ * One scanned page: its picture, its size in pixels, and the words read on it (if the phone read
+ * them). The picture is a JPEG, or with [flate] raw pixels (see [PdfWriter.lossless]) of [bits] each.
+ */
+class PdfPageImage(val data: ByteArray, val width: Int, val height: Int, val gray: Boolean = false, val words: List<PdfWord> = emptyList(), val flate: Boolean = false, val bits: Int = 8)
 
 /** A word and its box in the page's pixels; [last] ends its line (no space after it). */
 data class PdfWord(val text: String, val x: Float, val y: Float, val w: Float, val h: Float, val last: Boolean = false)
 
 /**
- * Writes a PDF that holds one JPEG per page, full-page, with the JPEG bytes stored as-is
- * (so a scan stays as small as its JPEGs). Words read on the phone go on top as invisible text,
+ * Writes a PDF that holds one picture per page, full-page, with the JPEG (or Flate) bytes stored
+ * as-is (so a scan stays as small as its pictures). Words read on the phone go on top as invisible text,
  * like any searchable scan: selectable and searchable, and used by the server instead of reading
  * the page again. Without words, Docveta reads the text from it like any other scan.
  */
@@ -54,9 +59,14 @@ object PdfWriter {
                 it.write(content)
                 it.ascii("\nendstream")
             }
+            val filter = when {
+                !p.flate -> "/DCTDecode"
+                p.bits == 1 -> "/FlateDecode"
+                else -> "/FlateDecode /DecodeParms << /Predictor 15 /Colors ${if (p.gray) 1 else 3} /BitsPerComponent 8 /Columns ${p.width} >>"
+            }
             obj {
-                it.ascii("<< /Type /XObject /Subtype /Image /Width ${p.width} /Height ${p.height} /ColorSpace /${if (p.gray) "DeviceGray" else "DeviceRGB"} /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.jpeg.size} >>\nstream\n")
-                it.write(p.jpeg)
+                it.ascii("<< /Type /XObject /Subtype /Image /Width ${p.width} /Height ${p.height} /ColorSpace /${if (p.gray) "DeviceGray" else "DeviceRGB"} /BitsPerComponent ${p.bits} /Filter $filter /Length ${p.data.size} >>\nstream\n")
+                it.write(p.data)
                 it.ascii("\nendstream")
             }
         }
@@ -78,6 +88,48 @@ object PdfWriter {
         for (o in offsets) w.ascii(String.format(java.util.Locale.US, "%010d 00000 n \n", o))
         w.ascii("trailer\n<< /Size ${offsets.size + 1} /Root 1 0 R /Info 3 0 R >>\nstartxref\n$xref\n%%EOF\n")
         w.flush()
+    }
+
+    /**
+     * The page pixel for pixel, Flate-compressed the way PDF stores it: 1 bit per pixel when it is
+     * only black and white (the B&W filter; far smaller than a JPEG and sharper), 8-bit gray when it
+     * has no colour, RGB otherwise. Gray and colour rows use the PNG "Up" predictor, which lets
+     * Flate squeeze the even paper between lines.
+     */
+    fun lossless(r: Raster): PdfPageImage {
+        var gray = true
+        var bw = true
+        for (p in r.px) {
+            val g = (p shr 8) and 0xFF
+            if ((p shr 16) and 0xFF != g || p and 0xFF != g) { gray = false; bw = false; break }
+            if (g != 0 && g != 255) bw = false
+        }
+        val out = ByteArrayOutputStream()
+        DeflaterOutputStream(out, Deflater(Deflater.BEST_COMPRESSION)).use { z ->
+            if (bw) {
+                val row = ByteArray((r.w + 7) / 8)
+                for (y in 0 until r.h) {
+                    row.fill(0)
+                    for (x in 0 until r.w) if (r.px[y * r.w + x] and 0xFF != 0) row[x shr 3] = (row[x shr 3].toInt() or (0x80 ushr (x and 7))).toByte()
+                    z.write(row)
+                }
+            } else {
+                val n = if (gray) 1 else 3
+                var prev = ByteArray(r.w * n)
+                var cur = ByteArray(r.w * n)
+                val row = ByteArray(1 + r.w * n).also { it[0] = 2 } // 2 = Up
+                for (y in 0 until r.h) {
+                    for (x in 0 until r.w) {
+                        val p = r.px[y * r.w + x]
+                        if (gray) cur[x] = p.toByte() else { cur[x * 3] = (p shr 16).toByte(); cur[x * 3 + 1] = (p shr 8).toByte(); cur[x * 3 + 2] = p.toByte() }
+                    }
+                    for (i in cur.indices) row[i + 1] = (cur[i] - prev[i]).toByte()
+                    z.write(row)
+                    prev = cur.also { cur = prev }
+                }
+            }
+        }
+        return PdfPageImage(out.toByteArray(), r.w, r.h, gray, flate = true, bits = if (bw) 1 else 8)
     }
 
     fun toBytes(pages: List<PdfPageImage>, title: String = "", dpi: Int = 200): ByteArray {
