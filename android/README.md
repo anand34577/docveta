@@ -4,10 +4,12 @@ Kotlin + Jetpack Compose client for a Docveta server.
 
 Scanning is the app's own: live page detection, automatic capture, gallery import, crop with corner
 and edge handles, perspective correction, filters and the PDF writer are plain Kotlin in
-`app/src/main/java/app/docveta/android/scan/`, unit-tested on the JVM. No Google Play services or
-native libraries are needed, so it works the same on every phone, offline. Pages are found by
-brightness (paper against a darker or lighter surface) and by outline (straight edges, so a white
-page on a light desk or busy cloth is found too); see `DocumentDetector` and `PageEdges`.
+`app/src/main/java/app/docveta/android/scan/`, unit-tested on the JVM. No Google Play services,
+offline. Page corners come from [DocAligner](https://github.com/DocsaidLab/DocAligner)
+(Apache-2.0; its 83 MB FastViT-SA24 heatmap model in `assets/scan`, on ONNX Runtime's CPU, about
+0.2 s a frame), see `PageFinder`. Its smaller models cut pages short on real photos. On 32-bit
+phones, which have no ONNX Runtime, pages are found by brightness and by outline (straight
+edges) instead; see `DocumentDetector` and `PageEdges`.
 
 ## Build
 

@@ -5,6 +5,21 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Android: much better page detection.** The scanner now finds a page's corners with
+  DocAligner, an open-source model (Apache-2.0, on the ONNX Runtime the app already carries; still
+  no Google services). It finds pages on patterned cloth, wood and light desks that the edge
+  detector missed or outlined wrongly, and no longer outlines "pages" in blur. The app is larger
+  (about 113 MB) for it. 32-bit phones keep the edge detector.
+- **Android: the "Enhanced" filter no longer blows out colour.** It brightened every area to
+  white by its own colour, so magazine covers, photos and coloured forms came out washed out and
+  oversaturated. Now only the paper is whitened and shadows evened out; colours keep their
+  exposure and saturation, and white text on a coloured background stays readable.
+
+### Fixed
+- Android: a page shot just before tapping Done, the thumbnail or Back was lost (the camera
+  closed while the picture was still being taken). The scanner now waits for it.
+
 ## [0.9.0] - 2026-10-05
 
 ### Changed

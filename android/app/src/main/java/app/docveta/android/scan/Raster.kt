@@ -176,54 +176,99 @@ object PageFilters {
     }
 
     /**
-     * Evens out the lighting and whitens the paper: every pixel is divided by the paper colour
-     * around it (estimated from a coarse grid of local brightest values), then contrast is stretched.
-     * Shadows and a yellow cast disappear; ink and photos keep their colour.
+     * Evens out the lighting and whitens the paper, keeping the colours of what's printed on it.
+     * How bright the paper is gets measured only on paper: the near-grey, bright pixels of large
+     * blocks; coloured or dark print (a magazine cover, a photo, a black strip) is skipped and
+     * filled in from the paper around it. Each pixel is then brightened by one factor for all
+     * three channels (so colours keep their balance), the paper's tint is taken out, and dark
+     * greys are pulled to black a little. Brightening each channel by its own local maximum, as
+     * this used to, turned every large coloured area white.
      */
     fun enhance(r: Raster): Raster {
-        val block = 8
-        val gw = max(1, (r.w + block - 1) / block)
-        val gh = max(1, (r.h + block - 1) / block)
-        // Local "paper" colour: brightest pixel of each block, per channel (text strokes are thinner than a block).
-        val bg = Array(3) { FloatArray(gw * gh) }
+        val w = r.w
+        val h = r.h
+        val block = max(16, max(w, h) / 24)
+        val gw = (w + block - 1) / block
+        val gh = (h + block - 1) / block
+        fun chroma(p: Int) = max(max((p shr 16) and 0xFF, (p shr 8) and 0xFF), p and 0xFF) - min(min((p shr 16) and 0xFF, (p shr 8) and 0xFF), p and 0xFF)
+        // The paper's brightness in each block: the 90th percentile of its near-grey pixels (text is darker).
+        var g = FloatArray(gw * gh) { Float.NaN }
+        val hist = IntArray(256)
         for (gy in 0 until gh) for (gx in 0 until gw) {
-            var mr = 0
-            var mg = 0
-            var mb = 0
-            for (y in gy * block until min(r.h, (gy + 1) * block)) for (x in gx * block until min(r.w, (gx + 1) * block)) {
-                val p = r.px[y * r.w + x]
-                mr = max(mr, (p shr 16) and 0xFF)
-                mg = max(mg, (p shr 8) and 0xFF)
-                mb = max(mb, p and 0xFF)
+            hist.fill(0)
+            var n = 0
+            for (y in gy * block until min(h, (gy + 1) * block)) for (x in gx * block until min(w, (gx + 1) * block)) {
+                val p = r.px[y * w + x]
+                if (chroma(p) < GREY) { hist[luminance(p)]++; n++ }
             }
-            bg[0][gy * gw + gx] = mr.toFloat()
-            bg[1][gy * gw + gx] = mg.toFloat()
-            bg[2][gy * gw + gx] = mb.toFloat()
+            if (n <= block * block / 8) continue
+            var above = 0
+            for (v in 255 downTo 0) {
+                above += hist[v]
+                if (above >= n / 10) { g[gy * gw + gx] = v.toFloat(); break }
+            }
         }
-        for (c in 0 until 3) {
-            repeat(2) { bg[c] = blurGrid(bg[c], gw, gh) }
-        }
-        val out = IntArray(r.w * r.h)
-        val black = 0.28f
-        val white = 0.93f
-        for (y in 0 until r.h) {
-            val gyf = ((y + 0.5f) / block - 0.5f).coerceIn(0f, (gh - 1).toFloat())
-            for (x in 0 until r.w) {
-                val gxf = ((x + 0.5f) / block - 0.5f).coerceIn(0f, (gw - 1).toFloat())
-                val p = r.px[y * r.w + x]
-                var o = 0xFF shl 24
-                for (c in 0 until 3) {
-                    val shift = 16 - 8 * c
-                    val b = max(40f, sample(bg[c], gw, gh, gxf, gyf))
-                    val v = ((p shr shift) and 0xFF) / b
-                    val s = ((v - black) / (white - black)).coerceIn(0f, 1f)
-                    o = o or (clamp255(s * 255f + 0.5f) shl shift)
+        val found = g.filter { !it.isNaN() }.sorted()
+        val top = if (found.isNotEmpty()) found[found.size * 9 / 10] else 255f
+        for (i in g.indices) if (g[i] < 0.35f * top) g[i] = Float.NaN // far darker than the paper: print, not shadow
+        // Fill the print from the paper around it.
+        repeat(max(gw, gh)) {
+            if (g.none { it.isNaN() }) return@repeat
+            g = FloatArray(g.size) { i ->
+                if (!g[i].isNaN()) return@FloatArray g[i]
+                var s = 0f
+                var k = 0
+                for (dy in -1..1) for (dx in -1..1) {
+                    val x = i % gw + dx
+                    val y = i / gw + dy
+                    if (x in 0 until gw && y in 0 until gh && !g[y * gw + x].isNaN()) { s += g[y * gw + x]; k++ }
                 }
-                out[y * r.w + x] = o
+                if (k > 0) s / k else Float.NaN
             }
         }
-        return Raster(r.w, r.h, out)
+        for (i in g.indices) if (g[i].isNaN()) g[i] = top
+        repeat(2) { g = blurGrid(g, gw, gh) }
+        fun paperAt(x: Int, y: Int) = sample(g, gw, gh,
+            ((x + 0.5f) / block - 0.5f).coerceIn(0f, (gw - 1).toFloat()), ((y + 0.5f) / block - 0.5f).coerceIn(0f, (gh - 1).toFloat()))
+        // The paper's tint, from the pixels that are paper.
+        val sum = DoubleArray(3)
+        var n = 0
+        for (y in 0 until h step 2) for (x in 0 until w step 2) {
+            val p = r.px[y * w + x]
+            if (chroma(p) < GREY && luminance(p) > 0.6f * paperAt(x, y)) {
+                sum[0] += ((p shr 16) and 0xFF).toDouble(); sum[1] += ((p shr 8) and 0xFF).toDouble(); sum[2] += (p and 0xFF).toDouble()
+                n++
+            }
+        }
+        val tint = if (n > 100) FloatArray(3) { c -> ((sum[0] + sum[1] + sum[2]) / 3 / max(1.0, sum[c])).toFloat() } else floatArrayOf(1f, 1f, 1f)
+        val out = IntArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            val gain = (PAPER_WHITE / max(1f, paperAt(x, y))).coerceIn(1f, MAX_GAIN)
+            val p = r.px[y * w + x]
+            // Paper and ink get the full lift; strong colours little of it, so a coloured cover
+            // keeps its exposure and white text on it stays readable.
+            val hi = max(max((p shr 16) and 0xFF, (p shr 8) and 0xFF), p and 0xFF)
+            val sat = if (hi == 0) 0f else chroma(p).toFloat() / hi
+            val lift = 1f + (gain - 1f) * (1f - sat)
+            val v = FloatArray(3) { c -> ((p shr (16 - 8 * c)) and 0xFF) * lift * tint[c] }
+            // Past white, scale the whole colour down rather than clip one channel: clipping
+            // shifts the hue and oversaturates (orange turns yellow and loud).
+            val over = max(v[0], max(v[1], v[2])) / 255f
+            val black = BLACK * (1f - sat) // darkens grey ink; on a colour it would only add saturation
+            var o = 0xFF shl 24
+            for (c in 0 until 3) {
+                val s = if (over > 1f) v[c] / over else v[c]
+                o = o or (clamp255((s - black) * 255f / (255f - black) + 0.5f) shl (16 - 8 * c))
+            }
+            out[y * w + x] = o
+        }
+        return Raster(w, h, out)
     }
+
+    private const val GREY = 40 // most a pixel's channels may differ by to count as paper
+    private const val PAPER_WHITE = 250f
+    private const val MAX_GAIN = 2.5f // lifts a shadow down to 40% brightness, not a dark photo to white
+    private const val BLACK = 20f
 
     /** Pure black ink on white paper (like a photocopy): each pixel is compared with the average around it. */
     fun blackWhite(r: Raster): Raster {
@@ -280,14 +325,14 @@ object PageFilters {
         val tmp = FloatArray(w * h)
         for (y in 0 until h) for (x in 0 until w) {
             var s = 0f
-            for (dx in -2..2) s += g[y * w + (x + dx).coerceIn(0, w - 1)]
-            tmp[y * w + x] = s / 5f
+            for (dx in -1..1) s += g[y * w + (x + dx).coerceIn(0, w - 1)]
+            tmp[y * w + x] = s / 3f
         }
         val out = FloatArray(w * h)
         for (y in 0 until h) for (x in 0 until w) {
             var s = 0f
-            for (dy in -2..2) s += tmp[(y + dy).coerceIn(0, h - 1) * w + x]
-            out[y * w + x] = s / 5f
+            for (dy in -1..1) s += tmp[(y + dy).coerceIn(0, h - 1) * w + x]
+            out[y * w + x] = s / 3f
         }
         return out
     }
