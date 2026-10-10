@@ -41,6 +41,7 @@ export function Suggestions({ docId, count, className }: { docId: string; count?
       invalidateDocuments(qc, docId);
       qc.invalidateQueries({ queryKey: ["document", docId, "suggestions"] });
       qc.invalidateQueries({ queryKey: ["document", docId, "history"] });
+      if (accept) qc.invalidateQueries({ queryKey: ["taxonomy"] }); // accepting can create a tag, sender or type
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {

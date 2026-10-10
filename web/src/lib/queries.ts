@@ -1,3 +1,4 @@
+import * as React from "react";
 import { keepPreviousData, QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import type {
@@ -71,6 +72,29 @@ export function useTaxonomy(kind: TaxonomyKind, spaceId?: string) {
     queryFn: () => api.get<{ items: TaxonomyItem[] }>(`/${kind}`, { space_id: spaceId }).then((r) => r.items),
     staleTime: 60_000,
   });
+}
+
+/** A search that lists everything with this tag, sender or type, in every space that has one of that name. */
+export function nameSearch(prefix: "tag" | "from" | "type", name: string) {
+  return /\s/.test(name) ? `${prefix}:"${name}"` : `${prefix}:${name}`;
+}
+
+/**
+ * Document types that have documents, most used first. The same type name can exist in
+ * several spaces; it is listed once (a `type:` search matches all of them).
+ */
+export function useDocumentTypes() {
+  const types = useTaxonomy("document-types");
+  return React.useMemo(() => {
+    const byName = new Map<string, { name: string; count: number }>();
+    for (const t of types.data ?? []) {
+      const k = t.name.toLowerCase();
+      const cur = byName.get(k);
+      if (cur) cur.count += t.document_count;
+      else byName.set(k, { name: t.name, count: t.document_count });
+    }
+    return [...byName.values()].filter((t) => t.count > 0).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [types.data]);
 }
 
 /** Turns UI filters into API query params. */

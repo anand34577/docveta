@@ -114,6 +114,21 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
       toast.error(errorMessage(e));
     }
   };
+  // The AI works in the background; look again a few times for what it came up with.
+  const askAI = async () => {
+    try {
+      await api.post(`/documents/${doc.id}/ai`);
+      toast("Asked AI for suggestions. They appear here in a moment.");
+      for (const ms of [4000, 12000, 30000]) {
+        setTimeout(() => {
+          invalidateDocuments(qc, doc.id);
+          qc.invalidateQueries({ queryKey: ["document", doc.id, "suggestions"] });
+        }, ms);
+      }
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  };
   const trash = async () => {
     try {
       await api.del(`/documents/${doc.id}`);
@@ -223,6 +238,11 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
                   {ai?.chat && doc.status === "ready" && (
                     <DropdownMenuItem onSelect={() => navigate({ to: "/ask", search: { doc: doc.id } })}>
                       <MessageSquareText /> Ask about this document
+                    </DropdownMenuItem>
+                  )}
+                  {ai?.chat && canEdit && doc.status === "ready" && space?.ai_policy !== "off" && (
+                    <DropdownMenuItem onSelect={askAI}>
+                      <Sparkles /> Ask AI for suggestions
                     </DropdownMenuItem>
                   )}
                   {pageEditable && (

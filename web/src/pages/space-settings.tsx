@@ -257,7 +257,7 @@ function Members({ space }: { space: Space }) {
 const kindLabels: Record<TaxonomyKind, { one: string; many: string; help: string }> = {
   tags: { one: "tag", many: "Tags", help: "Labels like Tax, Medical or Car. A document can have many." },
   correspondents: { one: "correspondent", many: "Correspondents", help: "Who a document is from or to — a bank, a hospital, a company." },
-  "document-types": { one: "document type", many: "Document types", help: "What a document is — Bill, Invoice, Policy, Certificate." },
+  "document-types": { one: "document type", many: "Document types", help: "The broad kind of document — Identification, Bill, Insurance, Certificate. Each document has one; tags (Aadhaar, PAN) say what exactly it is." },
 };
 
 const matchHelp: Record<MatchAlgorithm, string> = {
