@@ -250,6 +250,7 @@ func (a *App) Handler() http.Handler {
 	return httpx.Chain(mux,
 		httpx.Base(a.Log, a.Cfg.TrustedProxies, m.observe),
 		httpx.SecurityHeaders(a.Cfg.BaseURL.Scheme == "https"),
+		httpx.Compress(),
 		ap.Authenticate,
 	)
 }

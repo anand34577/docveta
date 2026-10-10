@@ -2680,6 +2680,59 @@ paths:
                   type: string
                 trash_originals:
                   type: boolean
+  /api/v1/documents/archive:
+    post:
+      summary: Download several documents as one ZIP file
+      description: >-
+        Send JSON, or an ordinary form post (fields ids and kind) so a browser saves the
+        download straight to disk. Documents the caller can't open are left out.
+      tags:
+      - documents
+      responses:
+        default:
+          $ref: '#/components/responses/Problem'
+        '200':
+          description: The ZIP file
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - ids
+              properties:
+                ids:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: string
+                    format: uuid
+                kind:
+                  type: string
+                  enum:
+                  - original
+                  - archive
+                  description: archive takes the searchable PDF where a document has one
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+              - ids
+              properties:
+                ids:
+                  type: string
+                  description: Document ids, separated by commas
+                kind:
+                  type: string
+                  enum:
+                  - original
+                  - archive
   /api/v1/documents/{id}/versions:
     get:
       summary: List versions of a document's file
