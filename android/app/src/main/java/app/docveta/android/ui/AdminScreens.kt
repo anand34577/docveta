@@ -91,6 +91,7 @@ import app.docveta.android.data.processingSettings
 import app.docveta.android.data.reindex
 import app.docveta.android.data.resetAiTuning
 import app.docveta.android.data.resetUserTwoFactor
+import app.docveta.android.data.retryFailedTasks
 import app.docveta.android.data.retryTask
 import app.docveta.android.data.saveAiTuning
 import app.docveta.android.data.revokeInvite
@@ -364,12 +365,14 @@ fun AdminProcessingScreen(onBack: () -> Unit, onOpenDoc: (String) -> Unit) {
     val run = rememberRunner()
     val confirm = rememberConfirmation()
     var status by remember { mutableStateOf<String?>(null) }
+    // Pages go forward by cursor; the cursors already used make "Previous" work.
+    var cursors by remember(status) { mutableStateOf(listOf<String?>(null)) }
     val workers = rememberLoader { c.repo.workers() }
-    val tasks = rememberLoader(status) { c.repo.tasks(status) }
+    val tasks = rememberLoader(status, cursors) { c.repo.tasks(status, cursors.last()) }
     var adding by remember { mutableStateOf(false) }
     var token by remember { mutableStateOf<Pair<String, String>?>(null) }
     // Keep the queue live while the screen is open.
-    LaunchedEffect(status) { while (true) { delay(8000); tasks.reload(); workers.reload() } }
+    LaunchedEffect(tasks) { while (true) { delay(8000); tasks.reload(); workers.reload() } }
     Page("Processing", onBack, actions = { TextButton({ adding = true }) { Text("Add worker") } }) {
         val st = tasks.data?.stats
         StatTiles(listOf("Waiting" to (st?.queued?.toString() ?: "–"), "In progress" to (st?.leased?.toString() ?: "–"), "Pages read (24h)" to (st?.pagesDone24h?.toString() ?: "–"), "Failed (24h)" to (st?.failed24h?.toString() ?: "–")))
@@ -407,9 +410,16 @@ fun AdminProcessingScreen(onBack: () -> Unit, onOpenDoc: (String) -> Unit) {
         ProcessingSettingsSection()
         SectionDivider()
         SectionLabel("Recent tasks")
-        SelectField("Show", listOf(null to "All", "queued" to "Waiting", "leased" to "In progress", "failed" to "Failed", "done" to "Done"), status) { status = it }
+        SelectField("Show", listOf(null to "All", "queued" to "Waiting", "leased" to "In progress", "failed" to "Failed", "done" to "Done", "cancelled" to "Cancelled"), status) { status = it }
+        if (status == "failed" && tasks.data?.items.orEmpty().isNotEmpty()) TextButton({
+            confirm.ask("Retry every failed task?", "Use this after fixing what made them fail, such as a worker that was offline.", "Retry all") {
+                run.run { val n = c.repo.retryFailedTasks(); cursors = listOf(null); tasks.reload(); toast(c.context, "Queued $n task${if (n == 1) "" else "s"} again") }
+            }
+        }, Modifier.padding(horizontal = 8.dp)) { Text("Retry all failed") }
         val items = tasks.data?.items.orEmpty()
-        if (tasks.data != null && items.isEmpty()) Hint("No tasks.")
+        if (tasks.data == null && tasks.error != null) ErrorState(tasks.error!!) { tasks.reload() }
+        else if (tasks.data == null) LoadingBox(Modifier.fillMaxWidth().padding(24.dp))
+        else if (items.isEmpty() && cursors.size == 1) Hint(if (status != null) "No tasks with this status." else "No tasks.")
         items.forEach { t ->
             ItemRow(
                 t.documentTitle.ifBlank { "Document" }, listOfNotNull(t.type + (t.pageFrom?.let { " p$it–${t.pageTo}" } ?: ""), t.status + if (t.attempt > 1) " (try ${t.attempt})" else "", t.worker).joinToString(" · "),
@@ -417,6 +427,12 @@ fun AdminProcessingScreen(onBack: () -> Unit, onOpenDoc: (String) -> Unit) {
             ) {
                 if (t.status == "failed") TextButton({ run.run("Queued again") { c.repo.retryTask(t.id); tasks.reload() } }) { Text("Retry") }
             }
+        }
+        val next = tasks.data?.nextCursor
+        if (cursors.size > 1 || next != null) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Page ${cursors.size} · 50 per page", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton({ cursors = cursors.dropLast(1) }, enabled = cursors.size > 1) { Text("Previous") }
+            TextButton({ cursors = cursors + next }, enabled = next != null) { Text("Next") }
         }
     }
     if (adding) TextInputDialog("Add processing worker", "Name", "rk3588-npu-1", "Create and show token", "A name to recognise this machine.", onDismiss = { adding = false }) { name ->

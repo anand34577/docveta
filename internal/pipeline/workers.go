@@ -900,35 +900,89 @@ type QueueStats struct {
 	PagesDone24h int `json:"pages_done_24h"`
 }
 
-func (s *Service) Tasks(ctx context.Context, p *auth.Principal, status string, limit int) ([]TaskView, *QueueStats, error) {
+// taskOrder is how the task list is sorted: running work first, then waiting, failed, done, cancelled.
+var taskOrder = []string{"leased", "queued", "failed", "done", "cancelled"}
+
+// Tasks lists processing tasks a page at a time (newest first within each status) with the
+// queue's numbers. cursor continues after the previous page; the returned one is empty at
+// the end. Each status is read from its own index, so this stays quick with millions of tasks.
+func (s *Service) Tasks(ctx context.Context, p *auth.Principal, status, cursor string, limit int) ([]TaskView, *QueueStats, string, error) {
 	if !p.Admin() {
-		return nil, nil, apperr.Forbidden("")
+		return nil, nil, "", apperr.Forbidden("")
 	}
 	var st QueueStats
 	if err := s.pool.QueryRow(ctx, `SELECT
-		count(*) FILTER (WHERE status='queued'), count(*) FILTER (WHERE status='leased'),
-		count(*) FILTER (WHERE status='failed' AND finished_at > now()-interval '1 day'),
-		count(*) FILTER (WHERE status='done' AND type='ocr' AND finished_at > now()-interval '1 day'),
-		coalesce(sum(coalesce(page_to-page_from+1,1)) FILTER (WHERE status='done' AND type='ocr' AND finished_at > now()-interval '1 day'),0)
-		FROM processing_tasks`).Scan(&st.Queued, &st.Leased, &st.Failed24h, &st.Done24h, &st.PagesDone24h); err != nil {
-		return nil, nil, err
+		(SELECT count(*) FROM processing_tasks WHERE status='queued'),
+		(SELECT count(*) FROM processing_tasks WHERE status='leased'),
+		(SELECT count(*) FROM processing_tasks WHERE status='failed' AND finished_at > now()-interval '1 day'),
+		count(*), coalesce(sum(coalesce(page_to-page_from+1,1)),0)
+		FROM processing_tasks WHERE status='done' AND finished_at > now()-interval '1 day' AND type='ocr'`).Scan(&st.Queued, &st.Leased, &st.Failed24h, &st.Done24h, &st.PagesDone24h); err != nil {
+		return nil, nil, "", err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT t.id, t.document_id, d.title, t.type, t.status, t.page_from, t.page_to, t.priority, t.attempt,
-		w.name, t.last_error, t.created_at, t.finished_at
-		FROM processing_tasks t JOIN documents d ON d.id=t.document_id LEFT JOIN workers w ON w.id=t.worker_id
-		WHERE t.type <> 'embedded' AND ($1='' OR t.status=$1)
-		ORDER BY CASE t.status WHEN 'leased' THEN 0 WHEN 'queued' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END, t.updated_at DESC
-		LIMIT $2`, status, limit)
-	if err != nil {
-		return nil, nil, err
+	statuses := taskOrder
+	if status != "" {
+		if !slices.Contains(taskOrder, status) {
+			return []TaskView{}, &st, "", nil // nothing has that status ("none": just the numbers)
+		}
+		statuses = []string{status}
 	}
-	tasks, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (TaskView, error) {
-		var t TaskView
-		err := r.Scan(&t.ID, &t.DocumentID, &t.Title, &t.Type, &t.Status, &t.PageFrom, &t.PageTo, &t.Priority, &t.Attempt, &t.Worker,
-			&t.LastError, &t.CreatedAt, &t.FinishedAt)
-		return t, err
-	})
-	return tasks, &st, err
+	// The cursor is "status|updated_at|id" of the last task shown.
+	var after struct {
+		status string
+		at     time.Time
+		id     uuid.UUID
+	}
+	if cursor != "" {
+		parts := strings.Split(cursor, "|")
+		var err1, err2 error
+		if len(parts) == 3 {
+			after.status = parts[0]
+			after.at, err1 = time.Parse(time.RFC3339Nano, parts[1])
+			after.id, err2 = uuid.Parse(parts[2])
+		}
+		if len(parts) != 3 || err1 != nil || err2 != nil || !slices.Contains(statuses, after.status) {
+			return nil, nil, "", apperr.Invalid("cursor", "Invalid cursor")
+		}
+		statuses = statuses[slices.Index(statuses, after.status):]
+	}
+	out := []TaskView{}
+	var lastAt time.Time
+	for _, stt := range statuses {
+		// Only the status the cursor stopped in continues after it; the ones below start at the top.
+		cond, args := "", []any{stt, limit - len(out) + 1}
+		if after.status == stt {
+			cond, args = " AND (t.updated_at, t.id) < ($3, $4)", append(args, after.at, after.id)
+		}
+		rows, err := s.pool.Query(ctx, `SELECT t.id, t.document_id, d.title, t.type, t.status, t.page_from, t.page_to, t.priority, t.attempt,
+			w.name, t.last_error, t.created_at, t.finished_at, t.updated_at
+			FROM processing_tasks t JOIN documents d ON d.id=t.document_id LEFT JOIN workers w ON w.id=t.worker_id
+			WHERE t.status=$1 AND t.type <> 'embedded'`+cond+`
+			ORDER BY t.updated_at DESC, t.id DESC LIMIT $2`, args...)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		var ats []time.Time
+		page, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (TaskView, error) {
+			var t TaskView
+			var at time.Time
+			err := r.Scan(&t.ID, &t.DocumentID, &t.Title, &t.Type, &t.Status, &t.PageFrom, &t.PageTo, &t.Priority, &t.Attempt, &t.Worker,
+				&t.LastError, &t.CreatedAt, &t.FinishedAt, &at)
+			ats = append(ats, at)
+			return t, err
+		})
+		if err != nil {
+			return nil, nil, "", err
+		}
+		for i, t := range page {
+			if len(out) == limit { // one more exists: there is a next page
+				last := out[len(out)-1]
+				return out, &st, last.Status + "|" + lastAt.Format(time.RFC3339Nano) + "|" + last.ID.String(), nil
+			}
+			out = append(out, t)
+			lastAt = ats[i]
+		}
+	}
+	return out, &st, "", nil
 }
 
 // RetryTask re-queues a failed task (admin).
@@ -961,6 +1015,50 @@ func (s *Service) RetryTask(ctx context.Context, p *auth.Principal, id uuid.UUID
 		s.signal()
 	}
 	return err
+}
+
+// RetryFailed re-queues every failed task (admin), after the cause (a worker that was down,
+// a missing language) is fixed. It returns how many were queued again.
+func (s *Service) RetryFailed(ctx context.Context, p *auth.Principal) (int, error) {
+	if !p.Admin() {
+		return 0, apperr.Forbidden("")
+	}
+	n := 0
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `UPDATE processing_tasks SET status='queued', attempt=0, excluded_engines='{}', not_before=now(),
+			fallback_at=now(), last_error='', finished_at=NULL, updated_at=now() WHERE status='failed'
+			RETURNING ocr_run_id, document_id`)
+		if err != nil {
+			return err
+		}
+		var runs, docs []uuid.UUID
+		for rows.Next() {
+			var run *uuid.UUID
+			var doc uuid.UUID
+			if err := rows.Scan(&run, &doc); err != nil {
+				rows.Close()
+				return err
+			}
+			if run != nil {
+				runs = append(runs, *run)
+			}
+			docs = append(docs, doc)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		n = len(docs)
+		if _, err := tx.Exec(ctx, `UPDATE ocr_runs SET status='running', finished_at=NULL WHERE id = ANY($1) AND status='failed'`, runs); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE documents SET status='processing', processing_stage='awaiting_ocr' WHERE id = ANY($1) AND status='failed'`, docs)
+		return err
+	})
+	if err == nil && n > 0 {
+		s.signal()
+	}
+	return n, err
 }
 
 // OCRAvailable reports whether an enabled worker that can read text has been seen

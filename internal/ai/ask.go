@@ -42,6 +42,8 @@ type Conversation struct {
 	ID        uuid.UUID `json:"id"`
 	Title     string    `json:"title"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// DocumentIDs are the documents the conversation is about; empty means all of them.
+	DocumentIDs []uuid.UUID `json:"document_ids"`
 }
 
 type AskInput struct {
@@ -50,6 +52,9 @@ type AskInput struct {
 	SpaceIDs       []uuid.UUID `json:"space_ids"`
 	// DocumentIDs limits the question to these documents ("ask about this document").
 	DocumentIDs []uuid.UUID `json:"document_ids"`
+	// Regenerate answers the conversation's last question again, replacing its last answer
+	// instead of adding the question a second time.
+	Regenerate bool `json:"regenerate"`
 }
 
 const (
@@ -57,6 +62,7 @@ const (
 	passageCap   = 4000 // characters of one page read whole ("summarise this")
 	passageChars = 1600 // a keyword hit is cut to this window around the matching words
 	historyTurns = 6    // earlier messages sent along for follow-up questions
+	wholePages   = 30   // a scoped document up to this many pages is read whole when it fits
 )
 
 var stop = map[string]bool{}
@@ -161,7 +167,15 @@ type docInfo struct {
 // retrieve finds the passages to answer from: keyword matches on the pages plus, when
 // embeddings exist, meaning-based matches, fused with reciprocal rank fusion. docs limits
 // the search to those documents.
-func (s *Service) retrieve(ctx context.Context, question string, spaceIDs, docs []uuid.UUID, semantic bool, maxSources, perDocSources int) ([]source, error) {
+func (s *Service) retrieve(ctx context.Context, question string, spaceIDs, docs []uuid.UUID, semantic bool, maxSources, perDocSources, fitTokens int) ([]source, error) {
+	if len(docs) > 0 {
+		// Asked about particular documents: when they fit, the model reads them whole, so
+		// "summarise this" or "what's on the last page" work as well as keyword questions.
+		if whole, err := s.wholeDocuments(ctx, spaceIDs, docs, fitTokens); err != nil || whole != nil {
+			return whole, err
+		}
+		perDocSources = maxSources // the person chose these documents; don't stop at a few pages each
+	}
 	type key struct {
 		doc  uuid.UUID
 		page int
@@ -269,6 +283,33 @@ func (s *Service) retrieve(ctx context.Context, question string, spaceIDs, docs 
 	return out, nil
 }
 
+// wholeDocuments returns every page of docs, in order, when together they fit in fitTokens
+// (and wholePages); otherwise nil.
+func (s *Service) wholeDocuments(ctx context.Context, spaceIDs, docs []uuid.UUID, fitTokens int) ([]source, error) {
+	rows, err := s.pool.Query(ctx, `SELECT pg.document_id, pg.page_no, pg.text FROM pages pg JOIN documents d ON d.id=pg.document_id
+		WHERE pg.document_id = ANY($1) AND d.space_id = ANY($2) AND d.deleted_at IS NULL AND length(btrim(pg.text)) > 0
+		ORDER BY array_position($1, pg.document_id), pg.page_no LIMIT $3`, docs, spaceIDs, wholePages+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []source
+	used := 0
+	for rows.Next() {
+		var sc source
+		if err := rows.Scan(&sc.doc, &sc.page, &sc.text); err != nil {
+			return nil, err
+		}
+		sc.text = strings.TrimSpace(sc.text)
+		used += estTokens(sc.text) + 40 // and its heading line
+		if len(out) == wholePages || used > fitTokens {
+			return nil, rows.Err()
+		}
+		out = append(out, sc)
+	}
+	return out, rows.Err()
+}
+
 // describe loads what the model should know about each source document.
 func (s *Service) describe(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]docInfo, error) {
 	rows, err := s.pool.Query(ctx, `SELECT d.id, d.title, coalesce(c.name,''), coalesce(t.name,''), coalesce(to_char(d.document_date,'YYYY-MM-DD'),''),
@@ -313,7 +354,11 @@ Rules:
 - Quote amounts, dates, policy and account numbers exactly as written.
 - Today's date is %s; use it for questions like "is it expired" or "how long until".
 - Be concise and direct. Use short paragraphs or a list; use a table only when comparing several documents.
-- Reply in the language of the question.`
+- Reply in the language of the question.%s`
+
+// scopedNote tells the model what "this document" means when the person asked about particular documents.
+const scopedNote = `
+- The user is asking about the specific document(s) in the sources; "this document", "it" and similar words refer to them.`
 
 // Ask answers a question from the user's documents, streaming the answer through emit.
 // Events: "status" ({stage}), "citations" ([]Citation), "delta" (string),
@@ -354,24 +399,36 @@ func (s *Service) Ask(ctx context.Context, p *auth.Principal, in AskInput, emit 
 	}
 	// The provider's context window is shared out: room for the answer first, then the earlier
 	// conversation (a quarter at most), and the rest for the passages found.
-	sys := fmt.Sprintf(systemPrompt, time.Now().Format("2 January 2006"))
-	room := prov.contextTokens() - askReplyTokens - estTokens(sys) - estTokens(q)
-	convID, history, prevQuestion, err := s.conversation(ctx, p, in.ConversationID, min(historyTokens, max(room/4, 0)))
+	conv, err := s.conversation(ctx, p, in.ConversationID, in.Regenerate)
 	if err != nil {
 		return err
 	}
+	// A conversation stays on the documents it started with.
+	docs := in.DocumentIDs
+	if !conv.fresh {
+		docs = conv.docs
+	}
+	note := ""
+	if len(docs) > 0 {
+		note = scopedNote
+	}
+	sys := fmt.Sprintf(systemPrompt, time.Now().Format("2 January 2006"), note)
+	room := prov.contextTokens() - askReplyTokens - estTokens(sys) - estTokens(q)
+	history := trimHistory(conv.hist, min(historyTokens, max(room/4, 0)))
+	prevQuestion := lastQuestion(conv.hist)
 	for _, m := range history {
 		room -= estTokens(m.Content)
 	}
+	budget := min(max(room, 300), askPassageTokens)
 
-	emit("status", map[string]string{"stage": "searching"})
+	emit("status", map[string]any{"stage": "searching", "conversation_id": conv.id})
 	// A follow-up ("and the year before?") only makes sense with the previous question.
 	searchText := q
 	if prevQuestion != "" && isFollowUp(q) {
 		searchText = prevQuestion + "\n" + q
 	}
 	tune := s.tuning(ctx)
-	srcs, err := s.retrieve(ctx, searchText, allowed, in.DocumentIDs, prov.EmbeddingModel != "", tune.AskSources, tune.AskSourcesPerDocument)
+	srcs, err := s.retrieve(ctx, searchText, allowed, docs, prov.EmbeddingModel != "", tune.AskSources, tune.AskSourcesPerDocument, budget)
 	if err != nil {
 		return err
 	}
@@ -393,7 +450,7 @@ func (s *Service) Ask(ctx context.Context, p *auth.Principal, in AskInput, emit 
 	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancelSave()
 	finish := func() error {
-		cid, mid, err := s.saveTurn(saveCtx, p, convID, q, answer.String(), cites)
+		cid, mid, err := s.saveTurn(saveCtx, p, conv, docs, q, answer.String(), cites)
 		if err != nil {
 			return err
 		}
@@ -401,8 +458,8 @@ func (s *Service) Ask(ctx context.Context, p *auth.Principal, in AskInput, emit 
 		return nil
 	}
 	if len(srcs) == 0 {
-		if len(in.DocumentIDs) > 0 {
-			answer.WriteString("These documents have no readable text yet, so I can't answer from them. If they were just added, try again once they've been processed.")
+		if len(docs) > 0 {
+			answer.WriteString("I can't read these documents: they have no text yet, or were deleted. If they were just added, try again once they've been processed.")
 		} else {
 			answer.WriteString("I couldn't find anything about that in your documents. Try other words, or check that the document has been uploaded and processed.")
 		}
@@ -413,7 +470,6 @@ func (s *Service) Ask(ctx context.Context, p *auth.Principal, in AskInput, emit 
 	emit("citations", cites)
 
 	var ctxText strings.Builder
-	budget := min(max(room, 300), askPassageTokens)
 	for i, sc := range srcs {
 		d := info[sc.doc]
 		if budget < 50 && i > 0 {
@@ -471,31 +527,54 @@ func aiErrorMessage(err error) string {
 	return "The AI server couldn't answer: " + err.Error()
 }
 
-// conversation checks an existing conversation and returns recent turns for context and the
-// last question asked. A new conversation (id nil) is only created when the first answer
-// is saved, so failed first questions don't leave empty conversations behind.
-func (s *Service) conversation(ctx context.Context, p *auth.Principal, id *uuid.UUID, maxTokens int) (uuid.UUID, []Message, string, error) {
+// convState is what Ask needs from an existing conversation.
+type convState struct {
+	id      uuid.UUID   // chosen up front for a new one, so a stopped first answer can still be found
+	fresh   bool        // not saved yet: created with the first answer
+	docs    []uuid.UUID // the documents it is about
+	hist    []Message   // its most recent messages, oldest first
+	replace []uuid.UUID // messages a regenerated answer replaces
+}
+
+// conversation checks an existing conversation and returns its scope and recent turns. A new
+// conversation (id nil) is only created when the first answer is saved, so failed first
+// questions don't leave empty conversations behind. With regenerate, the last question and
+// its answer are left out of the history and marked to be replaced.
+func (s *Service) conversation(ctx context.Context, p *auth.Principal, id *uuid.UUID, regenerate bool) (convState, error) {
 	if id == nil {
-		return uuid.Nil, nil, "", nil
+		return convState{id: uuid.Must(uuid.NewV7()), fresh: true}, nil
 	}
 	var owner uuid.UUID
-	if err := s.pool.QueryRow(ctx, `SELECT user_id FROM ai_conversations WHERE id=$1`, *id).Scan(&owner); err != nil || owner != p.UserID {
-		return uuid.Nil, nil, "", apperr.NotFound("Conversation")
+	var docs []uuid.UUID
+	if err := s.pool.QueryRow(ctx, `SELECT user_id, document_ids FROM ai_conversations WHERE id=$1`, *id).Scan(&owner, &docs); err != nil || owner != p.UserID {
+		return convState{}, apperr.NotFound("Conversation")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT role, content FROM (SELECT role, content, created_at FROM ai_messages WHERE conversation_id=$1
-		ORDER BY created_at DESC LIMIT $2) m ORDER BY created_at`, *id, historyTurns)
+	rows, err := s.pool.Query(ctx, `SELECT id, role, content FROM (SELECT id, role, content, created_at FROM ai_messages WHERE conversation_id=$1
+		ORDER BY created_at DESC LIMIT $2) m ORDER BY created_at`, *id, historyTurns+2)
 	if err != nil {
-		return uuid.Nil, nil, "", err
+		return convState{}, err
 	}
+	var ids []uuid.UUID
 	hist, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Message, error) {
 		var m Message
-		err := r.Scan(&m.Role, &m.Content)
+		var mid uuid.UUID
+		err := r.Scan(&mid, &m.Role, &m.Content)
+		ids = append(ids, mid)
 		return m, err
 	})
 	if err != nil {
-		return uuid.Nil, nil, "", err
+		return convState{}, err
 	}
-	return *id, trimHistory(hist, maxTokens), lastQuestion(hist), nil
+	st := convState{id: *id, docs: docs}
+	if n := len(hist); regenerate && n >= 2 && hist[n-1].Role == "assistant" && hist[n-2].Role == "user" {
+		st.replace = ids[n-2:]
+		hist = hist[:n-2]
+	}
+	if len(hist) > historyTurns {
+		hist = hist[len(hist)-historyTurns:]
+	}
+	st.hist = hist
+	return st, nil
 }
 
 // trimHistory drops citation markers from earlier answers and keeps the newest turns that fit.
@@ -569,13 +648,21 @@ func conversationTitle(question string) string {
 }
 
 // saveTurn stores a question and its answer, creating the conversation on the first turn.
-func (s *Service) saveTurn(ctx context.Context, p *auth.Principal, conv uuid.UUID, question, answer string, cites []Citation) (uuid.UUID, uuid.UUID, error) {
+func (s *Service) saveTurn(ctx context.Context, p *auth.Principal, cs convState, docs []uuid.UUID, question, answer string, cites []Citation) (uuid.UUID, uuid.UUID, error) {
 	mid := uuid.Must(uuid.NewV7())
 	cj, _ := json.Marshal(cites)
+	conv := cs.id
+	if docs == nil {
+		docs = []uuid.UUID{}
+	}
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if conv == uuid.Nil {
-			conv = uuid.Must(uuid.NewV7())
-			if _, err := tx.Exec(ctx, `INSERT INTO ai_conversations (id, user_id, title) VALUES ($1,$2,$3)`, conv, p.UserID, conversationTitle(question)); err != nil {
+		if cs.fresh {
+			if _, err := tx.Exec(ctx, `INSERT INTO ai_conversations (id, user_id, title, document_ids) VALUES ($1,$2,$3,$4)`, conv, p.UserID, conversationTitle(question), docs); err != nil {
+				return err
+			}
+		}
+		if len(cs.replace) > 0 { // a regenerated answer takes the place of the old one
+			if _, err := tx.Exec(ctx, `DELETE FROM ai_messages WHERE conversation_id=$1 AND id = ANY($2)`, conv, cs.replace); err != nil {
 				return err
 			}
 		}
@@ -593,16 +680,18 @@ func (s *Service) saveTurn(ctx context.Context, p *auth.Principal, conv uuid.UUI
 	return conv, mid, err
 }
 
-// Conversations lists the user's conversations, newest first; before pages through older ones.
-func (s *Service) Conversations(ctx context.Context, p *auth.Principal, before *time.Time, limit int) ([]Conversation, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, title, updated_at FROM ai_conversations WHERE user_id=$1 AND ($2::timestamptz IS NULL OR updated_at < $2)
-		ORDER BY updated_at DESC LIMIT $3`, p.UserID, before, limit)
+// Conversations lists the user's conversations, newest first; before pages through older ones;
+// q keeps those whose title contains it.
+func (s *Service) Conversations(ctx context.Context, p *auth.Principal, q string, before *time.Time, limit int) ([]Conversation, error) {
+	like := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(strings.TrimSpace(q)) + "%"
+	rows, err := s.pool.Query(ctx, `SELECT id, title, updated_at, document_ids FROM ai_conversations WHERE user_id=$1 AND ($2::timestamptz IS NULL OR updated_at < $2)
+		AND title ILIKE $4 ORDER BY updated_at DESC LIMIT $3`, p.UserID, before, limit, like)
 	if err != nil {
 		return nil, err
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Conversation, error) {
 		var c Conversation
-		err := r.Scan(&c.ID, &c.Title, &c.UpdatedAt)
+		err := r.Scan(&c.ID, &c.Title, &c.UpdatedAt, &c.DocumentIDs)
 		return c, err
 	})
 	if out == nil {
@@ -643,8 +732,8 @@ func (s *Service) RenameConversation(ctx context.Context, p *auth.Principal, id 
 		return nil, apperr.Invalid("title", "Use 1–200 characters")
 	}
 	var c Conversation
-	err := s.pool.QueryRow(ctx, `UPDATE ai_conversations SET title=$3 WHERE id=$1 AND user_id=$2 RETURNING id, title, updated_at`,
-		id, p.UserID, title).Scan(&c.ID, &c.Title, &c.UpdatedAt)
+	err := s.pool.QueryRow(ctx, `UPDATE ai_conversations SET title=$3 WHERE id=$1 AND user_id=$2 RETURNING id, title, updated_at, document_ids`,
+		id, p.UserID, title).Scan(&c.ID, &c.Title, &c.UpdatedAt, &c.DocumentIDs)
 	if db.IsNoRows(err) {
 		return nil, apperr.NotFound("Conversation")
 	}

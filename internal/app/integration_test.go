@@ -429,6 +429,37 @@ func TestIntegration(t *testing.T) {
 	}
 	c.do("POST", "/api/v1/admin/tasks/"+taskID+"/retry", nil, 204, nil)
 	c.do("POST", "/api/v1/admin/tasks/"+taskID+"/retry", nil, 409, nil) // only failed tasks
+
+	// The task list pages through every task once, in the same order as one big page.
+	type taskPage struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+		Next *string `json:"next_cursor"`
+	}
+	var whole taskPage
+	c.do("GET", "/api/v1/admin/tasks?limit=200", nil, 200, &whole)
+	var paged []string
+	for cur := ""; ; {
+		var pg taskPage
+		c.do("GET", "/api/v1/admin/tasks?limit=1&cursor="+url.QueryEscape(cur), nil, 200, &pg)
+		for _, it := range pg.Items {
+			paged = append(paged, it.ID)
+		}
+		if pg.Next == nil || len(paged) > len(whole.Items) {
+			break
+		}
+		cur = *pg.Next
+	}
+	if len(whole.Items) == 0 || len(paged) != len(whole.Items) {
+		t.Fatalf("task pages: %d tasks one at a time, %d in one page", len(paged), len(whole.Items))
+	}
+	for i, it := range whole.Items {
+		if paged[i] != it.ID {
+			t.Fatalf("task pages: #%d is %s, want %s", i, paged[i], it.ID)
+		}
+	}
+	c.do("GET", "/api/v1/admin/tasks?cursor=garbage", nil, 422, nil)
 	var rl struct {
 		Tasks []struct {
 			TaskID   string `json:"task_id"`

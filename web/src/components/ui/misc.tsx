@@ -2,6 +2,7 @@ import * as React from "react";
 import { Checkbox as CB, Switch as SW, Tabs as TB } from "radix-ui";
 import { Check, Minus } from "lucide-react";
 import { cn, tagColors } from "@/lib/utils";
+import { Button } from "./button";
 
 /* ---------------------------------------------------------------- Badge / tag chip */
 
@@ -202,4 +203,26 @@ export function Avatar({ name, className }: { name: string; className?: string }
 
 export function Kbd({ children, className }: { children: React.ReactNode; className?: string }) {
   return <kbd className={cn("rounded border border-border bg-surface-2 px-1.5 py-px font-sans text-[11px] text-muted", className)}>{children}</kbd>;
+}
+
+/** The end of a paged list: loads the next page when it scrolls into view, or on click. */
+export function LoadMore({ hasMore, loading, onMore, label = "Show more", className }: { hasMore: boolean; loading: boolean; onMore: () => void; label?: string; className?: string }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const more = React.useRef(onMore);
+  more.current = onMore;
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || !hasMore || loading) return;
+    const io = new IntersectionObserver((e) => e[0].isIntersecting && more.current(), { rootMargin: "300px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loading]);
+  if (!hasMore) return null;
+  return (
+    <div ref={ref} className={cn("flex justify-center p-2", className)}>
+      <Button size="sm" variant="ghost" loading={loading} onClick={onMore}>
+        {label}
+      </Button>
+    </div>
+  );
 }

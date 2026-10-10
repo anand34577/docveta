@@ -211,11 +211,22 @@ func (a *API) registerAdmin(mux router) {
 
 	// Processing tasks
 	mux.HandleFunc("GET /api/v1/admin/tasks", handle(func(r *http.Request, p *auth.Principal) (map[string]any, error) {
-		t, st, err := a.Pipeline.Tasks(r.Context(), p, r.URL.Query().Get("status"), httpx.QueryInt(r, "limit", 100, 1, 500))
+		t, st, next, err := a.Pipeline.Tasks(r.Context(), p, r.URL.Query().Get("status"), r.URL.Query().Get("cursor"), httpx.QueryInt(r, "limit", 50, 1, 200))
 		if t == nil {
 			t = []pipeline.TaskView{}
 		}
-		return map[string]any{"items": t, "stats": st}, err
+		var nc *string
+		if next != "" {
+			nc = &next
+		}
+		return map[string]any{"items": t, "stats": st, "next_cursor": nc}, err
+	}))
+	mux.HandleFunc("POST /api/v1/admin/tasks/retry-failed", handle(func(r *http.Request, p *auth.Principal) (map[string]int, error) {
+		n, err := a.Pipeline.RetryFailed(r.Context(), p)
+		if err == nil && n > 0 {
+			a.Audit.Record(r.Context(), nil, "task.retry_failed", "task", "", map[string]any{"count": n})
+		}
+		return map[string]int{"retried": n}, err
 	}))
 	mux.HandleFunc("POST /api/v1/admin/tasks/{id}/retry", handleNoContent(func(r *http.Request, p *auth.Principal) error {
 		id, err := httpx.PathUUID(r, "id")
@@ -263,7 +274,7 @@ func (a *API) registerAdmin(mux router) {
 			(SELECT coalesce(sum(size_bytes),0) FROM document_files)`).Scan(&s.DatabaseBytes, &s.Documents, &s.Pages, &s.Users, &s.StorageBytes); err != nil {
 			return nil, err
 		}
-		_, st, err := a.Pipeline.Tasks(r.Context(), p, "none", 1)
+		_, st, _, err := a.Pipeline.Tasks(r.Context(), p, "none", "", 1)
 		if err != nil {
 			return nil, err
 		}

@@ -349,6 +349,43 @@ func TestAISuggestionsAndSearch(t *testing.T) {
 	kid.do("GET", "/api/v1/admin/ai/providers", nil, 403, nil)
 	c.do("DELETE", "/api/v1/ai/conversations/"+convID, nil, 204, nil)
 
+	// About one document: only it is read, the conversation stays on it for follow-ups, and a
+	// regenerated answer takes the place of the last one.
+	onlyDoc := func(ev map[string][]string) {
+		t.Helper()
+		var cs []struct {
+			DocumentID string `json:"document_id"`
+		}
+		_ = json.Unmarshal([]byte(ev["citations"][0]), &cs)
+		if len(cs) == 0 {
+			t.Fatalf("scoped ask cited nothing: %+v", ev)
+		}
+		for _, x := range cs {
+			if x.DocumentID != d0.ID {
+				t.Errorf("scoped ask cited another document: %s", x.DocumentID)
+			}
+		}
+	}
+	events = ask(t, c, map[string]any{"question": "Summarise this", "document_ids": []string{d0.ID}})
+	onlyDoc(events)
+	_ = json.Unmarshal([]byte(events["done"][0]), &done)
+	scoped := done.Conv
+	onlyDoc(ask(t, c, map[string]any{"question": "power consumption bill", "conversation_id": scoped}))
+	onlyDoc(ask(t, c, map[string]any{"question": "power consumption bill", "conversation_id": scoped, "regenerate": true}))
+	c.do("GET", "/api/v1/ai/conversations/"+scoped+"/messages", nil, 200, &msgs)
+	if len(msgs.Items) != 4 {
+		t.Errorf("regenerated conversation has %d messages, want 4", len(msgs.Items))
+	}
+	var scopedConvs jsonList[struct {
+		ID   string   `json:"id"`
+		Docs []string `json:"document_ids"`
+	}]
+	c.do("GET", "/api/v1/ai/conversations", nil, 200, &scopedConvs)
+	if len(scopedConvs.Items) != 1 || len(scopedConvs.Items[0].Docs) != 1 || scopedConvs.Items[0].Docs[0] != d0.ID {
+		t.Errorf("conversation scope not kept: %+v", scopedConvs.Items)
+	}
+	c.do("DELETE", "/api/v1/ai/conversations/"+scoped, nil, 204, nil)
+
 	// AI off everywhere (the personal space is off by default): Ask explains instead of failing mysteriously.
 	c.do("PATCH", "/api/v1/spaces/"+e.family, map[string]any{"ai_policy": "off"}, 200, nil)
 	var problem struct {

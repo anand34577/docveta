@@ -25,7 +25,7 @@ export function SettingsLayout({ title, description, base, sections, active, chi
       <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
       {description && <p className="mt-1 text-sm text-muted">{description}</p>}
       <div className="mt-6 flex flex-col gap-6 md:flex-row">
-        <nav ref={nav} className="scroll-x -mx-4 flex gap-1 border-b border-border px-4 pb-2 sm:-mx-6 sm:px-6 md:mx-0 md:w-52 md:shrink-0 md:flex-col md:overflow-visible md:border-0 md:px-0 md:pb-0" aria-label="Sections">
+        <nav ref={nav} className="scroll-x -mx-4 flex gap-1 border-b border-border px-4 pb-2 sm:-mx-6 sm:px-6 md:sticky md:top-4 md:mx-0 md:max-h-[calc(100dvh-6rem)] md:w-52 md:shrink-0 md:flex-col md:self-start md:overflow-y-auto md:border-0 md:px-0 md:pb-0" aria-label="Sections">
           {sections.map((s) => (
             <Link
               key={s.id}

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, CheckCheck, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
@@ -10,7 +10,7 @@ import { cn, formatDateTime } from "@/lib/utils";
 import { PageHeader } from "@/components/app-shell";
 import { severityIcons } from "@/components/notifications";
 import { Button } from "@/components/ui/button";
-import { EmptyState, Skeleton } from "@/components/ui/misc";
+import { EmptyState, LoadMore, Skeleton } from "@/components/ui/misc";
 import { Link } from "@tanstack/react-router";
 
 /** Every notification, newest first (the bell shows only the latest few). */
@@ -18,10 +18,13 @@ export function NotificationsPage() {
   const [unreadOnly, setUnreadOnly] = React.useState(false);
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const list = useQuery({
+  const list = useInfiniteQuery({
     queryKey: ["notifications-all", unreadOnly],
-    queryFn: () => api.get<{ items: Notification[]; unread: number }>("/notifications", { limit: 200, unread: unreadOnly }),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) => api.get<{ items: Notification[]; unread: number }>("/notifications", { limit: 50, unread: unreadOnly, before: pageParam || undefined }),
+    getNextPageParam: (last) => (last.items.length === 50 ? last.items[last.items.length - 1].id : undefined),
   });
+  const unread = list.data?.pages[0]?.unread ?? 0;
   const refresh = () => {
     qc.invalidateQueries({ queryKey: keys.notifications });
     qc.invalidateQueries({ queryKey: ["notifications-all"] });
@@ -34,12 +37,12 @@ export function NotificationsPage() {
     if (!n.read_at) void api.post("/notifications/read", { ids: [n.id] }).then(refresh, () => undefined);
     if (n.link) navigate({ to: n.link });
   };
-  const items = list.data?.items ?? [];
+  const items = React.useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader
         title="Notifications"
-        description={list.data ? (list.data.unread ? `${list.data.unread} unread` : "You're all caught up") : undefined}
+        description={list.data ? (unread ? `${unread} unread` : "You're all caught up") : undefined}
         actions={
           <>
             <Button size="sm" variant="ghost" asChild>
@@ -47,7 +50,7 @@ export function NotificationsPage() {
                 <Settings /> Preferences
               </Link>
             </Button>
-            {!!list.data?.unread && (
+            {!!unread && (
               <Button size="sm" onClick={markAll}>
                 <CheckCheck /> Mark all read
               </Button>
@@ -91,6 +94,7 @@ export function NotificationsPage() {
             ))}
           </ul>
         )}
+        {items.length > 0 && <LoadMore className="mt-2" hasMore={!!list.hasNextPage} loading={list.isFetchingNextPage} onMore={() => list.fetchNextPage()} label="Show older" />}
       </div>
     </div>
   );

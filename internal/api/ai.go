@@ -17,7 +17,6 @@ import (
 	"github.com/anand34577/docveta/internal/jobs"
 	"github.com/anand34577/docveta/internal/platform/httpx"
 	"github.com/anand34577/docveta/internal/search"
-	"github.com/anand34577/docveta/internal/spaces"
 )
 
 // listDocuments runs keyword search, or meaning-based / hybrid search when asked for and available.
@@ -128,15 +127,7 @@ func (a *API) registerAI(mux router) {
 		if err != nil {
 			return err
 		}
-		acc, err := a.Documents.Access(r.Context(), p, id, spaces.ActEdit)
-		if err != nil {
-			return err
-		}
-		if acc.Deleted {
-			return apperr.Conflict("in_trash", "Restore this document first")
-		}
-		return a.Queue.Insert(r.Context(), jobs.AIArgs{DocumentID: id, Classify: true, Embed: true},
-			&river.InsertOpts{Priority: jobs.PriorityInteractive, MaxAttempts: 2})
+		return a.Documents.SuggestAI(r.Context(), p, id)
 	}))
 	mux.HandleFunc("GET /api/v1/documents/{id}/similar", handle(func(r *http.Request, p *auth.Principal) (list[ai.SimilarDoc], error) {
 		id, err := httpx.PathUUID(r, "id")
@@ -240,7 +231,7 @@ func (a *API) registerAI(mux router) {
 			}
 			before = &t
 		}
-		c, err := a.AI.Conversations(r.Context(), p, before, httpx.QueryInt(r, "limit", 50, 1, 200))
+		c, err := a.AI.Conversations(r.Context(), p, r.URL.Query().Get("q"), before, httpx.QueryInt(r, "limit", 50, 1, 200))
 		return items(c), err
 	}))
 	mux.HandleFunc("DELETE /api/v1/ai/conversations", handle(func(r *http.Request, p *auth.Principal) (map[string]int64, error) {

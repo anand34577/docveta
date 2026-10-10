@@ -83,7 +83,7 @@ suspend fun Repository.downloadFile(d: Document, kind: String, version: Int? = n
     return f
 }
 
-/** Runs one action on many documents: update | trash | restore | purge | reprocess. [select] = "inbox" picks the whole Inbox on the server. */
+/** Runs one action on many documents: update | trash | restore | purge | reprocess | suggest. [select] = "inbox" or "failed" picks those documents on the server. */
 suspend fun Repository.bulk(ids: List<String>, action: String, update: JsonObject = JsonObject(emptyMap()), select: String? = null): BulkResult {
     val body = buildJsonObject {
         put("ids", strings(ids))
@@ -238,8 +238,10 @@ suspend fun Repository.createWorker(name: String): String = api.post<WorkerToken
 suspend fun Repository.setWorkerEnabled(id: String, on: Boolean) { api.send("PATCH", "/admin/workers/$id", body = buildJsonObject { put("enabled", on) }.toString()) }
 suspend fun Repository.rotateWorkerToken(id: String): String = api.post<WorkerToken>("/admin/workers/$id/rotate-token").token
 suspend fun Repository.deleteWorker(id: String) = api.delete("/admin/workers/$id")
-suspend fun Repository.tasks(status: String?): TaskList = api.get("/admin/tasks", mapOf("status" to status, "limit" to "100"))
+suspend fun Repository.tasks(status: String?, cursor: String? = null): TaskList = api.get("/admin/tasks", mapOf("status" to status, "cursor" to cursor, "limit" to "50"))
 suspend fun Repository.retryTask(id: String) { api.send("POST", "/admin/tasks/$id/retry") }
+/** Re-queues every failed task; returns how many. */
+suspend fun Repository.retryFailedTasks(): Int = api.post<Map<String, Int>>("/admin/tasks/retry-failed", "{}")["retried"] ?: 0
 
 suspend fun Repository.processingSettings(): ProcessingSettings = api.get("/admin/settings/processing")
 suspend fun Repository.saveProcessingSettings(s: ProcessingSettings): ProcessingSettings = api.put("/admin/settings/processing", AppJson.encodeToString(ProcessingSettings.serializer(), s))

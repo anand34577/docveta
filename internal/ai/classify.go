@@ -68,17 +68,46 @@ var classifySchema = map[string]any{
 	},
 }
 
+// nameConf is a name with how sure the model is. It is always an object (with a null name when
+// there is nothing to say): offered null as a whole, small local models take it every time and
+// never name a document type or sender.
 func nameConf() map[string]any {
-	return map[string]any{"anyOf": []any{
-		map[string]any{"type": "null"},
-		map[string]any{"type": "object", "additionalProperties": false, "required": []string{"name", "confidence"},
-			"properties": map[string]any{"name": map[string]any{"type": "string"}, "confidence": map[string]any{"type": "number"}}},
-	}}
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"name", "confidence"},
+		"properties": map[string]any{"name": map[string]any{"type": []string{"string", "null"}}, "confidence": map[string]any{"type": "number"}}}
 }
 
 type nameConfidence struct {
 	Name       string  `json:"name"`
 	Confidence float32 `json:"confidence"`
+}
+
+// plainConfidence is how sure a bare name counts as (servers without JSON schemas often get
+// "document_type": "Insurance" instead of an object).
+const plainConfidence = 0.75
+
+// UnmarshalJSON takes the object, a bare name or null, so a reply in a slightly different
+// shape still counts instead of being thrown away whole.
+func (n *nameConfidence) UnmarshalJSON(b []byte) error {
+	var name *string
+	if json.Unmarshal(b, &name) == nil {
+		if name != nil {
+			*n = nameConfidence{Name: *name, Confidence: plainConfidence}
+		}
+		return nil
+	}
+	type plain nameConfidence
+	var p struct {
+		plain
+		Name *string `json:"name"`
+	}
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*n = nameConfidence(p.plain)
+	if p.Name != nil {
+		n.Name = *p.Name
+	}
+	return nil
 }
 
 type classifyResult struct {
@@ -229,15 +258,15 @@ func (s *Service) ClassifyDocument(ctx context.Context, docID uuid.UUID) error {
 	if newTags {
 		tagRule = `- tags say what exactly the document is and what it is about, five at most (for an identity card: "Aadhaar" or "PAN"; for a bill: "Electricity"). Use the existing tags when they fit. If something important has no tag yet, you may add a new one: one to three words that other documents of the same kind will share, never a person's name, a number or a date. Don't repeat the document type as a tag.`
 	}
-	typeRule := `- document_type is the broad kind of document, the drawer it would be filed in. Pick it ONLY from the known document types; use null when none fits.`
+	typeRule := `- document_type is the broad kind of document, the drawer it would be filed in. Pick it ONLY from the known document types; its name is null when none fits.`
 	if newTypes {
-		typeRule = `- document_type is the broad kind of document, the drawer it would be filed in (an Aadhaar or PAN card is "Identification", a bank statement is "Banking"). Pick it from the known document types when one fits, otherwise from the common document types; only when neither has it, give a short new name. Use null if you can't tell.`
+		typeRule = `- document_type is the broad kind of document, the drawer it would be filed in (an Aadhaar or PAN card is "Identification", a bank statement is "Banking"). Pick it from the known document types when one fits, otherwise from the common document types; only when neither has it, give a short new name. Its name is null if you can't tell.`
 	}
 	sys := `You help a person organise their scanned documents. Read the document and propose how to file it.
 Rules:
 ` + tagRule + `
 ` + typeRule + `
-- correspondent is who sent or issued the document. Pick it from the known correspondents when one fits; if none fits, you may give its name as printed, otherwise use null.
+- correspondent is the organisation or person who sent or issued the document, such as a bank, insurer or utility. Pick it from the known correspondents when one fits; if none fits, give its name exactly as printed on the document; its name is null when the document doesn't name one.
 - document_date is the date printed on the document (issue/statement date), as YYYY-MM-DD, or null if unsure. Dates in this person's documents are written ` + order + `.
 - title is a short, clear title if the current one is poor, otherwise null.
 - custom_fields: only for the listed fields, value as plain text (numbers without currency symbols, dates as YYYY-MM-DD).
@@ -294,6 +323,9 @@ Rules:
 		have[t] = true
 	}
 	seen := map[string]bool{}
+	if res.DocumentType != nil && strings.TrimSpace(res.DocumentType.Name) != "" {
+		seen[strings.ToLower(strings.TrimSpace(res.DocumentType.Name))] = true // the type isn't a tag as well
+	}
 	invented := 0
 	for _, t := range res.Tags {
 		name := cleanName(t.Name, 40)

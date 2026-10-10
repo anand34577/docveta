@@ -112,11 +112,12 @@ export const spaceSettingsRoute = createRoute({
   component: SpaceSettingsPage,
 });
 
+const uuidParam = (v: unknown) => (typeof v === "string" && /^[0-9a-f-]{36}$/i.test(v) ? v : undefined);
 const askRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/ask",
-  // ?doc=<id>: ask about one document (from the document page).
-  validateSearch: (s: Record<string, unknown>): { doc?: string } => ({ doc: typeof s.doc === "string" && /^[0-9a-f-]{36}$/i.test(s.doc) ? s.doc : undefined }),
+  // ?doc=<id>: ask about one document (from the document page); ?c=<id>: an earlier conversation.
+  validateSearch: (s: Record<string, unknown>): { doc?: string; c?: string } => ({ doc: uuidParam(s.doc), c: uuidParam(s.c) }),
   component: AskPage,
 });
 const notificationsRoute = createRoute({ getParentRoute: () => appRoute, path: "/notifications", component: NotificationsPage });

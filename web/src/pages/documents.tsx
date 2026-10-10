@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { BookmarkPlus, FileSearch, FileText, Settings, Trash2, Upload } from "lucide-react";
+import { BookmarkPlus, FileSearch, FileText, RotateCw, Settings, Trash2, Upload } from "lucide-react";
 import { confirm } from "@/components/ui/confirm";
 import { invalidateDocuments, useStats } from "@/lib/queries";
 import { toast } from "sonner";
@@ -57,6 +57,26 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
   const stats = useStats();
   const qc = useQueryClient();
   const days = stats.data?.trash_retention_days;
+  const [retrying, setRetrying] = React.useState(false);
+  // Every failed document, not just the ones loaded on screen: the server picks them, 5000 a call.
+  const processFailedAgain = async () => {
+    if (!(await confirm({ title: "Process all failed documents again?", body: "Each one is read again from its original file. This can take a while for many documents.", confirmLabel: "Process again" }))) return;
+    setRetrying(true);
+    let done = 0;
+    try {
+      for (let i = 0; i < 200; i++) {
+        const r = await api.post<{ succeeded: number; remaining: number }>("/documents/bulk", { select: "failed", action: "reprocess", update: {} });
+        done += r.succeeded;
+        if (!r.remaining || !r.succeeded) break;
+      }
+      toast.success(done ? `Processing ${done} document${done === 1 ? "" : "s"} again` : "Nothing to process again");
+    } catch (e) {
+      toast.error(errorMessage(e), { description: done ? `${done} were queued before this.` : undefined });
+    } finally {
+      setRetrying(false);
+      invalidateDocuments(qc);
+    }
+  };
   const emptyTrash = async () => {
     if (!(await confirm({ title: "Empty the Trash?", body: `${info.total ?? "These"} document${info.total === 1 ? "" : "s"} will be deleted forever. This can't be undone.`, confirmLabel: "Delete forever", destructive: true }))) return;
     try {
@@ -84,6 +104,11 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
             )
           ) : (
             <>
+              {query.status?.split(",").includes("failed") && (info.total ?? info.items.length) > 0 && (
+                <Button size="sm" variant="ghost" loading={retrying} onClick={processFailedAgain}>
+                  <RotateCw /> Process failed again
+                </Button>
+              )}
               {filtered && (
                 <Button size="sm" variant="ghost" onClick={() => setSaveOpen(true)}>
                   <BookmarkPlus /> Save view

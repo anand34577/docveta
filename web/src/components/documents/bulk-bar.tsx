@@ -1,12 +1,12 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCheck, Combine, Download, FolderInput, RotateCcw, Tag, Trash2, X } from "lucide-react";
+import { CheckCheck, Combine, Download, FolderInput, MoreHorizontal, RotateCcw, RotateCw, Sparkles, Tag, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, downloadZip, errorMessage, ZIP_MAX } from "@/lib/api";
-import { invalidateDocuments, useTaxonomy } from "@/lib/queries";
+import { invalidateDocuments, useAIEnabled, useTaxonomy } from "@/lib/queries";
 import { useSelection } from "@/stores/ui";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
+import { Dialog, DialogContent, DialogFooter, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/overlay";
 import { Field, Input, NativeSelect } from "@/components/ui/input";
 import { Checkbox, TagChip, useScrollEdges } from "@/components/ui/misc";
 import { confirm } from "@/components/ui/confirm";
@@ -27,6 +27,7 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
   const [busy, setBusy] = React.useState(false);
   const bar = useScrollEdges<HTMLDivElement>();
   const selected = items.filter((d) => ids.has(d.id));
+  const ai = useAIEnabled().data;
   const n = ids.size;
 
   React.useEffect(() => () => clear(), [clear]);
@@ -136,6 +137,28 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
                 <Download /> <span className="hidden sm:inline">ZIP</span>
               </Button>
             )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="ghost" aria-label="More actions" title="More actions">
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                {ai?.chat && (
+                  <DropdownMenuItem onSelect={() => run("suggest", undefined, `Asked AI to suggest tags, type and sender for ${n} document${n === 1 ? "" : "s"}. Suggestions appear on each document.`)}>
+                    <Sparkles /> Suggest tags & type with AI
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  onSelect={async () => {
+                    if (await confirm({ title: `Process ${n} document${n === 1 ? "" : "s"} again?`, body: "Text is read again from the original file, then tags and details are suggested again.", confirmLabel: "Process again" }))
+                      void run("reprocess", undefined, `Processing ${n} document${n === 1 ? "" : "s"} again`);
+                  }}
+                >
+                  <RotateCw /> Process again
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button size="sm" variant="danger-ghost" loading={busy} onClick={() => run("trash", undefined, `Moved ${n} to Trash`)}>
               <Trash2 /> <span className="hidden sm:inline">Delete</span>
             </Button>

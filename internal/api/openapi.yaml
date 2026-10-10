@@ -241,6 +241,7 @@ paths:
                 required:
                 - items
                 - stats
+                - next_cursor
                 properties:
                   items:
                     type: array
@@ -248,18 +249,45 @@ paths:
                       $ref: '#/components/schemas/TaskView'
                   stats:
                     $ref: '#/components/schemas/QueueStats'
+                  next_cursor:
+                    type: string
+                    nullable: true
+                    description: Pass as cursor for the next page; null on the last page
         default: *id001
       parameters:
       - name: status
         in: query
         schema: *id002
+      - name: cursor
+        in: query
+        description: next_cursor of the previous page
+        schema:
+          type: string
       - name: limit
         in: query
         schema:
           type: integer
           minimum: 1
-          maximum: 500
-          default: 100
+          maximum: 200
+          default: 50
+  /api/v1/admin/tasks/retry-failed:
+    post:
+      summary: Retry every failed task
+      tags:
+      - admin
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - retried
+                properties:
+                  retried:
+                    type: integer
+        default: *id001
   /api/v1/admin/tasks/{id}/retry:
     post:
       summary: Retry a failed task
@@ -1790,6 +1818,12 @@ paths:
       - name: unread
         in: query
         schema: *id007
+      - name: before
+        in: query
+        description: Only notifications older than the one with this id, for paging
+        schema:
+          type: string
+          format: uuid
       - name: limit
         in: query
         schema:
@@ -3731,6 +3765,11 @@ paths:
         default:
           $ref: '#/components/responses/Problem'
       parameters:
+      - name: q
+        in: query
+        description: Only conversations whose title contains this
+        schema:
+          type: string
       - name: before
         in: query
         description: Only conversations updated before this time (RFC 3339), for paging
@@ -4504,11 +4543,13 @@ components:
       properties:
         action:
           type: string
+          description: update, trash, restore, purge, reprocess, or suggest (ask the AI to suggest tags, type and sender again)
         select:
           type: string
           enum:
           - inbox
-          description: Pick the documents on the server instead of ids ("inbox" = your Inbox, up to 5000 per call)
+          - failed
+          description: Pick the documents on the server instead of ids ("inbox" = your Inbox, "failed" = documents whose processing failed; up to 5000 per call)
         ids:
           items:
             format: uuid
@@ -6649,10 +6690,17 @@ components:
         updated_at:
           type: string
           format: date-time
+        document_ids:
+          type: array
+          description: The documents the conversation is about; empty means all
+          items:
+            type: string
+            format: uuid
       required:
       - id
       - title
       - updated_at
+      - document_ids
     ConversationMessage:
       type: object
       properties:
@@ -6694,10 +6742,13 @@ components:
             format: uuid
         document_ids:
           type: array
-          description: Ask only about these documents (at most 50)
+          description: Ask only about these documents (at most 50). A conversation keeps the documents it started with.
           items:
             type: string
             format: uuid
+        regenerate:
+          type: boolean
+          description: Answer the conversation's last question again, replacing its last answer
     RPCRequest:
       type: object
       properties:
