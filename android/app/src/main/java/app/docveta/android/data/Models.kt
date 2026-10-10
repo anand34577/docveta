@@ -214,7 +214,7 @@ data class ShareCreated(val share: Share, val link: String)
 data class Citation(val n: Int, @SerialName("document_id") val documentId: String, val title: String, val page: Int = 1, val snippet: String = "")
 
 @Serializable
-data class Conversation(val id: String, val title: String = "", @SerialName("updated_at") val updatedAt: String = "")
+data class Conversation(val id: String, val title: String = "", @SerialName("updated_at") val updatedAt: String = "", @SerialName("document_ids") val documentIds: List<String> = emptyList())
 
 @Serializable
 data class ConversationMessage(val id: String, val role: String, val content: String, val citations: List<Citation> = emptyList())
@@ -435,7 +435,7 @@ data class TaskView(
 data class QueueStats(val queued: Int = 0, val leased: Int = 0, @SerialName("failed_24h") val failed24h: Int = 0, @SerialName("done_24h") val done24h: Int = 0, @SerialName("pages_done_24h") val pagesDone24h: Int = 0)
 
 @Serializable
-data class TaskList(val items: List<TaskView> = emptyList(), val stats: QueueStats = QueueStats())
+data class TaskList(val items: List<TaskView> = emptyList(), val stats: QueueStats = QueueStats(), @SerialName("next_cursor") val nextCursor: String? = null)
 
 @Serializable
 data class ProcessingSettings(

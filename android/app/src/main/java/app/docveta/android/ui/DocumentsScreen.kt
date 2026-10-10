@@ -701,6 +701,7 @@ private fun SelectionBar(vm: DocsViewModel, trash: Boolean = false, onTrashed: (
                             else { toast(ctx, "Preparing the ZIP…"); run.run { shareFile(ctx, c.repo.zip(ids), "application/zip") } }
                         })
                         DropdownMenuItem(text = { Text("Process again") }, onClick = { menu = false; run.run { toast(ctx, vm.bulk("reprocess").describe("Processing again")) } })
+                        if (LocalAi.current.value.chat) DropdownMenuItem(text = { Text("Suggest tags & type with AI") }, onClick = { menu = false; run.run { toast(ctx, vm.bulk("suggest").describe("Asked AI for suggestions")) } })
                     }
                 }
             }

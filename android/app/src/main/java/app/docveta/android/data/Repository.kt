@@ -119,11 +119,13 @@ sealed interface SignIn {
 
 sealed interface AskEvent {
     /** "searching" while documents are looked up, then "answering" while the model writes. */
-    data class Status(val stage: String) : AskEvent
+    /** [conversationId] comes with the first one: an answer stopped part-way is kept under it. */
+    data class Status(val stage: String, val conversationId: String = "") : AskEvent
     data class Citations(val list: List<Citation>) : AskEvent
     data class Delta(val text: String) : AskEvent
     data class Done(val conversationId: String) : AskEvent
-    data class Failed(val message: String) : AskEvent
+    /** [gone]: the conversation no longer exists (deleted elsewhere). */
+    data class Failed(val message: String, val gone: Boolean = false) : AskEvent
 }
 
 private class MemoryCookies : CookieJar {
@@ -489,7 +491,10 @@ class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: Fi
 
     /* ------------------------------------------------------------ Ask */
 
-    suspend fun conversations(): List<Conversation> = api.get<Items<Conversation>>("/ai/conversations").items
+    /** A page of conversations, newest first; [before] is the last one's updated_at, [q] searches titles. */
+    suspend fun conversations(q: String = "", before: String? = null, limit: Int = 40): List<Conversation> =
+        api.get<Items<Conversation>>("/ai/conversations", mapOf("q" to q.ifBlank { null }, "before" to before, "limit" to limit.toString())).items
+    suspend fun deleteAllConversations() = api.delete("/ai/conversations")
     suspend fun conversation(id: String): List<ConversationMessage> = api.get<Items<ConversationMessage>>("/ai/conversations/$id/messages").items
     suspend fun deleteConversation(id: String) = api.delete("/ai/conversations/$id")
 
@@ -497,9 +502,10 @@ class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: Fi
         api.patch<Conversation>("/ai/conversations/$id", buildJsonObject { put("title", title) }.toString())
     }
 
-    fun ask(question: String, conversationId: String?, spaceId: String?, documentId: String? = null): Flow<AskEvent> = callbackFlow {
+    fun ask(question: String, conversationId: String?, spaceId: String?, documentId: String? = null, regenerate: Boolean = false): Flow<AskEvent> = callbackFlow {
         val body = buildJsonObject {
             put("question", question)
+            if (regenerate) put("regenerate", true)
             if (conversationId != null) put("conversation_id", conversationId)
             if (spaceId != null) putJsonArray("space_ids") { add(JsonPrimitive(spaceId)) }
             if (documentId != null) putJsonArray("document_ids") { add(JsonPrimitive(documentId)) }
@@ -525,7 +531,7 @@ class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: Fi
                                 val data = line.removePrefix("data:").trim()
                                 val obj = { AppJson.parseToJsonElement(data) as? JsonObject }
                                 when (event) {
-                                    "status" -> trySend(AskEvent.Status((obj()?.get("stage") as? JsonPrimitive)?.content.orEmpty()))
+                                    "status" -> trySend(AskEvent.Status((obj()?.get("stage") as? JsonPrimitive)?.content.orEmpty(), (obj()?.get("conversation_id") as? JsonPrimitive)?.content.orEmpty()))
                                     "citations" -> trySend(AskEvent.Citations(AppJson.decodeFromString(ListSerializer(Citation.serializer()), data)))
                                     "delta" -> trySend(AskEvent.Delta(AppJson.parseToJsonElement(data).let { e -> (e as? JsonPrimitive)?.content.orEmpty() }))
                                     "error" -> trySend(AskEvent.Failed((obj()?.get("message") as? JsonPrimitive)?.content ?: "Something went wrong"))
@@ -537,7 +543,7 @@ class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: Fi
                 }
             } catch (e: Exception) {
                 if (e !is kotlinx.coroutines.CancellationException && !isClosedForSend) {
-                    trySend(AskEvent.Failed((e as? ApiException)?.message ?: "The connection to the server was lost. Try again."))
+                    trySend(AskEvent.Failed((e as? ApiException)?.message ?: "The connection to the server was lost. Try again.", gone = (e as? ApiException)?.status == 404))
                 }
             } finally {
                 close()

@@ -6,6 +6,7 @@ import app.docveta.android.data.ApiClient
 import app.docveta.android.data.Repository
 import app.docveta.android.data.SecureStore
 import app.docveta.android.data.SessionStore
+import app.docveta.android.ui.AskStore
 import app.docveta.android.upload.UploadManager
 import coil.ImageLoader
 import coil.ImageLoaderFactory
@@ -34,6 +35,9 @@ class AppContainer(app: Application) {
 
     /** For work that outlives a screen (refreshing what the server offers). */
     val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
+
+    /** The Ask chats: kept here so they outlive the Ask screen. */
+    val ask = AskStore(repo, appScope)
 
     /** Whether the server has AI (Ask, meaning-based search, similar documents). */
     val ai = androidx.compose.runtime.mutableStateOf(AiStatus())
