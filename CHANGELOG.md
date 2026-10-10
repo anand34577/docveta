@@ -5,6 +5,8 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-10
+
 ### Changed
 - **Much better text recognition, above all for Hindi.** The OCR engines (GPU/CPU, Rockchip,
   Allwinner and the Android app) read with PaddleOCR's PP-OCRv5 models. On test lines, Hindi
