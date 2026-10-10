@@ -181,8 +181,8 @@ converted for your chip. See
 
 ## Allwinner A733 NPU
 
-On A733 boards such as the Radxa Cubie A7A, the NPU finds the text on each page and the
-processor reads the lines, with the same accuracy as the GPU/CPU engine. The
+On A733 boards such as the Radxa Cubie A7A, the NPU finds the text on each page and reads the
+lines, with the same accuracy as the GPU/CPU engine (about 7x faster than the processor). The
 [Linux installer](Install-on-Linux) finds the NPU and sets everything up, also inside a Proxmox
 container (`get-docveta.sh --proxmox <CTID>` on the host first). See
 [workers/allwinner/README.md](https://github.com/anand34577/docveta/blob/main/workers/allwinner/README.md).

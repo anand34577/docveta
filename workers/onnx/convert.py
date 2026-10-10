@@ -3,7 +3,7 @@
 The release workflow runs this once and ships the result in the docveta-ocr packages;
 you only need it to add scripts or refresh models.
 
-    pip install paddlepaddle "paddle2onnx==1.3.1" onnx
+    pip install "paddlepaddle==3.2.0" "paddle2onnx==2.1.0" onnx pyyaml packaging
     python convert.py --scripts en devanagari ta te ka --out models
 
 Produces <out>/det.onnx, <out>/rec_<script>.onnx + dict_<script>.txt and VERSION. Shapes
@@ -20,7 +20,7 @@ import tempfile
 
 # Same model sources and Paddle→ONNX step as the Rockchip converter.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rknn", "convert"))
-from convert import DET_URL, REC, fetch, paddle_to_onnx  # noqa: E402
+from convert import DET_URL, MODELS_VERSION, REC, fetch, paddle_to_onnx, rec_dict  # noqa: E402
 
 
 def main() -> None:
@@ -38,11 +38,12 @@ def main() -> None:
         for i, script in enumerate(args.scripts, start=2):
             url, dict_url = REC[script]
             print(f"[{i}] recognition model '{script}'")
-            rec = paddle_to_onnx(fetch(url, os.path.join(work, f"rec_{script}.tar")), _mk(work, f"rec_{script}"), f"rec_{script}")
+            d = _mk(work, f"rec_{script}")
+            rec = paddle_to_onnx(fetch(url, os.path.join(work, f"rec_{script}.tar")), d, f"rec_{script}")
             shutil.copy(rec, os.path.join(args.out, f"rec_{script}.onnx"))
-            fetch(dict_url, os.path.join(args.out, f"dict_{script}.txt"))
+            rec_dict(d, dict_url, os.path.join(args.out, f"dict_{script}.txt"))
     with open(os.path.join(args.out, "VERSION"), "w", encoding="utf-8") as f:
-        f.write("ppocr-v4det+" + "+".join(args.scripts) + "\n")
+        f.write(MODELS_VERSION + "+" + "+".join(args.scripts) + "\n")
     print(f"done: {args.out}")
 
 

@@ -1,7 +1,9 @@
-"""Generates document-like pages for calibrating the NPU detection model.
+"""Generates document-like pages for calibrating the NPU detection model, and text-line strips
+for calibrating (and checking) the NPU reading models.
 
 Calibration only measures value ranges, so realistic layout matters more than real text.
-Generated pages make the shipped det.nb reproducible and keep anyone's documents out of it.
+Generated pages make the shipped models reproducible and keep anyone's documents out of them.
+Indic text needs Pillow with libraqm (python -c "from PIL import features; print(features.check('raqm'))").
 
     python synthetic_pages.py --out calib --fonts ../../../fonts   # NotoSans*.ttf from the release
 """
@@ -10,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 import glob
+import math
 import os
 import random
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 WORDS = ("invoice total amount date tax paid due account number customer address street road city "
@@ -20,6 +24,67 @@ WORDS = ("invoice total amount date tax paid due account number customer address
          "electricity water insurance policy premium bank statement transaction credit debit "
          "reference period summary description service charges subtotal grand signature").split()
 HINDI = "बिल राशि दिनांक कुल भुगतान ग्राहक पता खाता संख्या विवरण कर सेवा शुल्क रसीद बीमा बैंक".split()
+
+
+# Sample lines per reader script, for line strips (phrases are cut from them).
+LINES = {
+    "en": ["Electricity bill dated 05/08/2026", "Amount due: 1842.00 INR", "Customer ID: KA-0912-77341",
+           "Invoice No. INV/2026/00458 GSTIN 29ABCDE1234F1Z5", "Total payable (incl. 18% GST) Rs. 12,450.75",
+           "Statement period: 01 Apr 2026 to 30 Jun 2026", "email: support@example.co.in Ph: +91 98290 12345",
+           "Flat 4B, Sunrise Apartments, MG Road, Pune 411001", "Rechnung Nr. 2026-117 Betrag fällig", "Facture n° 4521 à régler avant échéance"],
+    "devanagari": ["विद्युत बिल दिनांक 05/08/2026", "कुल देय राशि ₹ 1,842.00", "उपभोक्ता का नाम: रमेश कुमार शर्मा",
+                   "पता: मकान संख्या 12, गांधी नगर, जयपुर", "भारत सरकार आयकर विभाग स्थायी खाता संख्या कार्ड",
+                   "कृपया भुगतान अंतिम तिथि से पहले करें", "क्षेत्रीय परिवहन अधिकारी वाहन पंजीकरण प्रमाणपत्र",
+                   "कर्मचारी भविष्य निधि संगठन मासिक वेतन पर्ची", "आधार नामांकन संख्या १२३४ ५६७८ ९०१२", "Account No. 1100234567 बैंक खाता विवरण"],
+    "ta": ["மின்சார கட்டணம் தேதி 05/08/2026", "மொத்த தொகை ரூ 1,842.00", "வாடிக்கையாளர் பெயர் ராமன்",
+           "தமிழ்நாடு அரசு வருவாய் துறை", "பிறந்த தேதி 14/03/1985", "முகவரி சென்னை 600001", "வங்கி கணக்கு விவரம் ஏப்ரல் முதல் ஜூன் வரை"],
+    "te": ["విద్యుత్ బిల్లు తేదీ 05/08/2026", "మొత్తం చెల్లించవలసిన మొత్తం 1,842.00", "వినియోగదారుని పేరు రాము",
+           "ఆంధ్రప్రదేశ్ ప్రభుత్వం రెవెన్యూ శాఖ", "పుట్టిన తేదీ 14/03/1985", "చిరునామా హైదరాబాద్ 500001", "బ్యాంకు ఖాతా వివరాలు"],
+    "ka": ["ವಿದ್ಯುತ್ ಬಿಲ್ ದಿನಾಂಕ 05/08/2026", "ಒಟ್ಟು ಪಾವತಿಸಬೇಕಾದ ಮೊತ್ತ 1,842.00", "ಗ್ರಾಹಕರ ಹೆಸರು ರಾಮು",
+           "ಕರ್ನಾಟಕ ಸರ್ಕಾರ ಕಂದಾಯ ಇಲಾಖೆ", "ಹುಟ್ಟಿದ ದಿನಾಂಕ 14/03/1985", "ವಿಳಾಸ ಬೆಂಗಳೂರು 560001", "ಬ್ಯಾಂಕ್ ಖಾತೆ ವಿವರಗಳು"],
+}
+FONT_FILES = {"en": "NotoSans-*.ttf", "devanagari": "NotoSansDevanagari-*.ttf", "ta": "NotoSansTamil-*.ttf",
+              "te": "NotoSansTelugu-*.ttf", "ka": "NotoSansKannada-*.ttf"}
+
+
+def line_strip(text: str, font_path: str, px: int, width: int, rng: random.Random, height: int = 48) -> np.ndarray | None:
+    """A rendered line, prepared as the worker feeds the NPU (docveta_worker.ppocr.rec_input): height 48,
+    padded to width with mid-grey. B,G,R channel order (the model's). None if it doesn't fit."""
+    f = ImageFont.truetype(font_path, px)
+    x0, y0, x1, y1 = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), text, font=f)
+    m = max(3, px // 6)  # like a detector box after unclipping
+    bg = rng.randint(215, 255)
+    img = Image.new("RGB", (x1 - x0 + 2 * m, y1 - y0 + 2 * m), (bg, bg, bg))
+    ImageDraw.Draw(img).text((m - x0, m - y0), text, fill=(rng.randint(0, 70),) * 3, font=f)
+    if rng.random() < 0.4:
+        img = img.filter(ImageFilter.GaussianBlur(rng.uniform(0.3, 1.0)))
+    tw = int(math.ceil(height * img.width / img.height))
+    if tw > width:
+        return None
+    out = np.full((height, width, 3), 128, np.uint8)
+    out[:, :tw] = np.asarray(img.resize((tw, height), Image.BILINEAR))
+    return out[..., ::-1]
+
+
+def line_strips(script: str, width: int, count: int, fonts_dir: str, seed: int = 1) -> list[tuple[np.ndarray, str]]:
+    """count (strip, text) pairs: phrases of LINES[script] (and some English: forms mix them)."""
+    rng = random.Random(seed * 1000 + width)
+    files = {s: sorted(glob.glob(os.path.join(fonts_dir, FONT_FILES[s]))) for s in (script, "en")}
+    if not files[script]:
+        raise SystemExit(f"no {FONT_FILES[script]} in {fonts_dir}")
+    out = []
+    while len(out) < count:
+        sc = script if script == "en" or rng.random() < 0.7 else "en"
+        words = rng.choice(LINES[sc]).split()
+        k = rng.randint(1, len(words))
+        i = rng.randint(0, len(words) - k)
+        text = " ".join(words[i:i + k])
+        if width >= 640 and rng.random() < 0.5:  # wide readers see long lines
+            text = " ".join(rng.choice(LINES[sc]) for _ in range(width // 320))
+        s = line_strip(text, rng.choice(files[sc]), rng.choice([20, 26, 32, 40]), width, rng)
+        if s is not None:
+            out.append((s, text))
+    return out
 
 
 def text_line(rng: random.Random, script: str) -> str:

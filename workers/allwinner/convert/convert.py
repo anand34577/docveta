@@ -1,24 +1,25 @@
-"""Converts the PaddleOCR (PP-OCR) text detection model to NBG (det.nb) for the Allwinner A733 NPU.
-
-Only detection runs on the NPU: the recognition network can't be quantised accurately for
-this NPU, so the worker reads lines on the CPU with the ONNX models from the release package.
+"""Converts the PaddleOCR (PP-OCR) models to NBG (.nb) for the Allwinner A733 NPU: text detection
+(det.nb) and reading, one model per script and input width (rec_<script>_<width>.nb).
 
 Two steps, both on an x86_64 Linux PC (not on the board):
 
-1. Fixed-shape ONNX model and calibration images (a Python venv):
-       pip install paddlepaddle "paddle2onnx==1.3.1" onnx "onnxsim==0.4.36" pillow setuptools
-       python convert.py onnx --calib-dir ~/Scans --work work
+1. Fixed-shape ONNX models and calibration images (Python 3.10/3.11 venv; Pillow with libraqm):
+       pip install "paddlepaddle==3.2.0" "paddle2onnx==2.1.0" onnx "onnxsim==0.4.36" onnxruntime pyyaml packaging pillow setuptools
+       python convert.py onnx --calib-dir ~/Scans --fonts <Noto fonts folder> --work work
 
 2. NBG compilation inside Allwinner's ACUITY Toolkit container (ubuntu-npu:v2.0.10.x):
        docker run --rm -v "$PWD/../..:/workspace" -w /workspace/allwinner/convert ubuntu-npu:v2.0.10.2 \
            python3 convert.py nb --work work --out ../models
 
-Produces <out>/det.nb.
+Produces <out>/det.nb and <out>/rec_<script>_<width>.nb (dictionaries come with the release's ONNX models).
 
 Choices:
-  * uint8 (asymmetric affine): detection is robust to quantisation, and it's the NPU's fast path.
-  * The model expects normalised input. ACUITY uses the mean/std below only to calibrate
-    quantisation, and the worker normalises each tile with a lookup table.
+  * Detection: uint8 (asymmetric affine), robust to quantisation and the NPU's fast path.
+  * Reading: int16 (dynamic fixed point), PP-OCRv5 rewritten by npu_rewrite.py so the chip
+    computes it right (see there): on a Cubie A7A it reads exactly like the CPU, 7x faster.
+    The NPU needs fixed shapes, so there's one model per width; the worker splits longer lines.
+  * The models expect normalised input. ACUITY uses the mean/std below only to calibrate
+    quantisation, and the worker normalises input with a lookup table.
 """
 
 from __future__ import annotations
@@ -33,16 +34,22 @@ import tempfile
 
 # Same model source and Paddle→ONNX steps as the Rockchip converter.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "rknn", "convert"))
-from convert import DET_MEAN, DET_STD, DET_URL, calibration_list, fetch, fix_shape, paddle_to_onnx  # noqa: E402
+from convert import DET_MEAN, DET_STD, DET_URL, REC, REC_MEAN, REC_STD, calibration_list, fetch, fix_shape, paddle_to_onnx  # noqa: E402
 
 # A733 = NPU v3 (ai-sdk scripts/pegasus_setup.sh).
 TARGET = "VIP9000NANODI_PLUS_PID0X1000003B"
 QUANTIZER = {"uint8": ("asymmetric_affine", "uint8"), "int16": ("dynamic_fixed_point", "int16")}
+REC_WIDTHS = (320, 640, 960)  # NPU memory grows with width (~24 MB at 320); the worker splits longer lines
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 # ---------------------------------------------------------------- step 1: ONNX
 
 def step_onnx(args: argparse.Namespace) -> None:
+    import numpy as np
+    from PIL import Image
+
+    from synthetic_pages import line_strips
     d = os.path.join(os.path.abspath(args.work), "det")
     os.makedirs(d, exist_ok=True)
     size = args.det_size
@@ -55,10 +62,31 @@ def step_onnx(args: argparse.Namespace) -> None:
         lst = calibration_list(args.calib_dir, size, tmp)
         calib = os.path.join(d, "calib")
         shutil.copytree(os.path.join(tmp, "calib"), calib, dirs_exist_ok=True)
-        images = [os.path.join(calib, os.path.basename(p)) for p in open(lst).read().split()]
+        write_dataset(d, [os.path.join(calib, os.path.basename(p)) for p in open(lst).read().split()])
+        for script in args.scripts:
+            url, _ = REC[script]
+            m = os.path.join(tmp, f"rec_{script}")
+            os.makedirs(m)
+            onnx = paddle_to_onnx(fetch(url, os.path.join(tmp, f"rec_{script}.tar")), m, f"rec_{script}")
+            for w in args.widths:
+                name = f"rec_{script}_{w}"
+                print(f"[{name}]")
+                d = os.path.join(os.path.abspath(args.work), name)
+                os.makedirs(os.path.join(d, "calib"), exist_ok=True)
+                subprocess.run([sys.executable, os.path.join(HERE, "npu_rewrite.py"), fix_shape(onnx, [1, 3, 48, w]),
+                                os.path.join(d, f"{name}.onnx")], check=True)
+                images = []
+                for i, (strip, _) in enumerate(line_strips(script, w, 200, args.fonts)):
+                    images.append(os.path.join(d, "calib", f"{i:03}.png"))
+                    # Stored so that loading the file as RGB gives the model's B,G,R order.
+                    Image.fromarray(np.ascontiguousarray(strip)).save(images[-1])
+                write_dataset(d, images)
+    print(f"done: now run step 2 ('nb') inside the ACUITY container with --work {args.work}")
+
+
+def write_dataset(d: str, images: list[str]) -> None:
     with open(os.path.join(d, "dataset.txt"), "w") as f:
         f.write("\n".join(os.path.relpath(p, d) for p in images) + "\n")
-    print(f"done: now run step 2 ('nb') inside the ACUITY container with --work {args.work}")
 
 
 # ---------------------------------------------------------------- step 2: NBG (inside ACUITY)
@@ -116,15 +144,22 @@ def build_nb(peg: list[str], d: str, name: str, mean, std, dtype: str, out: str)
     if not nbs:
         sys.exit(f"export produced no network_binary.nb for {name}")
     shutil.copy(max(nbs, key=os.path.getmtime), os.path.join(out, f"{name}.nb"))
+    shutil.rmtree(os.path.join(d, "wksp"), ignore_errors=True)  # hundreds of MB per model
     print(f"  wrote {os.path.join(out, name)}.nb")
 
 
 def step_nb(args: argparse.Namespace) -> None:
     out = os.path.abspath(args.out)
     os.makedirs(out, exist_ok=True)
-    print(f"[det] {args.det_dtype}")
-    build_nb(pegasus(), os.path.join(os.path.abspath(args.work), "det"), "det", DET_MEAN, DET_STD, args.det_dtype, out)
-    print(f"done: copy {out}/det.nb into the worker's models/ folder on the board")
+    for d in sorted(glob.glob(os.path.join(os.path.abspath(args.work), "*"))):
+        name = os.path.basename(d)
+        if not os.path.exists(os.path.join(d, f"{name}.onnx")) or (args.only and name not in args.only):
+            continue
+        det = name == "det"
+        dtype = args.det_dtype if det else args.rec_dtype
+        print(f"[{name}] {dtype}")
+        build_nb(pegasus(), d, name, DET_MEAN if det else REC_MEAN, DET_STD if det else REC_STD, dtype, out)
+    print(f"done: copy {out}/*.nb into the worker's models/ folder on the board")
 
 
 def main() -> None:
@@ -134,11 +169,16 @@ def main() -> None:
     o.add_argument("--calib-dir", required=True, help="folder with ≥20 sample document images (scans/photos like yours)")
     o.add_argument("--det-size", type=int, default=960, help="detection tile size (default 960)")
     o.add_argument("--det-url", default=DET_URL)
+    o.add_argument("--fonts", required=True, help="folder with the Noto fonts (NotoSans*, NotoSansDevanagari*, ...) for reading calibration")
+    o.add_argument("--scripts", nargs="+", default=["en", "devanagari", "ta", "te", "ka"], choices=sorted(REC))
+    o.add_argument("--widths", nargs="+", type=int, default=list(REC_WIDTHS))
     o.add_argument("--work", default="work")
     n = sub.add_parser("nb", help="step 2: compile det.nb (inside the ACUITY container)")
     n.add_argument("--work", default="work")
     n.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models"))
     n.add_argument("--det-dtype", default="uint8", choices=sorted(QUANTIZER))
+    n.add_argument("--rec-dtype", default="int16", choices=sorted(QUANTIZER))
+    n.add_argument("--only", nargs="*", help="build only these (det, rec_en_320, ...)")
     args = ap.parse_args()
     (step_onnx if args.step == "onnx" else step_nb)(args)
 

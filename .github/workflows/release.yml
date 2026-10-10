@@ -127,7 +127,7 @@ jobs:
           python-version: "3.11"
       - name: Convert PaddleOCR models to ONNX
         run: |
-          pip install paddlepaddle "paddle2onnx==1.3.1" onnx
+          pip install "paddlepaddle==3.2.0" "paddle2onnx==2.1.0" onnx pyyaml packaging
           python workers/onnx/convert.py --scripts en devanagari ta te ka --out models
       - name: Fonts for searchable PDFs (Noto, SIL Open Font License)
         run: |
@@ -208,9 +208,9 @@ jobs:
           name: ocr-${{ matrix.label }}
           path: workers/onnx/dist/pkg/*.zip
 
-  # OCR worker for the Allwinner A733 NPU (Radxa Cubie A7A): detection on the NPU, reading on
-  # the CPU with the bundled ONNX models. Allwinner's VIPLite libraries and det.nb aren't
-  # included: users add them (see workers/allwinner/README.md).
+  # OCR worker for the Allwinner A733 NPU (Radxa Cubie A7A): detection and reading on the NPU
+  # (prebuilt .nb models); the ONNX reading models are the CPU fallback. Allwinner's VIPLite
+  # libraries aren't included: the installer fetches them (see workers/allwinner/README.md).
   allwinner:
     needs: models # reading models and fonts
     runs-on: ubuntu-22.04-arm # glibc 2.35: runs on Debian 12/13, Ubuntu 22.04+
@@ -238,7 +238,7 @@ jobs:
           cp -r ../../fonts "$out/fonts"
           mkdir -p "$out/models" "$out/viplite"
           cp ../../models/rec_*.onnx ../../models/dict_*.txt ../../models/VERSION "$out/models/"
-          cp prebuilt/det.nb "$out/models/det.nb" # compiled with ACUITY, see prebuilt/README.md
+          cp prebuilt/det.nb prebuilt/rec_*.nb "$out/models/" # compiled with ACUITY, see prebuilt/README.md
           cp README.md "$out/README.md"
           # No NPU here: the program must start and get as far as loading VIPLite.
           if "$out/docveta-worker-allwinner" --probe > probe.log 2>&1; then cat probe.log; exit 1; fi

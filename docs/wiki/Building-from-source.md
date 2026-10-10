@@ -41,7 +41,7 @@ The integration test uses a throwaway schema and validates every API response ag
 ```bash
 cd workers/onnx
 pip install "../sdk-python[heic,ppocr]" onnxruntime          # onnxruntime-directml on Windows
-pip install paddlepaddle "paddle2onnx==1.3.1" onnx && python convert.py --out models   # once
+pip install "paddlepaddle==3.2.0" "paddle2onnx==2.1.0" onnx pyyaml packaging && python convert.py --out models   # once
 python worker.py --list-devices
 python worker.py --self-test
 pip install pyinstaller && pyinstaller docveta-ocr.spec        # standalone build in dist/docveta-ocr

@@ -1,13 +1,14 @@
 """Docveta OCR worker for the Allwinner A733 NPU (Radxa Cubie A7A and other A733 boards).
 
-Finds text with the PaddleOCR (PP-OCR) detection model compiled to NBG (det.nb) with the
-ACUITY Toolkit (see convert/convert.py and README.md), on the NPU through VIPLite
-(/dev/vipcore, bound with ctypes). Reads the lines on the CPU with ONNX Runtime, using the
-same models as the GPU/CPU engine (see Models for why).
+Finds and reads text with the PaddleOCR (PP-OCR) models compiled to NBG with the ACUITY
+Toolkit (see convert/convert.py and README.md), on the NPU through VIPLite (/dev/vipcore, bound
+with ctypes). The CPU only prepares images; it reads text only when no NPU readers are installed
+(or DOCVETA_NPU_READ=cpu), with ONNX Runtime and the GPU/CPU engine's models.
 
 Model layout (DOCVETA_MODELS_DIR):
-    det.nb                                   converted for your board
-    rec_<script>.onnx + dict_<script>.txt    included in the release package
+    det.nb                                   text detection
+    rec_<script>_<width>.nb + dict_<script>.txt   reading on the NPU, one per input width
+    rec_<script>.onnx                        reading on the CPU (fallback)
 
     python worker.py           run the worker (DOCVETA_URL, DOCVETA_WORKER_TOKEN)
     python worker.py --probe   check the NPU and models, time one inference each, exit
@@ -17,7 +18,9 @@ from __future__ import annotations
 
 import ctypes as C
 import logging
+import math
 import os
+import re
 import sys
 import threading
 import time
@@ -25,7 +28,6 @@ from typing import Optional
 
 import cv2
 import numpy as np
-import onnxruntime as ort
 from PIL import Image
 
 from docveta_worker import ppocr
@@ -41,6 +43,11 @@ LANG_SCRIPT = ppocr.LANG_SCRIPT
 # PP-OCR detection input, as in the ONNX engine: BGR channel order, (x - mean) / std with
 # ImageNet values. ACUITY keeps it out of the compiled model, so the worker applies it (see Net.lut).
 DET_NORM = (np.array([0.485, 0.456, 0.406]) * 255, np.array([0.229, 0.224, 0.225]) * 255)
+# Recognition input: (x - 127.5) / 127.5, also BGR.
+REC_NORM = (np.full(3, 127.5), np.full(3, 127.5))
+# At start the NPU readers must read the test lines with at most this share of character errors,
+# or the worker reads on the CPU instead (a broken install must not turn every page blank).
+NPU_MAX_CER = 0.05
 
 # ponytail: one OpenCV thread per page keeps the shared CPU free.
 cv2.setNumThreads(1)
@@ -248,35 +255,135 @@ class Net:
 
 
 class Models:
-    """Text detection on the NPU, reading on the CPU (ONNX Runtime). The A733 NPU can't run
-    the PP-OCR recognition network accurately (int16 drifts to blank output, int8 misreads
-    about 20% of characters, float16 is slow and still wrong), while detection works well
-    quantised."""
+    """Text detection and reading on the NPU. Reading falls back to the CPU (ONNX Runtime) only
+    without NPU readers (rec_<script>_<width>.nb), with DOCVETA_NPU_READ=cpu, or when the NPU
+    readers fail their check at start (see AllwinnerEngine)."""
 
     def __init__(self, vip: VipLite, model_dir: str, scripts: list[str]) -> None:
+        self.model_dir = model_dir
         self.det = Net(vip, os.path.join(model_dir, "det.nb"), DET_NORM)
         shape = self.det.inputs[0].shape
         if shape[2] != shape[3]:
             raise SystemExit(f"det.nb input is {shape}; expected (1, 3, S, S). Re-convert with convert/convert.py")
         self.det_size = shape[2]
+        self.charsets = {s: ppocr.load_charset(os.path.join(model_dir, f"dict_{s}.txt")) for s in scripts}
+        self.npu_rec: dict[str, dict[int, Net]] = {}  # script -> {input width: reader}
+        if os.environ.get("DOCVETA_NPU_READ", "npu").lower() != "cpu":
+            for f in sorted(os.listdir(model_dir)):
+                m = re.fullmatch(r"rec_(\w+?)_(\d+)\.nb", f)
+                if m and m.group(1) in scripts:
+                    net = Net(vip, os.path.join(model_dir, f), REC_NORM)
+                    if net.inputs[0].shape[2:] != (ppocr.REC_HEIGHT, int(m.group(2))):
+                        raise SystemExit(f"{f} input is {net.inputs[0].shape}; expected height {ppocr.REC_HEIGHT}, width {m.group(2)}")
+                    self.npu_rec.setdefault(m.group(1), {})[int(m.group(2))] = net
+        self.rec: dict = {}  # ONNX Runtime sessions, only when reading on the CPU
+        if not self.npu_rec:
+            self.use_cpu(scripts)
+        self.stats = {"npu": 0, "split": 0, "cpu": 0}
+
+    def use_cpu(self, scripts: list[str]) -> None:
+        import onnxruntime as ort
+
         so = ort.SessionOptions()
         # ponytail: one CPU thread per page by default; the board's CPU is shared with other work.
         so.intra_op_num_threads = max(1, int(os.environ.get("DOCVETA_CPU_THREADS", "1")))
         so.inter_op_num_threads = 1
         # Sessions are thread-safe: shared by all pages in flight.
-        self.rec = {s: ort.InferenceSession(os.path.join(model_dir, f"rec_{s}.onnx"), so, providers=["CPUExecutionProvider"])
+        self.rec = {s: ort.InferenceSession(os.path.join(self.model_dir, f"rec_{s}.onnx"), so, providers=["CPUExecutionProvider"])
                     for s in scripts}
-        self.charsets = {s: ppocr.load_charset(os.path.join(model_dir, f"dict_{s}.txt")) for s in scripts}
+        self.npu_rec = {}
 
     def det_infer(self, x: np.ndarray) -> np.ndarray:  # (1, S, S, 3) uint8 -> (1, 1, S, S)
         return self.det.run(x).reshape(1, 1, self.det_size, self.det_size)
 
     def read(self, img: np.ndarray, box: ppocr.TextBox, script: str) -> Optional[ppocr.RecResult]:
-        inp, frac = ppocr.rec_input_float(ppocr.crop_box(img, box))
+        crop = ppocr.crop_box(img, box)
+        r = self.read_npu(crop, script) if self.npu_rec else self.read_cpu(crop, script)
+        return r if r is not None and r.text else None
+
+    def read_cpu(self, crop: np.ndarray, script: str) -> Optional[ppocr.RecResult]:
+        self.stats["cpu"] += 1
+        inp, frac = ppocr.rec_input_float(crop)
         sess = self.rec[script]
         probs = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0]
-        r = ppocr.ctc_decode(probs, self.charsets[script], frac)
-        return r if r.text else None
+        return ppocr.ctc_decode(probs, self.charsets[script], frac)
+
+    def read_npu(self, crop: np.ndarray, script: str) -> ppocr.RecResult:
+        """Reads a line on the NPU; one wider than the widest reader is cut at gaps between words."""
+        nets = self.npu_rec[script]
+        h, w = crop.shape[:2]
+        # Widest crop (in its own pixels) the widest reader takes at height 48.
+        max_w = max(1, int(max(nets) * max(h, 1) / ppocr.REC_HEIGHT))
+        pieces = ppocr.split_line(crop, max_w)
+        self.stats["npu"] += 1
+        self.stats["split"] += len(pieces) > 1
+        parts = [(x0, x1, gap, self._read_piece(crop[:, x0:x1], nets, script)) for x0, x1, gap in pieces]
+        return ppocr.join_pieces(parts, w)
+
+    def _read_piece(self, crop: np.ndarray, nets: dict[int, Net], script: str) -> ppocr.RecResult:
+        h, w = crop.shape[:2]
+        need = int(math.ceil(ppocr.REC_HEIGHT * w / max(h, 1)))
+        width = next((b for b in sorted(nets) if b >= need), max(nets))
+        inp, bucket, content = ppocr.rec_input(crop, (width,))
+        probs = nets[width].run(inp)
+        return ppocr.ctc_decode(probs.reshape(-1, probs.shape[-1]), self.charsets[script], content / bucket)
+
+
+def _edit_distance(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+TEST_LINES = {
+    "en": ("NotoSans-Regular.ttf", ["Electricity bill dated 05/08/2026", "Amount due: 1842.00 INR", "Customer ID KA-0912-77341"]),
+    "devanagari": ("NotoSansDevanagari-Regular.ttf", ["विद्युत बिल दिनांक 05/08/2026", "कुल देय राशि 1,842.00", "भारत सरकार आयकर विभाग"]),
+}
+
+
+def test_lines(fonts_dir: str) -> dict[str, list[tuple[np.ndarray, str]]]:
+    """Rendered line crops (like the detector's boxes) with their text, per script, for checking the readers.
+    Devanagari only where Pillow can shape it (libraqm)."""
+    from PIL import ImageDraw, ImageFont, features
+
+    out: dict[str, list[tuple[np.ndarray, str]]] = {}
+    for script, (name, texts) in TEST_LINES.items():
+        if script != "en" and not features.check("raqm"):
+            continue
+        try:
+            fonts = [ImageFont.truetype(os.path.join(fonts_dir, name), size) for size in (28, 40)]
+        except OSError:
+            continue
+        for font in fonts:
+            for text in texts:
+                x0, y0, x1, y1 = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), text, font=font)
+                m = font.size // 5
+                img = Image.new("RGB", (x1 - x0 + 2 * m, y1 - y0 + 2 * m), "white")
+                ImageDraw.Draw(img).text((m - x0, m - y0), text, fill=(25, 25, 25), font=font)
+                out.setdefault(script, []).append((np.asarray(img), text))
+    return out
+
+
+def check_readers(m: Models, lines: dict[str, list[tuple[np.ndarray, str]]]) -> dict[str, float]:
+    """Character error rate of each script's NPU reader on its test lines."""
+    import unicodedata
+
+    cer = {}
+    for script, items in lines.items():
+        if script not in m.npu_rec:
+            continue
+        err = total = 0
+        for crop, text in items:
+            got = unicodedata.normalize("NFC", m.read_npu(crop, script).text)
+            ref = unicodedata.normalize("NFC", text)
+            err += _edit_distance(got, ref)
+            total += len(ref)
+        cer[script] = err / max(total, 1)
+    return cer
 
 
 class AllwinnerEngine(Engine):
@@ -286,13 +393,27 @@ class AllwinnerEngine(Engine):
         files = set(os.listdir(MODELS_DIR)) if os.path.isdir(MODELS_DIR) else set()
         if "det.nb" not in files:
             raise SystemExit(f"No det.nb in {MODELS_DIR}. Convert it with convert/convert.py (README.md) and set DOCVETA_MODELS_DIR.")
-        self.scripts = sorted(s for s in set(LANG_SCRIPT.values()) if f"rec_{s}.onnx" in files and f"dict_{s}.txt" in files)
+        npu_scripts = {m.group(1) for f in files if (m := re.fullmatch(r"rec_(\w+?)_\d+\.nb", f))}
+        cpu = os.environ.get("DOCVETA_NPU_READ", "npu").lower() == "cpu"
+        reader = (lambda s: f"rec_{s}.onnx" in files) if cpu or not npu_scripts else (lambda s: s in npu_scripts)
+        self.scripts = sorted(s for s in set(LANG_SCRIPT.values()) if f"dict_{s}.txt" in files and reader(s))
         if not self.scripts:
-            raise SystemExit(f"No reading models (rec_<script>.onnx + dict_<script>.txt) in {MODELS_DIR}. "
+            raise SystemExit(f"No reading models (rec_<script>_<width>.nb or rec_<script>.onnx, with dict_<script>.txt) in {MODELS_DIR}. "
                              "They come with the release package.")
         self.vip = vip or VipLite()
         self.m = Models(self.vip, MODELS_DIR, self.scripts)
-        # Two pages in flight: one is read on the CPU while the other is detected on the NPU.
+        if self.m.npu_rec:
+            # A miscompiled or mismatched reader reads (almost) nothing: check before trusting it with pages.
+            cer = check_readers(self.m, test_lines(os.environ.get("DOCVETA_FONTS_DIR", "")))
+            bad = {s: c for s, c in cer.items() if c > NPU_MAX_CER}
+            if bad:
+                log.error("the NPU readers misread their test lines (%s character errors): reading on the CPU instead. "
+                          "Rebuild the rec_*.nb files with convert/convert.py", ", ".join(f"{s} {c:.0%}" for s, c in bad.items()))
+                self.scripts = sorted(s for s in self.scripts if f"rec_{s}.onnx" in files)
+                self.m.use_cpu(self.scripts)
+            else:
+                log.info("NPU readers checked: %s", ", ".join(f"{s} {c:.1%} character errors" for s, c in cer.items()))
+        # Two pages in flight: the CPU prepares one (decoding, cropping lines) while the NPU works on the other.
         self.concurrency = max(1, int(os.environ.get("DOCVETA_CONCURRENCY", "2")))
         self.languages = sorted(l for l, s in LANG_SCRIPT.items() if s in self.scripts)
         self.tags = ("npu", "allwinner", "a733")
@@ -303,9 +424,15 @@ class AllwinnerEngine(Engine):
         except OSError:
             version = "unknown"
         self.version = f"a733/{version}"
-        self.models = {"det": "det.nb", **{f"rec_{s}": f"rec_{s}.onnx" for s in self.scripts}}
-        log.info("Allwinner NPU (VIPLite 0x%08x): detection %dpx on the NPU, reading on the CPU; %d pages in flight; "
-                 "scripts %s, languages %s", self.vip.version, self.m.det_size, self.concurrency, self.scripts, self.languages)
+        npu = {s: sorted(n) for s, n in self.m.npu_rec.items()}
+        if npu:
+            self.version += "+npuread"
+            self.models = {"det": "det.nb", **{f"rec_{s}": f"rec_{s}_{','.join(map(str, w))}.nb" for s, w in npu.items()}}
+        else:
+            self.models = {"det": "det.nb", **{f"rec_{s}": f"rec_{s}.onnx" for s in self.scripts}}
+        log.info("Allwinner NPU (VIPLite 0x%08x): detection %dpx on the NPU, reading on %s; %d pages in flight; "
+                 "scripts %s, languages %s", self.vip.version, self.m.det_size, f"the NPU (widths {npu})" if npu else "the CPU",
+                 self.concurrency, self.scripts, self.languages)
 
     def open_session(self, slot: int) -> Models:
         return self.m
@@ -345,6 +472,19 @@ def probe() -> None:
     for _ in range(5):
         m.det.run(x)
     print(f"Detection on the NPU: input {m.det.inputs[0].describe()}, {(time.perf_counter() - t) / 5 * 1000:.1f} ms per tile")
+    lines = test_lines(os.environ.get("DOCVETA_FONTS_DIR", ""))
+    for script, nets in m.npu_rec.items():
+        for width, net in sorted(nets.items()):
+            x = np.full((1, ppocr.REC_HEIGHT, width, 3), 128, dtype=np.uint8)
+            net.run(x)
+            t = time.perf_counter()
+            for _ in range(5):
+                net.run(x)
+            print(f"Reading on the NPU: rec_{script}_{width}.nb, input {net.inputs[0].describe()}, {(time.perf_counter() - t) / 5 * 1000:.1f} ms per line")
+    for script, cer in check_readers(m, lines).items():
+        print(f"Test lines, {script}: {cer:.1%} character errors")
+        for crop, text in lines[script][:3]:
+            print(f"  {m.read_npu(crop, script).text!r}  ({text!r})")
 
     # Speed alone proves little: read back a rendered test image.
     from PIL import ImageDraw, ImageFont
@@ -363,6 +503,7 @@ def probe() -> None:
     print(f"Test image: {len(res.lines)} line(s) in {(time.perf_counter() - t) * 1000:.0f} ms")
     for line in res.lines:
         print(f"  {line.confidence:.2f}  {line.text}")
+    print(f"Lines read on the NPU {m.stats['npu']} ({m.stats['split']} cut at word gaps), on the CPU {m.stats['cpu']}")
     if not res.lines:
         raise SystemExit("no text was recognised in the test image")
     print("OK")

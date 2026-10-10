@@ -9,7 +9,7 @@ import (
 type QueryPart struct {
 	Terms  []string // a phrase has several terms
 	Negate bool
-	Prefix bool // last term of the query is matched as a prefix (search-as-you-type)
+	Prefix bool // the (last) term is matched as a prefix (search-as-you-type)
 }
 
 // TSQuery renders parts into a tsquery literal over our own lexemes:
@@ -34,6 +34,9 @@ func TSQuery(parts []QueryPart) string {
 			qs := make([]string, len(p.Terms))
 			for i, t := range p.Terms {
 				qs[i] = quote(t)
+			}
+			if p.Prefix { // still being typed: its last piece may be unfinished
+				qs[len(qs)-1] += ":*"
 			}
 			c = "(" + strings.Join(qs, " <-> ") + ")"
 		}

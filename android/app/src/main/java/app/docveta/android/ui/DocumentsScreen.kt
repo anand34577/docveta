@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -95,6 +96,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -153,18 +155,31 @@ class DocsViewModel(private val c: AppContainer, initial: DocQuery) : ViewModel(
     var foundByMeaning by mutableStateOf(false)
         private set
 
+    /** A new search is on its way while the previous results are still on screen. */
+    var searching by mutableStateOf(false)
+        private set
+
+    /** Goes up when the list shows the results of a different query (the list then scrolls to the top). */
+    var generation by mutableStateOf(0)
+        private set
+
     /** Selected documents, in the order they were picked (merge keeps that order). */
     var selected by mutableStateOf<List<String>>(emptyList())
     val selecting get() = selected.isNotEmpty()
 
     private var cursor: String? = null
     private var job: Job? = null
-    private val search = MutableStateFlow(initial.q)
+    private var moreJob: Job? = null
+    private var request = 0 // the newest request; answers to older ones are dropped
+    private var shown: DocQuery? = null // the query whose results are on screen
+    private val search = MutableStateFlow(initial.q.trim())
+    private var loadedQ = initial.q.trim() // the words the list on screen was searched for
 
     init {
         @OptIn(FlowPreview::class)
         viewModelScope.launch {
-            search.debounce(300).distinctUntilChanged().collect { if (it != query.q.trim()) setQuery(query.copy(q = it), debounced = true) }
+            // Compared with what was loaded, not with query.q: typing() has already set that.
+            search.debounce(300).distinctUntilChanged().collect { if (it != loadedQ) reload() }
         }
         reload()
     }
@@ -175,50 +190,77 @@ class DocsViewModel(private val c: AppContainer, initial: DocQuery) : ViewModel(
         search.value = text.trim()
     }
 
-    fun setQuery(q: DocQuery, debounced: Boolean = false) {
-        query = if (debounced) query.copy(q = q.q) else q
-        if (!debounced) search.value = q.q.trim()
+    /** The keyboard's Search key: no need to wait for the pause. */
+    fun searchNow() {
+        c.session.rememberSearch(query.q)
+        if (query.q.trim() != loadedQ) reload()
+    }
+
+    /** A document opened from search results: the search was worth remembering. */
+    fun opened() = c.session.rememberSearch(query.q)
+
+    @JvmName("applyQuery") // the property's private setter is already setQuery on the JVM
+    fun setQuery(q: DocQuery) {
+        query = q
+        search.value = q.q.trim()
         reload()
     }
 
     fun reload(pull: Boolean = false) {
         job?.cancel()
+        moreJob?.cancel() // a next page of the old query must not land in the new list
+        loadingMore = false
         cursor = null
-        if (pull) refreshing = true else loading = items.isEmpty() || loading
+        val q = query
+        loadedQ = q.q.trim()
+        val id = ++request
+        if (pull) refreshing = true else if (items.isEmpty()) loading = true else searching = true
         job = viewModelScope.launch {
             try {
-                val r = c.repo.documents(query)
+                val r = c.repo.documents(q)
+                if (id != request) return@launch
                 items = r.items
                 total = r.total
                 totalCapped = r.totalCapped
                 cursor = r.nextCursor
                 foundByMeaning = r.mode == "hybrid" || r.mode == "semantic"
                 error = null
-                selected = selected.filter { id -> r.items.any { it.id == id } }
+                val ids = r.items.mapTo(HashSet()) { it.id }
+                selected = selected.filter { it in ids }
+                if (shown != null && shown != q) generation++
+                shown = q
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                error = e.friendly()
+                if (id == request) error = e.friendly()
             } finally {
-                loading = false
-                refreshing = false
+                // A cancelled request finishes after its replacement started: leave the flags to that one.
+                if (id == request) {
+                    loading = false
+                    refreshing = false
+                    searching = false
+                }
             }
         }
     }
 
     fun loadMore() {
         val cur = cursor ?: return
-        if (loadingMore || loading) return
+        if (loadingMore || loading || searching) return
         loadingMore = true
-        viewModelScope.launch {
+        val id = request
+        val q = query
+        moreJob = viewModelScope.launch {
             try {
-                val r = c.repo.documents(query, cur)
-                items = items + r.items.filter { n -> items.none { it.id == n.id } }
+                val r = c.repo.documents(q, cur)
+                if (id != request) return@launch
+                val have = items.mapTo(HashSet()) { it.id }
+                items = items + r.items.filter { it.id !in have }
                 cursor = r.nextCursor
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                error = e.friendly()
+                if (id == request) error = e.friendly()
             } finally {
-                loadingMore = false
+                if (id == request) loadingMore = false
             }
         }
     }
@@ -302,10 +344,12 @@ fun DocumentRow(doc: Document, spaces: List<Space>, dateFormat: String, thumb: (
             val sub = listOfNotNull(doc.correspondent?.name, formatDate(doc.documentDate, dateFormat).ifBlank { null }, doc.documentType?.name).joinToString(" · ")
             if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (doc.snippet.isNotEmpty()) {
+                val hitBack = MaterialTheme.colorScheme.tertiaryContainer
+                val hitText = MaterialTheme.colorScheme.onTertiaryContainer
                 Text(
                     androidx.compose.ui.text.buildAnnotatedString {
                         doc.snippet.forEach { s ->
-                            if (s.hit) withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold, background = androidx.compose.ui.graphics.Color(0x55FFC107))) { append(s.text) } else append(s.text)
+                            if (s.hit) withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold, color = hitText, background = hitBack)) { append(s.text) } else append(s.text)
                         }
                     },
                     style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp),
@@ -452,15 +496,23 @@ private fun DocumentBrowser(
     var filters by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val session = LocalContainer.current.session
+    var recent by remember { mutableStateOf(session.recentSearches) }
+    val openDoc: (String) -> Unit = { id -> vm.opened(); recent = session.recentSearches; onOpen(id) }
     val nearEnd by remember { derivedStateOf { val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0; last >= vm.items.size - 6 } }
     LaunchedEffect(nearEnd, vm.items.size) { if (nearEnd && vm.items.isNotEmpty()) vm.loadMore() }
     BackHandler(vm.selecting) { vm.selected = emptyList() }
+    // Back with a search typed clears it before it leaves the screen (or the app).
+    BackHandler(!vm.selecting && title == null && vm.query.q.isNotEmpty()) { vm.typing(""); vm.searchNow() }
+    // Reading results needs the space the keyboard takes: put it away once the list is scrolled.
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) keyboard?.hide() }
 
     Column(Modifier.fillMaxSize()) {
         if (vm.selecting) SelectionBar(vm)
         else {
             if (title != null) TopAppBar(title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, navigationIcon = { if (onBack != null) BackButton(onBack) }, actions = { titleActions() })
-            SearchBar(vm.query.q, vm::typing, "Search documents", trailing = {
+            SearchBar(vm.query.q, vm::typing, "Search documents", onSearch = { vm.searchNow(); recent = session.recentSearches }, trailing = {
                 Box {
                     IconButton({ sortMenu = true }) { Icon(Icons.AutoMirrored.Outlined.Sort, "Sort") }
                     DropdownMenu(sortMenu, { sortMenu = false }) {
@@ -471,6 +523,16 @@ private fun DocumentBrowser(
                 }
                 if (title == null) IconButton(pickFiles) { Icon(Icons.Outlined.UploadFile, "Upload files") }
             })
+            if (title == null && vm.query.q.isBlank() && recent.isNotEmpty()) LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 4.dp),
+            ) {
+                items(recent, key = { "recent-$it" }) { r ->
+                    androidx.compose.material3.AssistChip({ vm.setQuery(vm.query.copy(q = r)) }, label = { Text(r, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Outlined.History, null, Modifier.size(16.dp)) })
+                }
+                item(key = "recent-clear") { TextButton({ session.recentSearches = emptyList(); recent = emptyList() }) { Text("Clear") } }
+            }
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 chipsStart()
                 item(key = "filters") { FilterChip(vm.query.filterCount > 0, { filters = true }, label = { Text(if (vm.query.filterCount > 0) "Filters · ${vm.query.filterCount}" else "Filters") }) }
@@ -486,8 +548,14 @@ private fun DocumentBrowser(
         }
         Spacer(Modifier.height(4.dp))
         StatsBanner()
-        DocumentList(vm, me.spaces, me.dateFormat, listState, onOpen, selectable = true, empty = {
-            if (vm.query.q.isNotBlank() || vm.query.filterCount > 0) EmptyState(Icons.Outlined.SearchOff, "No matching documents", "Try other words or remove a filter. Search also reads inside scans.")
+        DocumentList(vm, me.spaces, me.dateFormat, listState, openDoc, selectable = true, empty = {
+            if (vm.query.q.isNotBlank() || vm.query.filterCount > 0) EmptyState(
+                Icons.Outlined.SearchOff, "No matching documents",
+                if (vm.query.q.isNotBlank()) "Nothing has “${vm.query.q.trim()}”" + (if (vm.query.filterCount > 0) " with these filters" else "") +
+                    ". Try fewer or other words, or the start of a word. Search reads inside scans too." else "Try removing a filter.",
+            ) {
+                if (vm.query.filterCount > 0) OutlinedButton({ vm.setQuery(vm.query.clearedFilters()) }) { Text("Remove filters") }
+            }
             else EmptyState(Icons.Outlined.Inbox, "No documents yet", "Scan a paper document or upload a file to get started.") {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onScan) { Text("Scan a document") }
@@ -646,14 +714,16 @@ fun MoveDialog(currentSpace: String? = null, onDismiss: () -> Unit, onApply: (St
 }
 
 @Composable
-fun SearchBar(text: String, onChange: (String) -> Unit, hint: String, trailing: @Composable (() -> Unit)? = null) {
+fun SearchBar(text: String, onChange: (String) -> Unit, hint: String, onSearch: () -> Unit = {}, trailing: @Composable (() -> Unit)? = null) {
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             text, onChange, Modifier.weight(1f), singleLine = true, placeholder = { Text(hint) },
             leadingIcon = { Icon(Icons.Outlined.Search, null) },
-            trailingIcon = { if (text.isNotEmpty()) IconButton({ onChange("") }) { Icon(Icons.Outlined.Clear, "Clear search") } },
+            trailingIcon = { if (text.isNotEmpty()) IconButton({ onChange(""); onSearch() }) { Icon(Icons.Outlined.Clear, "Clear search") } },
             shape = RoundedCornerShape(28.dp),
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { keyboard?.hide(); onSearch() }),
         )
         trailing?.invoke()
     }
@@ -680,12 +750,31 @@ fun StatsBanner() {
 @Composable
 fun DocumentList(vm: DocsViewModel, spaces: List<Space>, dateFormat: String, state: androidx.compose.foundation.lazy.LazyListState, onOpen: (String) -> Unit, empty: @Composable () -> Unit, header: @Composable (() -> Unit)? = null, selectable: Boolean = false, rowContent: (@Composable (Document, @Composable () -> Unit) -> Unit)? = null) {
     val c = LocalContainer.current
+    // Results of another search start at the top, not where the old list was scrolled to.
+    LaunchedEffect(vm.generation) { if (vm.generation > 0 && vm.items.isNotEmpty()) state.scrollToItem(0) }
     PullToRefreshBox(isRefreshing = vm.refreshing, onRefresh = { vm.reload(pull = true) }, modifier = Modifier.fillMaxSize()) {
+        // The old results stay while new ones load: say that something is happening.
+        if (vm.searching) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp).align(Alignment.TopCenter).zIndex(1f))
         when {
             vm.loading -> LoadingBox()
             vm.error != null && vm.items.isEmpty() -> ErrorState(vm.error!!) { vm.reload() }
             vm.items.isEmpty() -> empty()
             else -> LazyColumn(Modifier.fillMaxSize(), state = state, contentPadding = PaddingValues(bottom = 96.dp)) {
+                vm.error?.let { err ->
+                    item(key = "error") {
+                        // The list below is from before: don't fail silently.
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+                                .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(12.dp)).padding(start = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Outlined.Warning, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onErrorContainer)
+                            Spacer(Modifier.width(10.dp))
+                            Text(err, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                            TextButton({ vm.reload() }) { Text("Retry") }
+                        }
+                    }
+                }
                 if (header != null) item { header() }
                 items(vm.items, key = { it.id }) { d ->
                     val row = @Composable {

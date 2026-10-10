@@ -69,5 +69,73 @@ class InputNormalisation(unittest.TestCase):
         np.testing.assert_allclose(got, ref, atol=0.0186584 / 2 + 1e-6)
 
 
+    def test_recognition_matches_cpu_input(self):
+        """A line strip on the NPU (uint8, grey padding) equals the CPU's float input."""
+        from docveta_worker import ppocr
+
+        crop = np.random.default_rng(2).integers(0, 256, (30, 100, 3), dtype=np.uint8)
+        ref, _ = ppocr.rec_input_float(crop)  # (1, 3, 48, 160), padding 0
+        x, bucket, content = ppocr.rec_input(crop, (160,))
+        scale, zp = 2 / 255, 128  # a uint8 quantisation covering [-1, 1]
+        got = self.npu_input_from(x, w.REC_NORM, scale, zp)
+        np.testing.assert_allclose(got[..., :content], ref[..., :content], atol=scale / 2 + 1e-6)
+        np.testing.assert_allclose(got[..., content:], 0, atol=scale)  # padding is grey, not black
+
+    @staticmethod
+    def npu_input_from(x, norm, scale, zp):
+        out = np.zeros((1, 3) + x.shape[1:3], dtype=np.uint8)
+        w.write_input(w.input_lut(norm, np.dtype(np.uint8), w.FMT_UINT8, w.Q_AFFINE, scale=scale, zero_point=zp), x, out)
+        return w.dequantize(out, w.FMT_UINT8, w.Q_AFFINE, scale=scale, zero_point=zp)
+
+
+class FakeNet:
+    """Stands in for an NPU reader: reports the input width it got as one 'character' per 160 px."""
+
+    def __init__(self, width, calls):
+        self.width, self.calls = width, calls
+
+    def run(self, x):
+        self.calls.append(x.shape[2])
+        probs = np.zeros((1, 40, 3), np.float32)
+        probs[0, :, 0] = 1  # blank everywhere...
+        probs[0, 0, :] = [0, 1, 0]  # ...but one "a" at the start
+        return probs
+
+
+class Reading(unittest.TestCase):
+    """Every line is read on the NPU, wide ones in pieces cut at word gaps (fake readers, no NPU)."""
+
+    def models(self, calls):
+        m = w.Models.__new__(w.Models)
+        m.stats = {"npu": 0, "split": 0, "cpu": 0}
+        m.npu_rec = {"en": {320: FakeNet(320, calls), 640: FakeNet(640, calls)}}
+        m.charsets = {"en": ["a", " "]}
+        m.read_cpu = lambda crop, s: self.fail("read on the CPU")
+        return m
+
+    def read(self, m, line):
+        from docveta_worker import ppocr
+
+        h, width = line.shape[:2]
+        box = ppocr.TextBox(np.array([[0, 0], [width - 1, 0], [width - 1, h - 1], [0, h - 1]], dtype=np.float32), 1.0)
+        return m.read(line, box, "en")
+
+    def test_short_lines_use_the_narrowest_reader_that_fits(self):
+        calls = []
+        r = self.read(self.models(calls), np.full((48, 300, 3), 255, np.uint8))
+        self.assertEqual((r.text, calls), ("a", [320]))
+
+    def test_wide_lines_are_cut_at_word_gaps_and_stay_on_the_npu(self):
+        line = np.full((48, 1500, 3), 255, np.uint8)
+        for x in range(0, 1500, 100):  # "words" 70 px wide, 30 px apart
+            line[10:38, x:x + 70] = 0
+        calls = []
+        m = self.models(calls)
+        r = self.read(m, line)
+        self.assertEqual(m.stats, {"npu": 1, "split": 1, "cpu": 0})
+        self.assertTrue(all(c <= 640 for c in calls) and len(calls) == 3)
+        self.assertEqual(r.text, "a a a")  # pieces joined with spaces: they were cut in gaps
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ import numpy as np
 
 REC_HEIGHT = 48
 REC_WIDTHS = (320, 640, 960, 1280)
+REC_PAD = 128  # pixel value that normalises to ~0 ((x/255 - 0.5) / 0.5)
 
 # Document language (ISO 639-1) -> PP-OCR recognition model script.
 LANG_SCRIPT = {
@@ -221,18 +222,67 @@ def crop_box(img: np.ndarray, box: TextBox) -> np.ndarray:
     return crop
 
 
-def rec_input(crop: np.ndarray) -> tuple[np.ndarray, int, int]:
+def rec_input(crop: np.ndarray, widths: tuple[int, ...] = REC_WIDTHS) -> tuple[np.ndarray, int, int]:
     """Resizes a crop to height 48 and pads it to the smallest fitting bucket width.
 
     Returns (input NHWC uint8, bucket width, content width)."""
     h, w = crop.shape[:2]
     target_w = int(math.ceil(REC_HEIGHT * w / max(h, 1)))
-    bucket = next((b for b in REC_WIDTHS if b >= target_w), REC_WIDTHS[-1])
+    bucket = next((b for b in widths if b >= target_w), widths[-1])
     content_w = min(target_w, bucket)  # very long lines are squeezed into the largest bucket
     resized = cv2.resize(crop, (max(1, content_w), REC_HEIGHT), interpolation=cv2.INTER_LINEAR)
-    out = np.zeros((REC_HEIGHT, bucket, 3), dtype=np.uint8)
+    # Mid-grey: normalised to 0, PaddleOCR's padding. Black (-1) wrecks PP-OCRv5 (~70% character errors).
+    out = np.full((REC_HEIGHT, bucket, 3), REC_PAD, dtype=np.uint8)
     out[:, :content_w] = resized
     return out[None], bucket, content_w
+
+
+def split_line(crop: np.ndarray, max_w: int) -> list[tuple[int, int, bool]]:
+    """Cuts a line crop into pieces at most max_w wide, at gaps between words where it can.
+
+    Returns (x0, x1, gap) per piece; gap says the cut before the next piece fell in blank space
+    (so the texts join with a space). For engines whose readers have a fixed maximum width."""
+    w = crop.shape[1]
+    if w <= max_w:
+        return [(0, w, False)]
+    gray = crop.astype(np.float32).mean(axis=2) if crop.ndim == 3 else crop.astype(np.float32)
+    lo, hi = np.percentile(gray, 5), np.percentile(gray, 95)
+    ink = (gray < (lo + hi) / 2).sum(axis=0) if hi - lo > 20 else np.zeros(w)
+    h = crop.shape[0]
+    out, start = [], 0
+    while w - start > max_w:
+        a, b = start + max_w // 2, start + max_w  # cut in the second half of the window
+        seg = ink[a:b]
+        # The widest run of blank columns (closest to the end on ties): a gap between words.
+        best, run, best_len = None, 0, 0
+        for i, v in enumerate(seg):
+            run = run + 1 if v == 0 else 0
+            if run and run >= best_len:
+                best_len, best = run, a + i - run // 2
+        gap = best is not None and best_len >= max(2, h // 8)
+        cut = best if gap else a + len(seg) - 1 - int(np.argmin(seg[::-1]))  # least ink, rightmost
+        out.append((start, cut, gap))
+        start = cut
+    out.append((start, w, False))
+    return out
+
+
+def join_pieces(parts: list[tuple[int, int, bool, RecResult]], width: int) -> RecResult:
+    """One line's result from the results of its pieces (see split_line)."""
+    texts, words, conf, n = [], [], 0.0, 0
+    for i, (x0, x1, gap, r) in enumerate(parts):
+        if r.text:
+            sep = " " if texts and parts[i - 1][2] else ""
+            texts.append(sep + r.text)
+            conf += r.confidence * len(r.text)
+            n += len(r.text)
+        span = (x1 - x0) / max(width, 1)
+        piece = [(t, x0 / max(width, 1) + f0 * span, x0 / max(width, 1) + f1 * span) for t, f0, f1 in r.words]
+        if piece and words and i and not parts[i - 1][2]:  # cut inside a word: join its halves
+            t, f0, _ = words.pop()
+            piece[0] = (t + piece[0][0], f0, piece[0][2])
+        words += piece
+    return RecResult("".join(texts).strip(), conf / n if n else 0.0, words)
 
 
 REC_MAX_WIDTH = 3200
