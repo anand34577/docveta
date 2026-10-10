@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -241,5 +242,27 @@ func TestPromptFitsContext(t *testing.T) {
 	p.ContextTokens = 10
 	if p.contextTokens() != minContextTokens {
 		t.Errorf("context floor: %d", p.contextTokens())
+	}
+}
+
+func TestClassifyResultShapes(t *testing.T) {
+	// The schema's shape, and the flatter one servers without JSON schemas tend to send.
+	for _, raw := range []string{
+		`{"document_type":{"name":"Insurance","confidence":0.9},"correspondent":{"name":null,"confidence":0},"tags":[{"name":"Car","confidence":0.8}]}`,
+		`{"document_type":"Insurance","correspondent":null,"tags":["Car"]}`,
+	} {
+		var r classifyResult
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if r.DocumentType == nil || r.DocumentType.Name != "Insurance" || r.DocumentType.Confidence == 0 {
+			t.Errorf("%s: type %+v", raw, r.DocumentType)
+		}
+		if r.Correspondent != nil && r.Correspondent.Name != "" {
+			t.Errorf("%s: correspondent %+v", raw, r.Correspondent)
+		}
+		if len(r.Tags) != 1 || r.Tags[0].Name != "Car" {
+			t.Errorf("%s: tags %+v", raw, r.Tags)
+		}
 	}
 }

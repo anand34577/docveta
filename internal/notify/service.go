@@ -63,9 +63,13 @@ type Notification struct {
 	CreatedAt time.Time  `json:"created_at"`
 }
 
-func (s *Service) List(ctx context.Context, p *auth.Principal, unreadOnly bool, limit int) ([]Notification, int, error) {
+func (s *Service) List(ctx context.Context, p *auth.Principal, unreadOnly bool, before *uuid.UUID, limit int) ([]Notification, int, error) {
+	cond, args := "", []any{p.UserID, unreadOnly, limit}
+	if before != nil { // the page after the one ending with notification before
+		cond, args = ` AND (created_at, id) < (SELECT created_at, id FROM notifications WHERE id=$4 AND user_id=$1)`, append(args, *before)
+	}
 	rows, err := s.pool.Query(ctx, `SELECT id, event_type, title, body, link, severity, read_at, created_at FROM notifications
-		WHERE user_id=$1 AND (NOT $2 OR read_at IS NULL) ORDER BY created_at DESC LIMIT $3`, p.UserID, unreadOnly, limit)
+		WHERE user_id=$1 AND (NOT $2 OR read_at IS NULL)`+cond+` ORDER BY created_at DESC, id DESC LIMIT $3`, args...)
 	if err != nil {
 		return nil, 0, err
 	}

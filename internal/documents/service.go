@@ -752,10 +752,11 @@ func (s *Service) AssignASN(ctx context.Context, p *auth.Principal, id uuid.UUID
 
 type BulkInput struct {
 	IDs []uuid.UUID `json:"ids"`
-	// Select picks the documents on the server instead of IDs: "inbox" = the caller's Inbox
-	// (up to 5000 per call; BulkResult.Remaining says whether to call again).
+	// Select picks the documents on the server instead of IDs: "inbox" = the caller's Inbox,
+	// "failed" = documents whose processing failed (up to 5000 per call; BulkResult.Remaining
+	// says whether to call again).
 	Select string      `json:"select,omitempty"`
-	Action string      `json:"action"` // update | trash | restore | purge | reprocess
+	Action string      `json:"action"` // update | trash | restore | purge | reprocess | suggest
 	Update UpdateInput `json:"update"`
 }
 
@@ -775,14 +776,15 @@ const bulkMax = 5000
 
 func (s *Service) Bulk(ctx context.Context, p *auth.Principal, in BulkInput) (*BulkResult, error) {
 	selected := false
+	where := map[string]string{"inbox": "inbox", "failed": "status='failed'"}[in.Select]
 	switch in.Select {
 	case "":
-	case "inbox":
+	case "inbox", "failed":
 		visible, err := s.spaces.VisibleSpaceIDs(ctx, p.UserID)
 		if err != nil {
 			return nil, err
 		}
-		rows, err := s.pool.Query(ctx, `SELECT id FROM documents WHERE inbox AND deleted_at IS NULL AND space_id = ANY($1)
+		rows, err := s.pool.Query(ctx, `SELECT id FROM documents WHERE `+where+` AND deleted_at IS NULL AND space_id = ANY($1)
 			ORDER BY added_at LIMIT $2`, visible, bulkMax)
 		if err != nil {
 			return nil, err
@@ -800,8 +802,8 @@ func (s *Service) Bulk(ctx context.Context, p *auth.Principal, in BulkInput) (*B
 	res, err := s.bulk(ctx, p, in)
 	if err == nil && selected {
 		visible, _ := s.spaces.VisibleSpaceIDs(ctx, p.UserID)
-		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM documents WHERE inbox AND deleted_at IS NULL AND space_id = ANY($1)`, visible).Scan(&res.Remaining)
-		// Documents the caller can't change stay in the Inbox; don't count them as work left.
+		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM documents WHERE `+where+` AND deleted_at IS NULL AND space_id = ANY($1)`, visible).Scan(&res.Remaining)
+		// Documents the caller can't change stay selected; don't count them as work left.
 		res.Remaining = max(0, res.Remaining-len(res.Failed))
 	}
 	return res, err
@@ -828,6 +830,8 @@ func (s *Service) bulk(ctx context.Context, p *auth.Principal, in BulkInput) (*B
 			err = s.Purge(ctx, p, id)
 		case "reprocess":
 			err = s.Reprocess(ctx, p, id, "")
+		case "suggest":
+			err = s.suggestAI(ctx, p, id, jobs.PriorityNormal)
 		default:
 			return nil, apperr.Invalid("action", "Unknown bulk action")
 		}
@@ -942,6 +946,24 @@ func (s *Service) Reprocess(ctx context.Context, p *auth.Principal, id uuid.UUID
 		return s.queue.InsertTx(ctx, tx, jobs.PreprocessArgs{DocumentID: id, Version: raw.CurrentVersion, Profile: profile, Priority: jobs.PriorityNormal},
 			&river.InsertOpts{Priority: jobs.PriorityNormal, MaxAttempts: 5})
 	})
+}
+
+// SuggestAI asks the AI to read the document again and suggest its tags, type, sender and
+// date (and refreshes what meaning-based search knows about it).
+func (s *Service) SuggestAI(ctx context.Context, p *auth.Principal, id uuid.UUID) error {
+	return s.suggestAI(ctx, p, id, jobs.PriorityInteractive)
+}
+
+// suggestAI queues it at priority: many documents at once wait behind what people are doing now.
+func (s *Service) suggestAI(ctx context.Context, p *auth.Principal, id uuid.UUID, priority int) error {
+	raw, _, err := s.authorize(ctx, s.pool, p, id, spaces.ActEdit, true)
+	if err != nil {
+		return err
+	}
+	if raw.Deleted {
+		return apperr.Conflict("in_trash", "Restore this document from Trash first")
+	}
+	return s.queue.Insert(ctx, jobs.AIArgs{DocumentID: id, Classify: true, Embed: true}, &river.InsertOpts{Priority: priority, MaxAttempts: 2})
 }
 
 // ---------------------------------------------------------------------------

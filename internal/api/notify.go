@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/anand34577/docveta/internal/apperr"
 	"github.com/anand34577/docveta/internal/auth"
 	"github.com/anand34577/docveta/internal/notify"
 	"github.com/anand34577/docveta/internal/platform/httpx"
@@ -15,7 +16,15 @@ import (
 
 func (a *API) registerNotify(mux router) {
 	mux.HandleFunc("GET /api/v1/notifications", handle(func(r *http.Request, p *auth.Principal) (map[string]any, error) {
-		l, unread, err := a.Notify.List(r.Context(), p, r.URL.Query().Get("unread") == "true", httpx.QueryInt(r, "limit", 30, 1, 200))
+		var before *uuid.UUID
+		if v := r.URL.Query().Get("before"); v != "" {
+			id, err := uuid.Parse(v)
+			if err != nil {
+				return nil, apperr.Invalid("before", "Use a notification id")
+			}
+			before = &id
+		}
+		l, unread, err := a.Notify.List(r.Context(), p, r.URL.Query().Get("unread") == "true", before, httpx.QueryInt(r, "limit", 30, 1, 200))
 		if l == nil {
 			l = []notify.Notification{}
 		}
