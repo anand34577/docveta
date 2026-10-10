@@ -119,3 +119,17 @@ func TestParseCustomFilters(t *testing.T) {
 		t.Errorf("unknown key parsed as a filter: %+v", p.Custom)
 	}
 }
+
+func TestParseWordWithInnerPunctuationIsAPhrase(t *testing.T) {
+	for q, want := range map[string]string{
+		"Sharma's":              "('sharma' <-> 's':*)",
+		"support@example.co.in": "('support' <-> 'example' <-> 'co' <-> 'in':*)",
+		"x-ray report":          "('x' <-> 'ray') & 'report':*",
+		"ABCDE-1234-F":          "'abcde1234f':*", // identifiers still match joined
+		"05/08/20":              "'050820':*",
+	} {
+		if got := textindex.TSQuery(Parse(q, time.Now()).Parts); got != want {
+			t.Errorf("%q: got %s, want %s", q, got, want)
+		}
+	}
+}

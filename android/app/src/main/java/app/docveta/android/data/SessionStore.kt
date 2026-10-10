@@ -116,6 +116,17 @@ class SessionStore(private val kv: KeyValueStore) {
         get() = kv.get("me")
         set(v) = kv.put("me", v)
 
+    /** Searches made in Documents, newest first (offered again when the search box is empty). */
+    var recentSearches: List<String>
+        get() = kv.get("recent_searches")?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
+        set(v) = kv.put("recent_searches", v.take(8).joinToString("\n").ifEmpty { null })
+
+    fun rememberSearch(q: String) {
+        val t = q.trim().replace('\n', ' ')
+        if (t.length < 2) return
+        recentSearches = listOf(t) + recentSearches.filterNot { it.equals(t, ignoreCase = true) }
+    }
+
     val signedIn: Boolean get() = !token.isNullOrBlank() && !serverUrl.isNullOrBlank()
 
     fun signOut() {
@@ -125,5 +136,6 @@ class SessionStore(private val kv: KeyValueStore) {
         userName = null
         userEmail = null
         cachedMe = null
+        recentSearches = emptyList()
     }
 }

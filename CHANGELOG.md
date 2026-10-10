@@ -20,9 +20,23 @@ All notable changes to Docveta. The format follows
   wide for the NPU's fixed input sizes are cut at word gaps. The worker checks its NPU readers on
   test lines at start and only falls back to the CPU if they misread them.
 
+- **Android: Documents is the first screen** when the app opens (and first in the bottom bar);
+  the Inbox is a tap away, with its count on the badge as before.
+- Android search: recent searches are offered when the search box is empty; a thin bar shows
+  while a new search runs; an empty result says what was searched and offers to remove filters;
+  the keyboard steps aside when the results are scrolled; Back clears a search first; matched
+  words are highlighted in colours that read well in dark mode.
+
 ### Fixed
 - **Android: search didn't search while typing.** The list only updated when a filter changed,
   and the keyboard's Search key did nothing. Both work now.
+- Android search: the next page of an earlier search could land in the new results, a search
+  that failed left the old results on screen without a word (it now says so, with Retry), and new
+  results opened scrolled to where the old list was.
+- Search: a word with punctuation inside but no digits (an email address, "Sharma's", "x-ray")
+  searched only for its last piece, so "support@example.co.in" found every document with "in".
+  It now matches the whole word. Identifiers (PAN, policy numbers, dates) still match with or
+  without their dashes and slashes.
 - **Android: "Can't reach the server" showed when the server was fine.** The app checked the
   connection in the background, where Android cuts the network, so the bar greeted you on return;
   one failed check (a Wi-Fi/mobile handover) was also enough. It now checks only while the app is

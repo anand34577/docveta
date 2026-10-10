@@ -26,6 +26,7 @@ private val Light = lightColorScheme(
     surface = Color.White, onSurface = Color(0xFF14171F), surfaceVariant = Color(0xFFEEF0F6), onSurfaceVariant = Color(0xFF5B6270),
     surfaceContainer = Color(0xFFF1F3F9), surfaceContainerHigh = Color(0xFFEAEDF5), surfaceContainerLow = Color(0xFFF7F8FB),
     outline = Color(0xFFC4C8D4), outlineVariant = Color(0xFFE2E5EE), error = Color(0xFFC62F3E), errorContainer = Color(0xFFFFE1E3),
+    tertiary = Color(0xFF8A6100), tertiaryContainer = Color(0xFFFFE9B0), onTertiaryContainer = Color(0xFF2E2100), // search highlights
 )
 
 private val Dark = darkColorScheme(
@@ -35,6 +36,7 @@ private val Dark = darkColorScheme(
     surface = Color(0xFF171A21), onSurface = Color(0xFFE9EBF2), surfaceVariant = Color(0xFF232733), onSurfaceVariant = Color(0xFF9EA5B5),
     surfaceContainer = Color(0xFF1B1F27), surfaceContainerHigh = Color(0xFF232733), surfaceContainerLow = Color(0xFF13161C),
     outline = Color(0xFF444B5C), outlineVariant = Color(0xFF2A2F3C), error = Color(0xFFFF8A94), errorContainer = Color(0xFF4A1C22),
+    tertiary = Color(0xFFF5C451), tertiaryContainer = Color(0xFF5A4300), onTertiaryContainer = Color(0xFFFFE6A6),
 )
 
 private val Type = Typography(

@@ -60,7 +60,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -183,19 +186,33 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
     val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { picked = it }
 
     LaunchedEffect(Unit) { c.signedOut.collect { onSignedOut() } }
-    LaunchedEffect(Unit) {
-        while (true) {
-            try {
-                me = c.repo.me()
-                stats = c.repo.stats().also { c.session.serverReadsText = it.ocrAvailable }
-                loadError = null
-                if (offline) c.uploads.schedule() // back online: send what waited
-                offline = false
-            } catch (e: Exception) {
-                offline = (e as? app.docveta.android.data.ApiException)?.isNetwork ?: true
-                if (me == null) loadError = e.friendly()
+    // Only while the app is on screen: in the background Android cuts the network (Doze), so a
+    // check there fails and the bar greeted the person on return. Coming back checks at once.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            var failures = 0
+            while (true) {
+                try {
+                    me = c.repo.me()
+                    stats = c.repo.stats().also { c.session.serverReadsText = it.ocrAvailable }
+                    loadError = null
+                    if (offline) c.uploads.schedule() // back online: send what waited
+                    offline = false
+                    failures = 0
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val a = e as? app.docveta.android.data.ApiException
+                    // A proxy answering for a server that's down is as unreachable as no network.
+                    val unreachable = a != null && (a.isNetwork || a.status in 502..504)
+                    // One failed check is often just a Wi-Fi/mobile handover: say so on the second.
+                    failures = if (unreachable) failures + 1 else 0
+                    offline = failures >= 2 || (unreachable && me == null)
+                    if (me == null) loadError = e.friendly()
+                }
+                delay(if (failures > 0) 10_000 else 30_000)
             }
-            delay(if (offline) 10_000 else 30_000)
         }
     }
 
@@ -248,7 +265,7 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
             }
         }) { pad ->
             NavHost(
-                nav, Route.Inbox, Modifier.padding(pad),
+                nav, Route.Docs, Modifier.padding(pad),
                 enterTransition = { screenEnter(initialState.destination.route, targetState.destination.route) },
                 exitTransition = { screenExit(initialState.destination.route, targetState.destination.route) },
                 popEnterTransition = { screenPopEnter(initialState.destination.route, targetState.destination.route) },
@@ -272,7 +289,7 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
                 composable(Route.Scan) { CameraScreen(scan, onDone = { nav.navigate(Route.Review) { popUpTo(Route.Scan) { inclusive = true } } }, onEdit = { id -> nav.navigate("scan/crop/$id") }, onClose = back) }
                 composable(Route.Review) {
                     ReviewScreen(scan, onAddMore = { nav.navigate(Route.Scan) }, onEdit = { id -> nav.navigate("scan/crop/$id") },
-                        onUploaded = { nav.popBackStack(Route.Inbox, false); nav.navigate(Route.Uploads) }, onBack = back)
+                        onUploaded = { nav.popBackStack(Route.Docs, false); nav.navigate(Route.Uploads) }, onBack = back)
                 }
                 composable(Route.Crop, arguments = listOf(navArgument("pageId") { type = NavType.StringType })) { CropScreen(scan, it.arguments!!.getString("pageId")!!, onBack = back) }
                 composable(Route.Uploads) { Box(Modifier.fillMaxSize().navigationBarsPadding()) { UploadsScreen(onBack = back, onOpen = openDoc) } }
@@ -336,15 +353,15 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
 private fun BottomBar(nav: NavHostController, route: String?, inbox: Int, askAvailable: Boolean) {
     val colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer)
     fun go(r: String) = nav.navigate(r) {
-        popUpTo(Route.Inbox) { saveState = true }
+        popUpTo(Route.Docs) { saveState = true } // Documents is home: Back from a tab returns there
         launchSingleTop = true
         restoreState = true
     }
     NavigationBar {
+        NavigationBarItem(route == Route.Docs, { go(Route.Docs) }, colors = colors, label = { Text("Documents") }, icon = { Icon(Icons.Outlined.Description, null) })
         NavigationBarItem(route == Route.Inbox, { go(Route.Inbox) }, colors = colors, label = { Text("Inbox") }, icon = {
             BadgedBox(badge = { if (inbox > 0) Badge { Text(if (inbox > 99) "99+" else inbox.toString()) } }) { Icon(Icons.Outlined.Inbox, null) }
         })
-        NavigationBarItem(route == Route.Docs, { go(Route.Docs) }, colors = colors, label = { Text("Documents") }, icon = { Icon(Icons.Outlined.Description, null) })
         NavigationBarItem(false, { nav.navigate(Route.Scan) }, colors = colors, label = { Text("Scan") }, icon = {
             Box(Modifier.size(width = 52.dp, height = 32.dp).background(MaterialTheme.colorScheme.primary, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
                 Icon(Icons.Outlined.DocumentScanner, null, tint = MaterialTheme.colorScheme.onPrimary)

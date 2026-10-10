@@ -246,12 +246,15 @@ func ParseWith(q string, now time.Time, fields map[string]bool) Parsed {
 			continue
 		}
 		part := textindex.QueryPart{Terms: terms, Negate: t.negate}
-		if !t.quoted && len(terms) > 1 {
+		if !t.quoted && len(terms) > len(textindex.Tokenize(t.text)) {
 			// "ABCDE-1234" produced several tokens plus a joined variant: match the joined one.
 			part.Terms = terms[len(terms)-1:]
 		}
+		// Otherwise a word with punctuation inside ("Sharma's", "x-ray", an email address) is
+		// its pieces next to each other, as indexed; matching only the last piece found
+		// every document with an "s" or an "in".
 		// Prefix-match the last bare word for search-as-you-type.
-		if i == len(toks)-1 && !t.quoted && !t.negate && len(part.Terms) == 1 {
+		if i == len(toks)-1 && !t.quoted && !t.negate {
 			part.Prefix = true
 		}
 		p.Parts = append(p.Parts, part)
