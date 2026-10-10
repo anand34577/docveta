@@ -1,12 +1,14 @@
 import * as React from "react";
 import { useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCheck, Download, FileDown, LayoutGrid, MessageSquareText, MoreHorizontal, RotateCcw, ScanText, Share2, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCheck, ChevronLeft, ChevronRight, CloudOff, Download, FileDown, LayoutGrid, Link2, MessageSquareText, MoreHorizontal, RotateCcw, ScanText, Share2, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { invalidateDocuments, useAIEnabled, useDocument, useUpdateDocument } from "@/lib/queries";
-import { cn, spaceLabel } from "@/lib/utils";
+import { cn, spaceLabel, usePageTitle } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
+import { useResultList } from "@/stores/ui";
+import { forgetDoc, rememberDoc, rememberSearch } from "@/lib/recent";
 import { DocViewer } from "@/components/documents/doc-viewer";
 import { MetadataPanel } from "@/components/documents/metadata-panel";
 import { HistoryTab, NotesTab, TextTab } from "@/components/documents/doc-tabs";
@@ -14,7 +16,7 @@ import { SimilarTab, VersionsTab } from "@/components/documents/versions-similar
 import { ShareDialog } from "@/components/documents/share-dialog";
 const PageManager = React.lazy(() => import("@/components/documents/page-manager").then((m) => ({ default: m.PageManager })));
 import { Button } from "@/components/ui/button";
-import { Spinner, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/misc";
+import { EmptyState, Spinner, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/misc";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,8 +34,36 @@ export function DocumentPage() {
   const doc = useDocument(id);
   const router = useRouter();
 
+  const title = doc.data?.title;
+  const missing = (doc.error as { status?: number } | null)?.status === 404;
+  React.useEffect(() => {
+    if (missing) forgetDoc(id);
+    else if (title) rememberDoc({ id, title });
+  }, [id, title, missing]);
+  React.useEffect(() => {
+    if (title && search.q) rememberSearch(search.q);
+  }, [id, title, search.q]);
+
   if (doc.isLoading) return <div className="flex h-full items-center justify-center"><Spinner /></div>;
-  if (doc.isError || !doc.data) return <NotFound />;
+  if (missing) return <NotFound />;
+  // A failed refresh (the page checks again while text is being read) keeps what's on screen.
+  if (!doc.data) {
+    if (!doc.error) return <NotFound />;
+    return (
+      <EmptyState
+        icon={<CloudOff />}
+        title="Couldn't load this document"
+        className="min-h-[60vh]"
+        action={
+          <Button onClick={() => doc.refetch()} loading={doc.isFetching}>
+            Try again
+          </Button>
+        }
+      >
+        {errorMessage(doc.error)}
+      </EmptyState>
+    );
+  }
 
   const highlight = search.q ? search.q.split(/\s+/).filter((t) => t && !t.includes(":") && !t.startsWith("-")).map((t) => t.replace(/"/g, "")) : undefined;
   return (
@@ -67,6 +97,7 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
   const [sharing, setSharing] = React.useState(false);
   const [arranging, setArranging] = React.useState(false);
   const ai = useAIEnabled().data;
+  usePageTitle(compact ? undefined : doc.title);
   const pageEditable = canEdit && (doc.mime_type === "application/pdf" || doc.mime_type === "image/jpeg" || doc.mime_type === "image/png");
 
   const markReviewed = async () => {
@@ -90,10 +121,7 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
       toast("Moved to Trash", {
         action: {
           label: "Undo",
-          onClick: async () => {
-            await api.post(`/documents/${doc.id}/restore`);
-            invalidateDocuments(qc, doc.id);
-          },
+          onClick: () => api.post(`/documents/${doc.id}/restore`).then(() => invalidateDocuments(qc, doc.id), (e) => toast.error(errorMessage(e))),
         },
       });
       if (onReviewed) onReviewed();
@@ -116,6 +144,12 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
       (e) => toast.error(errorMessage(e)),
     );
   };
+  // The address of this page: it opens for people who are in the document's space.
+  const copyLink = () =>
+    navigator.clipboard.writeText(`${window.location.origin}/documents/${doc.id}`).then(
+      () => toast.success("Link copied", { description: "It opens for people who have access to this space." }),
+      () => toast.error("Couldn't copy the link"),
+    );
   const reprocess = async (force: boolean) => {
     await api.post(`/documents/${doc.id}/reprocess`, undefined, { force_ocr: force }).then(
       () => {
@@ -135,6 +169,7 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
               <ArrowLeft />
             </Button>
           )}
+          {!compact && <Neighbours id={doc.id} />}
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-[15px] font-semibold leading-tight">{doc.title}</h1>
             <div className="truncate text-xs text-subtle">{[spaceLabel(space ?? doc.space), doc.correspondent?.name].filter(Boolean).join(" · ")}</div>
@@ -181,6 +216,9 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
                   )}
                   <DropdownMenuItem onSelect={() => setSharing(true)}>
                     <Share2 /> Share with a link…
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={copyLink}>
+                    <Link2 /> Copy link for members
                   </DropdownMenuItem>
                   {ai?.chat && doc.status === "ready" && (
                     <DropdownMenuItem onSelect={() => navigate({ to: "/ask", search: { doc: doc.id } })}>
@@ -261,6 +299,44 @@ export function DocumentDetail({ doc, page, highlight, onBack, onReviewed, compa
           <PageManager doc={doc} onClose={() => setArranging(false)} />
         </React.Suspense>
       )}
+    </div>
+  );
+}
+
+/** Previous / next document in the list it was opened from (buttons, or K / J). */
+function Neighbours({ id }: { id: string }) {
+  const { ids, q } = useResultList();
+  const navigate = useNavigate();
+  const i = ids.indexOf(id);
+  const go = React.useCallback(
+    (to?: string) => to && navigate({ to: "/documents/$id", params: { id: to }, search: { q }, replace: true }),
+    [navigate, q],
+  );
+  const prev = i > 0 ? ids[i - 1] : undefined;
+  const next = i >= 0 ? ids[i + 1] : undefined;
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      if (e.key === "j" && next) go(next);
+      else if (e.key === "k" && prev) go(prev);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [prev, next, go]);
+  if (i < 0 || ids.length < 2) return null;
+  return (
+    <div className="flex items-center">
+      <Button size="icon-sm" variant="ghost" disabled={!prev} onClick={() => go(prev)} aria-label="Previous document" title="Previous document (K)">
+        <ChevronLeft />
+      </Button>
+      <span className="hidden px-0.5 text-xs tabular-nums text-subtle sm:inline">
+        {i + 1}/{ids.length}
+      </span>
+      <Button size="icon-sm" variant="ghost" disabled={!next} onClick={() => go(next)} aria-label="Next document" title="Next document (J)">
+        <ChevronRight />
+      </Button>
     </div>
   );
 }

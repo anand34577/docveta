@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { useAIEnabled, useDocument } from "@/lib/queries";
 import type { Citation, Conversation, ConversationMessage } from "@/lib/types";
-import { cn, spaceLabel, timeAgo } from "@/lib/utils";
+import { cn, spaceLabel, timeAgo, usePageTitle } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { Markdown } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,7 @@ export function AskPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const search = useSearch({ from: "/app/ask" });
+  usePageTitle("Ask your documents");
   const conversations = useConversationPages();
   const convList = React.useMemo(() => conversations.data?.pages.flat() ?? [], [conversations.data]);
   const [convId, setConvId] = React.useState<string | null>(null);
@@ -120,6 +121,18 @@ export function AskPage() {
     stick.current = true;
     setTurns((t) => [...t, { role: "user", content: q, citations: [] }, { role: "assistant", content: "", citations: [], pending: true, stage: "searching" }]);
     const patchLast = (f: (t: Turn) => Turn) => setTurns((t) => t.map((x, i) => (i === t.length - 1 ? f(x) : x)));
+    // The answer arrives a few letters at a time. Showing each piece on its own lays the whole
+    // answer out again every time; collect what came in during a frame and show it at once.
+    let waiting = "";
+    let raf = 0;
+    const flush = () => {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      if (!waiting) return;
+      const add = waiting;
+      waiting = "";
+      patchLast((t) => ({ ...t, content: t.content + add }));
+    };
     const ctl = new AbortController();
     abort.current = ctl;
     try {
@@ -149,10 +162,20 @@ export function AskPage() {
           const ev = /^event: (.*)$/m.exec(frame)?.[1];
           const data = /^data: (.*)$/m.exec(frame)?.[1];
           if (!ev || data === undefined) continue; // keep-alive comments
-          const v = JSON.parse(data);
+          let v: unknown;
+          try {
+            v = JSON.parse(data);
+          } catch {
+            continue; // one unreadable message shouldn't throw the answer away
+          }
+          if (ev === "delta") {
+            waiting += v as string;
+            if (!raf) raf = requestAnimationFrame(flush);
+            continue;
+          }
+          flush();
           if (ev === "status") patchLast((t) => ({ ...t, stage: (v as { stage: Turn["stage"] }).stage }));
           else if (ev === "citations") patchLast((t) => ({ ...t, citations: v as Citation[] }));
-          else if (ev === "delta") patchLast((t) => ({ ...t, content: t.content + (v as string) }));
           else if (ev === "error") patchLast((t) => ({ ...t, content: t.content ? `${t.content}\n\n${(v as { message: string }).message}` : (v as { message: string }).message, error: true }));
           else if (ev === "done") {
             finished = true;
@@ -160,10 +183,12 @@ export function AskPage() {
           }
         }
       }
+      flush();
       if (!finished) patchLast((t) => (t.error ? t : { ...t, error: !t.content, content: t.content || "The connection closed before the answer finished. Try again." }));
     } catch (e) {
+      flush(); // keep what had arrived
       if ((e as Error).name === "AbortError") patchLast((t) => ({ ...t, stopped: true }));
-      else patchLast((t) => ({ ...t, content: errorMessage(e), error: true }));
+      else patchLast((t) => ({ ...t, content: t.content ? `${t.content}\n\n${errorMessage(e)}` : errorMessage(e), error: true }));
     } finally {
       patchLast((t) => ({ ...t, pending: false }));
       setBusy(false);
@@ -179,9 +204,19 @@ export function AskPage() {
     void ask(lastQ);
   };
 
+  // The same function every time, so finished turns aren't drawn again while a new answer streams in.
+  const retryNow = React.useRef(retry);
+  retryNow.current = retry;
+  const onRetry = React.useCallback(() => retryNow.current(), []);
+
   const remove = async (id: string) => {
     if (!(await confirm({ title: "Delete this conversation?", confirmLabel: "Delete", destructive: true }))) return;
-    await api.del(`/ai/conversations/${id}`).catch((e) => toast.error(errorMessage(e)));
+    try {
+      await api.del(`/ai/conversations/${id}`);
+    } catch (e) {
+      toast.error(errorMessage(e)); // still there: leave it open
+      return;
+    }
     qc.invalidateQueries({ queryKey: ["conversations"] });
     if (convId === id) void open(null);
   };
@@ -195,7 +230,12 @@ export function AskPage() {
   };
   const clearAll = async () => {
     if (!(await confirm({ title: "Delete all conversations?", body: "Your questions and answers are removed. Your documents aren't touched.", confirmLabel: "Delete all", destructive: true }))) return;
-    await api.del("/ai/conversations").catch((e) => toast.error(errorMessage(e)));
+    try {
+      await api.del("/ai/conversations");
+    } catch (e) {
+      toast.error(errorMessage(e));
+      return;
+    }
     qc.invalidateQueries({ queryKey: ["conversations"] });
     void open(null);
   };
@@ -277,7 +317,7 @@ export function AskPage() {
                 </div>
               </div>
             ) : (
-              turns.map((t, i) => <TurnView key={i} turn={t} isLast={i === turns.length - 1} onRetry={retry} />)
+              turns.map((t, i) => <TurnView key={i} turn={t} isLast={i === turns.length - 1} onRetry={onRetry} />)
             )}
           </div>
         </div>
@@ -443,7 +483,7 @@ function ConversationList({ items, loading, active, hasMore, loadingMore, onMore
   );
 }
 
-function TurnView({ turn, isLast, onRetry }: { turn: Turn; isLast: boolean; onRetry: () => void }) {
+const TurnView = React.memo(function TurnView({ turn, isLast, onRetry }: { turn: Turn; isLast: boolean; onRetry: () => void }) {
   const [copied, setCopied] = React.useState(false);
   const [allSources, setAllSources] = React.useState(false);
   if (turn.role === "user")
@@ -527,7 +567,7 @@ function TurnView({ turn, isLast, onRetry }: { turn: Turn; isLast: boolean; onRe
       </div>
     </div>
   );
-}
+});
 
 /** Turns "[2]" markers in an answer into numbered chips that link to the cited page. */
 function withCitations(text: string, cites: Citation[], key: string): React.ReactNode[] {

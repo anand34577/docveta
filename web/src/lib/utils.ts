@@ -1,9 +1,21 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { format, formatDistanceToNowStrict, isToday, isYesterday, parseISO } from "date-fns";
+import { useEffect } from "react";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+/** Names the browser tab (and history entry) after the page shown. */
+export function usePageTitle(title?: string) {
+  useEffect(() => {
+    if (!title) return;
+    document.title = `${title} · Docveta`;
+    return () => {
+      document.title = "Docveta";
+    };
+  }, [title]);
 }
 
 export function formatBytes(n: number): string {

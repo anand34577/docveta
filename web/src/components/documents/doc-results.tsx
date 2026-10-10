@@ -2,8 +2,11 @@ import * as React from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDocuments } from "@/lib/queries";
 import type { DocQuery, Document, Facets } from "@/lib/types";
-import { useSelection } from "@/stores/ui";
-import { Skeleton, Spinner } from "@/components/ui/misc";
+import { useResultList, useSelection } from "@/stores/ui";
+import { CloudOff } from "lucide-react";
+import { errorMessage } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
 import { DocumentCard, DocumentRow } from "./doc-items";
 
 interface Props {
@@ -44,6 +47,7 @@ export function DocumentResults({ query, layout, empty, onLoaded }: Props) {
   React.useEffect(() => {
     onLoaded?.({ total, totalCapped, items, facets, mode });
   }, [total, totalCapped, items, facets, mode, onLoaded]);
+  React.useEffect(() => useResultList.setState({ ids: items.map((d) => d.id), q: query.q }), [items, query.q]);
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const [listEl, setListEl] = React.useState<HTMLDivElement | null>(null);
@@ -105,7 +109,21 @@ export function DocumentResults({ query, layout, empty, onLoaded }: Props) {
     );
   }
   if (res.isError) {
-    return <div className="page-x py-10 text-center text-sm text-danger" role="alert">{(res.error as Error).message}</div>;
+    return (
+      <div role="alert">
+        <EmptyState
+          icon={<CloudOff />}
+          title="Couldn't load documents"
+          action={
+            <Button onClick={() => res.refetch()} loading={res.isFetching}>
+              Try again
+            </Button>
+          }
+        >
+          {errorMessage(res.error)}
+        </EmptyState>
+      </div>
+    );
   }
   if (items.length === 0) return <>{empty}</>;
 

@@ -62,6 +62,14 @@ suspend fun Repository.uploadVersion(id: String, file: File, mime: String, name:
 suspend fun Repository.restoreVersion(id: String, no: Int): Document = api.post("/documents/$id/versions/$no/restore")
 
 /** A file of this document (a version, or the searchable PDF), saved in the cache to open or share. */
+/** Several documents as one ZIP file in the cache, ready to share or save. The server takes up to 500. */
+suspend fun Repository.zip(ids: List<String>): File {
+    val f = File(cacheDir, "shared/zip-${System.currentTimeMillis()}/docveta-documents-${java.time.LocalDate.now()}.zip")
+    api.download("/documents/archive", emptyMap(), f, body = buildJsonObject { put("ids", JsonArray(ids.map { JsonPrimitive(it) })) }.toString())
+    trimCache(File(cacheDir, "shared"), SHARE_CACHE_BYTES, keep = f)
+    return f
+}
+
 suspend fun Repository.downloadFile(d: Document, kind: String, version: Int? = null, onProgress: (Float) -> Unit = {}): File {
     val base = d.originalFilename.ifBlank { d.title }.replace(Regex("[\\\\/:*?\"<>|]"), "_")
     val name = when {

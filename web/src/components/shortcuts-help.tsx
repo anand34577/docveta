@@ -28,8 +28,11 @@ const groups: { title: string; rows: [string[], string][] }[] = [
   {
     title: "Documents",
     rows: [
+      [["J"], "Next document (on a document page)"],
+      [["K"], "Previous document"],
       [["Esc"], "Clear the selection"],
       [[modKey, "click"], "Add to the selection"],
+      [["Shift", "click"], "Select a range"],
     ],
   },
 ];
@@ -50,7 +53,7 @@ export function ShortcutsHelp({ open, onOpenChange }: { open: boolean; onOpenCha
                     <span className="flex shrink-0 items-center gap-1">
                       {keys.map((k, i) => (
                         <React.Fragment key={k}>
-                          {i > 0 && <span className="text-xs text-subtle">then</span>}
+                          {i > 0 && <span className="text-xs text-subtle">{k === "click" ? "+" : "then"}</span>}
                           <Kbd>{k}</Kbd>
                         </React.Fragment>
                       ))}

@@ -5,6 +5,86 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-10
+
+### Added
+- **Recently opened.** The documents you opened last are one click away: on Home and at the top
+  of the search palette (Ctrl/⌘+K) on the web, and as chips above the list in the Android app.
+  Kept on the device only, and forgotten when you sign out.
+- **Search tips.** The "?" in the search box (the "Search tips" chip on Android) lists what search
+  understands (`tag:`, `from:`, `type:`, `date:`, `added:7d`, `is:inbox`, quotes, `-word`); click
+  one to add it. On the web it also offers your recent searches.
+- Web: moving several documents to Trash offers Undo; "Copy link for members" in a document's
+  menu; a bar says so when the browser is offline.
+- **Download several documents as one ZIP.** Select documents and choose ZIP (web) or "Share as
+  one ZIP file" (Android): up to 500 at a time, with their own file names. Also in the API:
+  `POST /api/v1/documents/archive`.
+- Android: moving several documents to Trash offers Undo, as on the web.
+- **Pages read so far.** While a document's text is being read it says how far along it is
+  ("Reading text · 3 of 12 pages"), with a bar on the document, in the web and Android apps.
+- Web: step to the previous or next document of the list you came from (the arrows beside the
+  title, or K and J); Ctrl/⌘-click and Shift-click select documents without entering selection
+  first; the browser tab is named after the page; typing in the search palette also finds
+  commands; on a phone, the Inbox marks a document reviewed straight from the list.
+- Web: select text in a document's Text tab to see where it is on the page.
+
+### Changed
+- **Document lists are much faster in large libraries.** The list by date added (the Inbox, Home
+  and every list unless you sort it otherwise) read and sorted every document you can see to show
+  the first sixty. It now reads only the newest of each space: 2 ms instead of 110 ms with
+  150,000 documents, and the Inbox 1 ms instead of 25 ms.
+- The numbers in the filter menus (how many documents have each tag, sender and type) are counted
+  when a filter menu is opened, not with every list and every refresh of one. Counting took about
+  a quarter of a second per list in a library of 150,000 documents.
+- **Faster to load.** The server now compresses the web app and its answers (gzip). The app is
+  about a third of its size on the wire, which shows most on a first visit and over remote or
+  mobile connections. Nothing to configure; a reverse proxy that compresses already is unaffected.
+- **Long PDFs stay smooth.** The viewer keeps only the pages near the screen in memory and puts
+  the rest away as you scroll; before, every page it had shown stayed, and phones started drawing
+  blank pages in long documents. "Arrange pages" draws page pictures as they scroll into view
+  instead of all at once.
+- Ask: an answer is drawn once per frame while it arrives, not once per word, and earlier answers
+  aren't redrawn. Long answers no longer make the page stutter.
+- A long document list refreshes less often while documents are being read (every page loaded so
+  far is fetched again each time).
+- Android: copies of documents kept for viewing are limited to 400 MB (the ones opened longest
+  ago go first); before, everything ever opened stayed until Android cleared it.
+- Android: with the app lock on, the recent-apps screen no longer shows the open document
+  (Android 13 and later).
+
+### Fixed
+- PDFs with Hindi (and other Indic) text of their own: the words were stored with spaces inside
+  them ("शि क्षा"), so search missed them. The made-up spaces are removed when the text is read;
+  process a document again to fix one that is already there.
+- Web: the financial-year date filter offers the current and the previous financial year (it
+  offered only last year's from April on); "Added this week" on Home opens those documents.
+- **Android: opening a document showed "Something went wrong, try again", and Try again then
+  showed it.** The screen refreshed itself as its opening animation ended and fetched the file a
+  second time; whichever download finished second could not save a file that was already in
+  place. A refresh no longer restarts a download that is under way, two downloads of the same
+  file no longer get in each other's way, and leaving a screen stops its download.
+- Ask: deleting a conversation the server refused to delete still closed it; one unreadable
+  message from the server threw the whole answer away, and a dropped connection replaced what had
+  arrived with the error.
+- Web: opening a notification did nothing when marking it read failed; the notifications page and
+  "Arrange pages" showed an endless spinner when loading failed.
+- Android: a title or "where is the paper original" typed and left without tapping the tick was
+  lost. Leaving the field saves it, as on the web.
+- Android: a download cut off halfway said "Something went wrong" and left a partial file
+  behind; it now says the connection was lost.
+- Web: letters typed in the search box could vanish when the list caught up with what was typed
+  a moment earlier.
+- Web: a document page turned into "Page not found" when one background refresh failed (a
+  dropped connection while text was being read). It now keeps what is on screen; a document that
+  can't be loaded at all says so and offers Try again, and so does a document list.
+- Web: the Upload button's file chooser hid Office files (Word, Excel, PowerPoint, OpenDocument).
+- Web: deleting a saved view that the server refused to delete still left the page; deleting a
+  note on a touch screen had no visible button; "Text copied" showed even when copying failed.
+- Web: in the Inbox, the E key tried to mark documents reviewed in spaces you can only view.
+- Android: the financial-year filter offered last year's FY from April on. It now offers the
+  current and the previous financial year, like the web app.
+- Deleting a note asks first (web and Android): it can't be undone.
+
 ## [0.12.1] - 2026-10-10
 
 ### Security

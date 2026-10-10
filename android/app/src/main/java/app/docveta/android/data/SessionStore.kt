@@ -127,6 +127,22 @@ class SessionStore(private val kv: KeyValueStore) {
         recentSearches = listOf(t) + recentSearches.filterNot { it.equals(t, ignoreCase = true) }
     }
 
+    /** Documents opened on this phone, newest first, as id to title (offered again in Documents). */
+    var recentDocs: List<Pair<String, String>>
+        get() = kv.get("recent_docs")?.split('\n')?.mapNotNull { l -> l.split('\t', limit = 2).takeIf { it.size == 2 && it[0].isNotBlank() }?.let { it[0] to it[1] } }.orEmpty()
+        set(v) = kv.put("recent_docs", v.take(6).joinToString("\n") { "${it.first}\t${it.second}" }.ifEmpty { null })
+
+    fun rememberDoc(id: String, title: String) {
+        val t = title.replace('\n', ' ').replace('\t', ' ').trim()
+        if (id.isBlank() || t.isEmpty()) return
+        recentDocs = listOf(id to t) + recentDocs.filterNot { it.first == id }
+    }
+
+    /** A document that is gone (deleted, or no longer shared with this account). */
+    fun forgetDoc(id: String) {
+        recentDocs = recentDocs.filterNot { it.first == id }
+    }
+
     val signedIn: Boolean get() = !token.isNullOrBlank() && !serverUrl.isNullOrBlank()
 
     fun signOut() {
@@ -137,5 +153,6 @@ class SessionStore(private val kv: KeyValueStore) {
         userEmail = null
         cachedMe = null
         recentSearches = emptyList()
+        recentDocs = emptyList()
     }
 }

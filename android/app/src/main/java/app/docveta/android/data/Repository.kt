@@ -81,6 +81,37 @@ data class DocQuery(
     }
 }
 
+/**
+ * Quick date ranges for the filters, as label, from, to: this and last calendar year, and the
+ * current and previous Indian financial year (April to March), which tax papers go by.
+ */
+fun datePresets(today: java.time.LocalDate): List<Triple<String, String, String>> {
+    val y = today.year
+    val fy = if (today.monthValue >= 4) y else y - 1
+    fun financialYear(start: Int) = Triple("FY $start–${((start + 1) % 100).toString().padStart(2, '0')}", "$start-04-01", "${start + 1}-03-31")
+    return listOf(Triple("This year", "$y-01-01", "$y-12-31"), Triple("Last year", "${y - 1}-01-01", "${y - 1}-12-31"), financialYear(fy), financialYear(fy - 1))
+}
+
+/** How much the phone keeps of documents opened for viewing, and of files handed to other apps. */
+const val VIEW_CACHE_BYTES = 400L * 1024 * 1024
+const val SHARE_CACHE_BYTES = 150L * 1024 * 1024
+
+/**
+ * Keeps a folder of downloaded copies under [maxBytes]: the files used longest ago go first,
+ * never [keep] (the one just fetched) or a download in progress. Without it every document
+ * ever opened stayed on the phone until Android cleared the cache itself.
+ */
+fun trimCache(dir: File, maxBytes: Long, keep: File? = null) {
+    val files = dir.walkTopDown().filter { it.isFile && it != keep && !it.name.endsWith(".part") }.toList()
+    var total = files.sumOf { it.length() } + (keep?.length() ?: 0L)
+    for (f in files.sortedBy { it.lastModified() }) {
+        if (total <= maxBytes) break
+        val size = f.length()
+        if (f.delete()) total -= size
+    }
+    dir.listFiles { d -> d.isDirectory && d.list()?.isEmpty() == true }?.forEach { it.delete() }
+}
+
 sealed interface SignIn {
     data object Done : SignIn
     data class NeedsCode(val challenge: String) : SignIn
@@ -440,7 +471,8 @@ class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: Fi
             api.download("/documents/${d.id}/file", mapOf("kind" to kind), f, onProgress)
             // Older copies of this document aren't needed any more.
             f.parentFile?.listFiles { x -> x.name.startsWith("${d.id}-") && x.name != name }?.forEach { it.delete() }
-        }
+            trimCache(File(cacheDir, "docs"), VIEW_CACHE_BYTES, keep = f)
+        } else f.setLastModified(System.currentTimeMillis()) // opened again: the last to go when space is made
         return f
     }
 
@@ -448,7 +480,10 @@ class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: Fi
     suspend fun originalFile(d: Document, onProgress: (Float) -> Unit = {}): File {
         val name = d.originalFilename.ifBlank { d.title }.replace(Regex("[\\\\/:*?\"<>|]"), "_")
         val f = File(cacheDir, "shared/${d.id}-v${d.version}/$name")
-        if (!f.exists() || f.length() == 0L) api.download("/documents/${d.id}/file", mapOf("kind" to "original", "download" to "1"), f, onProgress)
+        if (!f.exists() || f.length() == 0L) {
+            api.download("/documents/${d.id}/file", mapOf("kind" to "original", "download" to "1"), f, onProgress)
+            trimCache(File(cacheDir, "shared"), SHARE_CACHE_BYTES, keep = f)
+        }
         return f
     }
 

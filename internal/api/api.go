@@ -102,6 +102,7 @@ func (a *API) Register(mux router) {
 	a.registerCustomFields(mux)
 	a.registerDocuments(mux)
 	a.registerDocEdit(mux)
+	a.registerArchive(mux)
 	a.registerNotify(mux)
 	a.registerShares(mux)
 	a.registerAI(mux)

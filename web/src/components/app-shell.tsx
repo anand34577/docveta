@@ -3,6 +3,7 @@ import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-route
 import {
   Bookmark,
   ChevronsUpDown,
+  CloudOff,
   MessageSquareText,
   FileText,
   Home,
@@ -24,7 +25,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api, setUnauthorizedHandler } from "@/lib/api";
 import { useAIEnabled, useMe, useSavedViews, useStats, useStatus } from "@/lib/queries";
 import { isAuthPage, safeRedirect } from "@/lib/redirect";
-import { cn, modKey, setDateFormat, spaceDot, spaceLabel } from "@/lib/utils";
+import { cn, modKey, setDateFormat, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
 import { applyTheme, useUI } from "@/stores/ui";
 import { useUploads } from "@/stores/uploads";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,7 @@ import { DropOverlay, UploadChooser, UploadTray } from "./upload-tray";
 import { NotificationsButton, useLiveEvents } from "./notifications";
 import type { Me, Space } from "@/lib/types";
 import { parseDocQuery } from "@/router";
+import { clearRecent } from "@/lib/recent";
 
 const MeContext = React.createContext<Me | null>(null);
 
@@ -194,6 +196,7 @@ function Shell() {
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
+        <OfflineNotice />
         <OcrWarning />
         <main id="main" className="relative flex-1 overflow-y-auto scrollbar-thin pb-20 lg:pb-0">
           <Outlet />
@@ -213,12 +216,35 @@ function Shell() {
   );
 }
 
+/** Says so when the browser has no connection: without it, lists just stop updating. */
+function OfflineNotice() {
+  const online = React.useSyncExternalStore(
+    (notify) => {
+      window.addEventListener("online", notify);
+      window.addEventListener("offline", notify);
+      return () => {
+        window.removeEventListener("online", notify);
+        window.removeEventListener("offline", notify);
+      };
+    },
+    () => navigator.onLine,
+  );
+  if (online) return null;
+  return (
+    <div role="status" className="flex items-center gap-3 border-b border-border bg-surface-2 page-x py-2 text-sm text-muted">
+      <CloudOff className="size-4 shrink-0" />
+      <p>You're offline. What you see may be out of date, and changes won't save until the connection is back.</p>
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------- Upload button (file picker) */
 
 export function useFilePicker() {
   const request = useUploads((s) => s.request);
   return React.useCallback(
-    (accept = "application/pdf,image/*,.heic,.heif,.txt,.tif,.tiff") => {
+    // Office files too: the server takes them when a converter is set up, and says so when not.
+    (accept = "application/pdf,image/*,.heic,.heif,.txt,.tif,.tiff,.docx,.xlsx,.pptx,.odt,.ods,.odp") => {
       const input = document.createElement("input");
       input.type = "file";
       input.multiple = true;
@@ -399,6 +425,7 @@ function UserMenu({ compact }: { compact?: boolean }) {
   const logout = async () => {
     await api.post("/auth/logout").catch(() => undefined);
     qc.clear();
+    clearRecent();
     navigate({ to: "/login" });
   };
   return (
@@ -557,6 +584,7 @@ function BottomNav() {
 
 /** Page header used by most pages. */
 export function PageHeader({ title, description, actions, eyebrow, className }: { title: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode; eyebrow?: React.ReactNode; className?: string }) {
+  usePageTitle(typeof title === "string" ? title : undefined);
   return (
     <div className={cn("flex flex-wrap items-end justify-between gap-3 page-x pb-4 pt-6 sm:pt-8", className)}>
       <div className="min-w-0">

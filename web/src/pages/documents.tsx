@@ -100,7 +100,7 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
           ))
         }
       />
-      <FilterBar query={query} onChange={onChange} total={info.total} totalCapped={info.totalCapped} facets={info.facets} found={info.mode} hideSpace={trash} />
+      <FilterBar query={query} onChange={onChange} total={info.total} totalCapped={info.totalCapped} found={info.mode} hideSpace={trash} />
       <DocumentResults
         query={query}
         layout={layout}

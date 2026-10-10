@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Bell, CheckCheck, CheckCircle2, Info, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, errorMessage } from "@/lib/api";
 import { invalidateDocuments, keys, useNotifications } from "@/lib/queries";
 import { cn, timeAgo } from "@/lib/utils";
 import type { Notification } from "@/lib/types";
@@ -30,7 +30,12 @@ export function useLiveEvents() {
       es = new EventSource("/api/v1/events" + (lastId ? `?last_event_id=${encodeURIComponent(lastId)}` : ""));
       es.addEventListener("notification", (ev) => {
         if ((ev as MessageEvent).lastEventId) lastId = (ev as MessageEvent).lastEventId;
-        const n = JSON.parse((ev as MessageEvent).data) as Notification;
+        let n: Notification;
+        try {
+          n = JSON.parse((ev as MessageEvent).data) as Notification;
+        } catch {
+          return;
+        }
         qc.invalidateQueries({ queryKey: keys.notifications });
         if (n.event_type.startsWith("document.")) invalidateDocuments(qc);
         const opts = {
@@ -64,13 +69,13 @@ export function NotificationsButton() {
   const unread = data?.unread ?? 0;
 
   const markAll = async () => {
-    await api.post("/notifications/read", { all: true });
+    await api.post("/notifications/read", { all: true }).catch((e) => toast.error(errorMessage(e)));
     qc.invalidateQueries({ queryKey: keys.notifications });
   };
   const openItem = async (n: Notification) => {
     setOpen(false);
     if (!n.read_at) {
-      api.post("/notifications/read", { ids: [n.id] }).then(() => qc.invalidateQueries({ queryKey: keys.notifications }));
+      api.post("/notifications/read", { ids: [n.id] }).then(() => qc.invalidateQueries({ queryKey: keys.notifications }), () => undefined);
     }
     if (n.link) navigate({ to: n.link });
   };

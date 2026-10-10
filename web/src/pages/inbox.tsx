@@ -1,11 +1,11 @@
 import * as React from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCheck, PartyPopper, Sparkles } from "lucide-react";
+import { Check, CheckCheck, PartyPopper, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { invalidateDocuments, useDocument, useDocuments } from "@/lib/queries";
-import { cn, formatDocDate, spaceLabel } from "@/lib/utils";
+import { cn, formatDocDate, spaceLabel, usePageTitle } from "@/lib/utils";
 import { PageHeader, useCurrentUser } from "@/components/app-shell";
 import { StatusBadge, Thumbnail } from "@/components/documents/doc-items";
 import { DocumentDetail } from "./document";
@@ -28,6 +28,7 @@ export function InboxPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const isDesktop = useMediaQuery("(min-width: 1024px)");
+  usePageTitle(total ? `Inbox (${total})` : "Inbox");
 
   React.useEffect(() => {
     if (isDesktop && items.length && (!selected || !items.some((d) => d.id === selected))) setSelected(items[0].id);
@@ -48,6 +49,30 @@ export function InboxPage() {
     invalidateDocuments(qc);
   }, [items, index, qc]);
 
+  const review = React.useCallback(
+    async (id: string) => {
+      try {
+        await api.patch(`/documents/${id}`, { inbox: false });
+        toast.success("Marked as reviewed", {
+          action: {
+            label: "Undo",
+            onClick: () => api.patch(`/documents/${id}`, { inbox: true }).then(() => invalidateDocuments(qc), (er) => toast.error(errorMessage(er))),
+          },
+        });
+        afterReview();
+      } catch (err) {
+        toast.error(errorMessage(err));
+      }
+    },
+    [qc, afterReview],
+  );
+
+  // People who can only view a space can't mark its documents reviewed (the button isn't shown either).
+  const canReview = (id: string) => {
+    const d = items.find((x) => x.id === id);
+    return !!d && me.spaces.find((s) => s.id === d.space.id)?.role !== "viewer";
+  };
+
   React.useEffect(() => {
     if (!isDesktop) return;
     const onKey = async (e: KeyboardEvent) => {
@@ -60,21 +85,9 @@ export function InboxPage() {
       } else if (e.key === "k" || e.key === "ArrowUp") {
         e.preventDefault();
         move(-1);
-      } else if (e.key === "e" && selected) {
+      } else if (e.key === "e" && selected && canReview(selected)) {
         e.preventDefault();
-        try {
-          const id = selected;
-          await api.patch(`/documents/${id}`, { inbox: false });
-          toast.success("Marked as reviewed", {
-            action: {
-              label: "Undo",
-              onClick: () => api.patch(`/documents/${id}`, { inbox: true }).then(() => invalidateDocuments(qc), (er) => toast.error(errorMessage(er))),
-            },
-          });
-          afterReview();
-        } catch (err) {
-          toast.error(errorMessage(err));
-        }
+        await review(selected);
       } else if (e.key === "a" && selected && items.find((d) => d.id === selected)?.suggestion_count) {
         e.preventDefault();
         try {
@@ -91,7 +104,7 @@ export function InboxPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isDesktop, move, selected, afterReview, navigate]);
+  }, [isDesktop, move, selected, review, navigate]);
 
   const reviewAll = async () => {
     if (!(await confirm({ title: `Mark all ${total} as reviewed?`, body: "They'll leave the Inbox but stay in your documents.", confirmLabel: "Mark all reviewed" }))) return;
@@ -172,7 +185,7 @@ export function InboxPage() {
         </div>
         <ul className="flex-1 overflow-y-auto scrollbar-thin" role="listbox" aria-label="Documents to review">
           {items.map((d) => (
-            <li key={d.id} role="option" aria-selected={d.id === selected}>
+            <li key={d.id} role="option" aria-selected={d.id === selected} className="relative">
               <Link
                 to="/documents/$id"
                 params={{ id: d.id }}
@@ -188,7 +201,7 @@ export function InboxPage() {
                 )}
               >
                 <Thumbnail doc={d} className="h-16 w-12 shrink-0 rounded border border-border" />
-                <div className="min-w-0 flex-1">
+                <div className={cn("min-w-0 flex-1", !isDesktop && "pr-10")}>
                   <div className="line-clamp-2 text-sm font-medium leading-snug">{d.title}</div>
                   <div className="mt-0.5 truncate text-xs text-muted">
                     {[d.correspondent?.name, formatDocDate(d.document_date), spaceLabel(me.spaces.find((s) => s.id === d.space.id) ?? d.space)].filter(Boolean).join(" · ")}
@@ -206,6 +219,12 @@ export function InboxPage() {
                   </div>
                 </div>
               </Link>
+              {/* Phones have no side-by-side review pane: mark reviewed straight from the list. */}
+              {!isDesktop && d.status === "ready" && me.spaces.find((s) => s.id === d.space.id)?.role !== "viewer" && (
+                <Button size="icon-sm" variant="secondary" className="absolute right-3 top-3" onClick={() => review(d.id)} aria-label={`Mark ${d.title} as reviewed`}>
+                  <Check />
+                </Button>
+              )}
             </li>
           ))}
           {res.hasNextPage && (
@@ -237,7 +256,14 @@ export function InboxPage() {
 
 function InboxDetail({ id, onReviewed }: { id: string; onReviewed: () => void }) {
   const doc = useDocument(id);
-  if (!doc.data) return <div className="flex h-full items-center justify-center"><Spinner /></div>;
+  if (!doc.data) {
+    if (!doc.error) return <div className="flex h-full items-center justify-center"><Spinner /></div>;
+    return (
+      <EmptyState title="Couldn't load this document" className="h-full" action={<Button onClick={() => doc.refetch()} loading={doc.isFetching}>Try again</Button>}>
+        {errorMessage(doc.error)}
+      </EmptyState>
+    );
+  }
   return <DocumentDetail doc={doc.data} onReviewed={onReviewed} compact />;
 }
 

@@ -152,6 +152,39 @@ export function uploadDocument<T>(o: UploadOptions): Promise<T> {
   });
 }
 
+/** The most documents one ZIP download takes (the server's limit). */
+export const ZIP_MAX = 500;
+
+/**
+ * Saves several documents as one ZIP file. A form posted into a hidden frame rather than a
+ * fetch: the browser then writes the download to disk as it arrives, however big it is.
+ */
+export function downloadZip(ids: string[], kind: "original" | "archive" = "original") {
+  let frame = document.querySelector<HTMLIFrameElement>('iframe[name="docveta-download"]');
+  if (!frame) {
+    frame = document.createElement("iframe");
+    frame.name = "docveta-download";
+    frame.title = "Download";
+    frame.hidden = true;
+    document.body.append(frame);
+  }
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = "/api/v1/documents/archive";
+  form.target = frame.name;
+  form.hidden = true;
+  for (const [name, value] of [["ids", ids.join(",")], ["kind", kind]]) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value;
+    form.append(input);
+  }
+  document.body.append(form);
+  form.submit();
+  form.remove();
+}
+
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   if (e instanceof Error) return e.message;

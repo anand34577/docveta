@@ -3,9 +3,13 @@ package app.docveta.android.data
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -135,34 +139,68 @@ class ApiClient(
         } catch (e: IOException) {
             throw ApiException(0, "network", "Can't reach the server. Check your connection.")
         }
-        res.use {
-            if (!it.isSuccessful) throw problem(it)
-            read(it)
+        // Reading the answer blocks a thread, and leaving the screen can't interrupt that by
+        // itself: cancel the call then, or a big download carries on for a screen that's gone.
+        val finished = AtomicBoolean(false)
+        val watcher = launch {
+            try {
+                awaitCancellation()
+            } finally {
+                if (!finished.get()) call.cancel()
+            }
+        }
+        try {
+            res.use {
+                if (!it.isSuccessful) throw problem(it)
+                try {
+                    read(it)
+                } catch (e: ApiException) {
+                    throw e
+                } catch (e: IOException) {
+                    ensureActive() // cancelled on purpose: that's not an error to show
+                    // The answer started and then the connection dropped (a big download, a weak signal).
+                    throw ApiException(0, "network", "The connection was lost. Check it and try again.")
+                }
+            }
+        } finally {
+            finished.set(true)
+            watcher.cancel()
         }
     }
 
-    /** Saves a file from the server, reporting progress as 0..1 (or -1 when the size isn't known). */
-    suspend fun download(path: String, query: Map<String, String?>, dest: File, onProgress: (Float) -> Unit = {}) {
-        val req = Request.Builder().url(url(path, query)).build()
+    /**
+     * Saves a file from the server, reporting progress as 0..1 (or -1 when the size isn't known).
+     * With [body] (JSON) the request is a POST: a ZIP of several documents is asked for that way.
+     */
+    suspend fun download(path: String, query: Map<String, String?>, dest: File, onProgress: (Float) -> Unit = {}, body: String? = null) {
+        val req = Request.Builder().url(url(path, query)).apply { if (body != null) post(body.toRequestBody(JSON)) }.build()
         execute(req) { res ->
             val body = res.body ?: throw ApiException(0, "empty", "The server sent nothing")
             val total = body.contentLength()
             dest.parentFile?.mkdirs()
-            val tmp = File(dest.path + ".part")
-            tmp.outputStream().use { out ->
-                body.byteStream().use { input ->
-                    val buf = ByteArray(64 * 1024)
-                    var done = 0L
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                        done += n
-                        onProgress(if (total > 0) done.toFloat() / total else -1f)
+            // A name of its own: the same file is sometimes fetched twice at once (the screen
+            // refreshes while it opens). Sharing one name, the first to finish moved the file away
+            // and the second then failed with "try again" although the document was there.
+            val tmp = File(dest.path + "." + java.util.UUID.randomUUID() + ".part")
+            try {
+                tmp.outputStream().use { out ->
+                    body.byteStream().use { input ->
+                        val buf = ByteArray(64 * 1024)
+                        var done = 0L
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            onProgress(if (total > 0) done.toFloat() / total else -1f)
+                        }
                     }
                 }
+                if (total > 0 && tmp.length() != total) throw IOException("incomplete")
+                if (!tmp.renameTo(dest) && !(dest.exists() && dest.length() > 0)) throw ApiException(0, "storage", "Couldn't save the file. The phone may be out of space.")
+            } finally {
+                tmp.delete() // half a file is no use (gone already when the download finished)
             }
-            if (!tmp.renameTo(dest)) throw IOException("Couldn't save the file")
         }
     }
 
@@ -203,7 +241,8 @@ suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
         }
 
         override fun onResponse(call: Call, response: Response) {
-            cont.resume(response)
+            // Nobody is waiting any more (the screen was left): don't leave the connection open.
+            if (cont.isActive) cont.resume(response) else response.close()
         }
     })
     cont.invokeOnCancellation { runCatching { cancel() } }

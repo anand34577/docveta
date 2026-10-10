@@ -1,8 +1,9 @@
 import * as React from "react";
 import { DateInput } from "@/components/ui/date-input";
-import { CalendarRange, Check, ChevronDown, LayoutGrid, List, ListFilter, Search, Sparkles, SlidersHorizontal, X } from "lucide-react";
-import { useAIEnabled, useCustomFields, useTaxonomy } from "@/lib/queries";
-import type { CustomField, DocQuery, Facets, TaxonomyKind } from "@/lib/types";
+import { CalendarRange, Check, ChevronDown, CircleHelp, History, LayoutGrid, List, ListFilter, Search, Sparkles, SlidersHorizontal, X } from "lucide-react";
+import { clearRecentSearches, recentSearches } from "@/lib/recent";
+import { useAIEnabled, useCustomFields, useFacets, useTaxonomy } from "@/lib/queries";
+import type { CustomField, DocQuery, TaxonomyKind } from "@/lib/types";
 import { cn, formatDocDate, spaceLabel, tagDot } from "@/lib/utils";
 import { useUI } from "@/stores/ui";
 import { Button } from "@/components/ui/button";
@@ -16,26 +17,42 @@ interface Props {
   onChange: (q: DocQuery) => void;
   total?: number;
   totalCapped?: boolean;
-  facets?: Facets;
   found?: string; // how the results were found (keyword | semantic | hybrid)
   hideSpace?: boolean;
   actions?: React.ReactNode;
 }
 
 /** Search box + filter chips. Every filter lives in the URL, so views are shareable and Back works. */
-export function FilterBar({ query, onChange, total, totalCapped, facets, found, hideSpace, actions }: Props) {
+export function FilterBar({ query, onChange, total, totalCapped, found, hideSpace, actions }: Props) {
+  // Counts for the filter menus, from the first time one is opened.
+  const [countsWanted, setCountsWanted] = React.useState(false);
+  const facets = useFacets(query, countsWanted).data ?? undefined;
+  const wantCounts = React.useCallback(() => setCountsWanted(true), []);
   const me = useCurrentUser();
   const ai = useAIEnabled().data;
   const fieldsQ = useCustomFields(query.space_id?.length === 1 ? query.space_id[0] : undefined);
   const fields = fieldsQ.data ?? [];
   const { layout, setLayout } = useUI();
   const [text, setText] = React.useState(query.q ?? "");
-  React.useEffect(() => setText(query.q ?? ""), [query.q]);
+  // What the box last put in the URL. The URL catching up with it must not replace the box's
+  // text: letters typed in the meantime would be lost.
+  const sent = React.useRef(query.q ?? "");
+  React.useEffect(() => {
+    const q = query.q ?? "";
+    if (q === sent.current) return;
+    sent.current = q;
+    setText(q);
+  }, [query.q]);
+  const latest = React.useRef({ query, onChange });
+  latest.current = { query, onChange };
 
   // Debounced search-as-you-type.
   React.useEffect(() => {
     const t = setTimeout(() => {
-      if ((query.q ?? "") !== text) onChange({ ...query, q: text || undefined });
+      const { query, onChange } = latest.current;
+      if ((query.q ?? "") === text) return;
+      sent.current = text;
+      onChange({ ...query, q: text || undefined });
     }, 250);
     return () => clearTimeout(t);
   }, [text]);
@@ -55,14 +72,17 @@ export function FilterBar({ query, onChange, total, totalCapped, facets, found, 
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="Search text, titles, tags…"
-            className="pl-9 pr-8"
+            className="pl-9 pr-16"
             aria-label="Search documents"
           />
-          {text && (
-            <button onClick={() => setText("")} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-subtle hover:text-fg" aria-label="Clear search">
-              <X className="size-3.5" />
-            </button>
-          )}
+          <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center">
+            {text && (
+              <button onClick={() => setText("")} className="rounded p-1.5 text-subtle hover:text-fg" aria-label="Clear search">
+                <X className="size-3.5" />
+              </button>
+            )}
+            <SearchTips onPick={(term, replace) => setText(replace ? term : [text.trim(), term].filter(Boolean).join(" "))} />
+          </div>
         </div>
         <div className="hidden rounded-md border border-border bg-surface p-0.5 sm:flex">
           <button
@@ -112,11 +132,12 @@ export function FilterBar({ query, onChange, total, totalCapped, facets, found, 
             onChange={(id) => set({ space_id: id ? [id] : undefined, tag_id: undefined, correspondent_id: undefined, document_type_id: undefined })}
           />
         )}
-        <TaxonomyFilter kind="tags" label="Tags" spaceId={spaceId} facets={facets?.tags} value={query.tag_id ?? []} onChange={(v) => set({ tag_id: v.length ? v : undefined })} />
+        <TaxonomyFilter kind="tags" label="Tags" spaceId={spaceId} onOpen={wantCounts} facets={facets?.tags} value={query.tag_id ?? []} onChange={(v) => set({ tag_id: v.length ? v : undefined })} />
         <TaxonomyFilter
           kind="correspondents"
           label="From"
           spaceId={spaceId}
+          onOpen={wantCounts}
           facets={facets?.correspondents}
           value={query.correspondent_id ?? []}
           onChange={(v) => set({ correspondent_id: v.length ? v : undefined })}
@@ -125,6 +146,7 @@ export function FilterBar({ query, onChange, total, totalCapped, facets, found, 
           kind="document-types"
           label="Type"
           spaceId={spaceId}
+          onOpen={wantCounts}
           facets={facets?.types}
           value={query.document_type_id ?? []}
           onChange={(v) => set({ document_type_id: v.length ? v : undefined })}
@@ -162,6 +184,84 @@ export function FilterBar({ query, onChange, total, totalCapped, facets, found, 
         </div>
       </div>
     </div>
+  );
+}
+
+const tips: [string, string][] = [
+  ["tag:tax", "has the tag"],
+  ["from:hdfc", "from this sender"],
+  ["type:invoice", "of this type"],
+  ["date:2026", "dated in a year, a month (2026-03) or a range (2026-01..2026-06)"],
+  ["added:7d", "added in the last 7 days (also 4w, 6m, 1y)"],
+  ["is:inbox", "not reviewed yet"],
+  ["untagged", "without any tag"],
+  ['"due date"', "these exact words together"],
+  ["-draft", "without this word (also -tag:old)"],
+];
+
+/** What the search box understands, and the searches made here lately. */
+function SearchTips({ onPick }: { onPick: (term: string, replace?: boolean) => void }) {
+  const [open, setOpen] = React.useState(false);
+  const [recent, setRecent] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    if (open) setRecent(recentSearches());
+  }, [open]);
+  const row = "flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2";
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className="rounded p-1.5 text-subtle hover:text-fg" aria-label="Search tips and recent searches">
+          <CircleHelp className="size-4" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="max-h-[70vh] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto scrollbar-thin p-2">
+        {recent.length > 0 && (
+          <>
+            <div className="flex items-center justify-between px-2 pb-1 pt-0.5 text-xs font-medium text-subtle">
+              Recent searches
+              <button
+                className="rounded px-1 font-normal hover:text-fg"
+                onClick={() => {
+                  clearRecentSearches();
+                  setRecent([]);
+                }}
+              >
+                Clear
+              </button>
+            </div>
+            {recent.map((r) => (
+              <button
+                key={r}
+                className={row}
+                onClick={() => {
+                  onPick(r, true);
+                  setOpen(false);
+                }}
+              >
+                <History className="size-3.5 shrink-0 self-center text-subtle" />
+                <span className="truncate">{r}</span>
+              </button>
+            ))}
+            <div className="my-1.5 h-px bg-border" />
+          </>
+        )}
+        <div className="px-2 pb-1 pt-0.5 text-xs font-medium text-subtle">Narrow a search (click to add)</div>
+        {tips.map(([term, what]) => (
+          <button
+            key={term}
+            className={row}
+            onClick={() => {
+              onPick(term);
+              setOpen(false);
+            }}
+          >
+            <code className="shrink-0 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-fg">{term}</code>
+            <span className="text-muted">{what}</span>
+          </button>
+        ))}
+        <p className="px-2 pb-1 pt-2 text-xs text-subtle">Names with spaces go in quotes: from:"State Bank". Search also reads the text inside scans.</p>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -213,12 +313,12 @@ function FilterButton({ label, count, hideCount, open, onOpenChange, children }:
   );
 }
 
-function TaxonomyFilter({ kind, label, spaceId, facets, value, onChange }: { kind: TaxonomyKind; label: string; spaceId?: string; facets?: Record<string, number>; value: string[]; onChange: (v: string[]) => void }) {
+function TaxonomyFilter({ kind, label, spaceId, facets, onOpen, value, onChange }: { kind: TaxonomyKind; label: string; spaceId?: string; facets?: Record<string, number>; onOpen?: () => void; value: string[]; onChange: (v: string[]) => void }) {
   const { data: items = [] } = useTaxonomy(kind, spaceId);
   const [q, setQ] = React.useState("");
   const shown = items.filter((i) => i.name.toLowerCase().includes(q.toLowerCase()));
   return (
-    <FilterButton label={label} count={value.length}>
+    <FilterButton label={label} count={value.length} onOpenChange={(o) => o && onOpen?.()}>
       <div className="border-b border-border p-2">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter ${label.toLowerCase()}…`} className="h-8" autoFocus />
       </div>
@@ -250,12 +350,15 @@ function TaxonomyFilter({ kind, label, spaceId, facets, value, onChange }: { kin
 }
 
 function DateFilter({ from, to, onChange }: { from?: string; to?: string; onChange: (from?: string, to?: string) => void }) {
-  const y = new Date().getFullYear();
+  const now = new Date();
+  const y = now.getFullYear();
+  const fy = now.getMonth() >= 3 ? y : y - 1; // Indian financial year (Apr–Mar), commonly needed for taxes
+  const fyPreset = (start: number): [string, string, string] => [`FY ${start}–${String(start + 1).slice(2)}`, `${start}-04-01`, `${start + 1}-03-31`];
   const presets: [string, string, string][] = [
     ["This year", `${y}-01-01`, `${y}-12-31`],
     ["Last year", `${y - 1}-01-01`, `${y - 1}-12-31`],
-    // Indian financial year (Apr–Mar), commonly needed for taxes.
-    [`FY ${y - 1}–${String(y).slice(2)}`, `${y - 1}-04-01`, `${y}-03-31`],
+    fyPreset(fy),
+    fyPreset(fy - 1),
   ];
   const label = from || to ? [from && formatDocDate(from), to && formatDocDate(to)].filter(Boolean).join(" – ") : "Date";
   return (

@@ -89,7 +89,6 @@ export function docParams(q: DocQuery, cursor?: string | null) {
     trash: q.trash,
     sort: q.sort,
     mode: q.mode,
-    facets: cursor ? undefined : true, // counts for the filter menus come with the first page
     cursor: cursor ?? undefined,
     limit: 60,
   };
@@ -105,8 +104,25 @@ export function useDocuments(q: DocQuery, opts: { refetchWhileProcessing?: boole
     refetchInterval: (query) => {
       if (!opts.refetchWhileProcessing) return false;
       const pages = query.state.data?.pages ?? [];
-      return pages.some((p) => p.items.some((d) => d.status === "processing")) ? 4000 : false;
+      if (!pages.some((p) => p.items.some((d) => d.status === "processing"))) return false;
+      // Refreshing fetches every page loaded so far again: after a long scroll, do it less often.
+      return pages.length > 3 ? 15_000 : 4000;
     },
+  });
+}
+
+/**
+ * How many of the documents matching the current filters have each tag, sender and type: the
+ * numbers in the filter menus. Counting walks every matching document, so it is asked for only
+ * once a filter menu has been opened, not with every list (and every refresh of one).
+ */
+export function useFacets(q: DocQuery, enabled: boolean) {
+  return useQuery<DocumentList["facets"] | null>({
+    queryKey: ["documents", "facets", q],
+    queryFn: ({ signal }) => api.get<DocumentList>("/documents", { ...docParams(q), facets: true, limit: 1 }, signal).then((r) => r.facets ?? null),
+    enabled,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
   });
 }
 

@@ -59,6 +59,9 @@ export const useUI = create<UIState>((set) => ({
 
 media?.addEventListener("change", () => applyTheme(useUI.getState().theme));
 
+/** The document list last shown, so a document page can step to its neighbours. */
+export const useResultList = create<{ ids: string[]; q?: string }>(() => ({ ids: [] }));
+
 /** Selected documents for bulk actions. */
 interface SelectionState {
   ids: Set<string>;
