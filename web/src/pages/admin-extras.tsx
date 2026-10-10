@@ -4,12 +4,12 @@ import { Brain, Download, FolderSync, Link2, Mail, Pencil, Plus, RefreshCw, Tras
 import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { useAIProviders, useFolders, useInvites } from "@/lib/queries";
-import type { AIProvider, AITestResult, Invite, WatchedFolder } from "@/lib/types";
+import type { AIProvider, AITestResult, AITuning, Invite, WatchedFolder } from "@/lib/types";
 import { formatDateTime, spaceLabel, timeAgo } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { SecretReveal, SettingsCard } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
-import { Field, Input, NativeSelect } from "@/components/ui/input";
+import { Field, Input, NativeSelect, Textarea } from "@/components/ui/input";
 import { Badge, Checkbox, EmptyState, Skeleton, Switch, SwitchRow } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { EntityPicker } from "@/components/ui/entity-picker";
@@ -120,7 +120,102 @@ export function AIAdmin() {
           </Button>
         </SettingsCard>
       )}
+      {list.length > 0 && <AITuningCard />}
     </>
+  );
+}
+
+/** Server-wide AI settings: what every space's AI starts from. */
+function AITuningCard() {
+  const qc = useQueryClient();
+  const saved = useQuery({ queryKey: ["ai-tuning"], queryFn: () => api.get<AITuning>("/admin/ai/settings") });
+  const [f, setF] = React.useState<{ types: string; sources: string; perDoc: string; text: string } | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [errors, setErrors] = React.useState<Record<string, string>>({});
+  const show = (t: AITuning) => setF({ types: t.common_types.join("\n"), sources: String(t.ask_sources), perDoc: String(t.ask_sources_per_document), text: String(t.suggest_text_tokens) });
+  React.useEffect(() => {
+    if (saved.data) show(saved.data);
+  }, [saved.data]);
+  if (!f || !saved.data) return null;
+  const set = (k: keyof typeof f, v: string) => setF({ ...f, [k]: v });
+  const dirty =
+    f.types.split("\n").map((s) => s.trim()).filter(Boolean).join("\n") !== saved.data.common_types.join("\n") ||
+    Number(f.sources) !== saved.data.ask_sources ||
+    Number(f.perDoc) !== saved.data.ask_sources_per_document ||
+    Number(f.text) !== saved.data.suggest_text_tokens;
+  const done = (t: AITuning, message: string) => {
+    qc.setQueryData(["ai-tuning"], t);
+    show(t);
+    setErrors({});
+    toast.success(message);
+  };
+  const fail = (e: unknown) => {
+    if (e instanceof ApiError && e.fields.length) setErrors(Object.fromEntries(e.fields.map((x) => [x.field, x.message])));
+    else toast.error(errorMessage(e));
+  };
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body = { common_types: f.types.split("\n").map((s) => s.trim()).filter(Boolean), ask_sources: Number(f.sources), ask_sources_per_document: Number(f.perDoc), suggest_text_tokens: Number(f.text) };
+      done(await api.put<AITuning>("/admin/ai/settings", body), "Saved");
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reset = async () => {
+    if (!(await confirm({ title: "Go back to the built-in settings?", body: "The document types below, and the numbers for answers and long documents, return to what Docveta came with. Types and tags already on documents stay.", confirmLabel: "Reset" }))) return;
+    setBusy(true);
+    try {
+      done(await api.del<AITuning>("/admin/ai/settings"), "Back to the built-in settings");
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <SettingsCard
+      title="Tuning"
+      description="For every space. How sure AI must be and whether it may create tags and types is set per space (Space settings → AI assistance); how much a model can read at once is set on the provider (Context size)."
+      actions={
+        <Button size="sm" variant="ghost" disabled={busy} onClick={reset}>
+          Reset
+        </Button>
+      }
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field
+          label="Document types AI may suggest"
+          htmlFor="ai-types"
+          className="sm:row-span-3"
+          error={errors.common_types}
+          hint="One per line. Offered to AI when none of a space's own types fits, so that the same kind of document always gets the same name. Keep them broad (Identification); the specifics (Aadhaar, PAN) are tags."
+        >
+          <Textarea id="ai-types" rows={11} value={f.types} onChange={(e) => set("types", e.target.value)} spellCheck={false} />
+        </Field>
+        <Field label="Passages an answer is made from" htmlFor="ai-src" error={errors.ask_sources} hint="For Ask your documents. More gives fuller answers and needs a larger context size (2 to 20).">
+          <Input id="ai-src" type="number" min={2} max={20} value={f.sources} onChange={(e) => set("sources", e.target.value)} />
+        </Field>
+        <Field label="Of those, from one document at most" htmlFor="ai-per" error={errors.ask_sources_per_document} hint="Keeps one long document from crowding out the others.">
+          <Input id="ai-per" type="number" min={1} max={20} value={f.perDoc} onChange={(e) => set("perDoc", e.target.value)} />
+        </Field>
+        <Field label="Text read for suggestions, at most (tokens)" htmlFor="ai-text" error={errors.suggest_text_tokens} hint="How far into a long document AI reads to file it: 4000 is about 16,000 English characters. Never more than fits the provider's context size.">
+          <Input id="ai-text" type="number" min={500} step={500} value={f.text} onChange={(e) => set("text", e.target.value)} />
+        </Field>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        {dirty && (
+          <Button variant="ghost" disabled={busy} onClick={() => show(saved.data)}>
+            Discard changes
+          </Button>
+        )}
+        <Button variant="primary" loading={busy} disabled={!dirty} onClick={save}>
+          Save
+        </Button>
+      </div>
+    </SettingsCard>
   );
 }
 
@@ -135,6 +230,7 @@ function ProviderDialog({ provider, first, onClose, onSaved }: { provider: AIPro
     is_default: provider?.is_default ?? first,
     timeout_seconds: provider?.timeout_seconds ?? 60,
     max_concurrency: provider?.max_concurrency ?? 2,
+    context_tokens: provider?.context_tokens ?? 8192,
   });
   const [err, setErr] = React.useState<ApiError | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -191,6 +287,19 @@ function ProviderDialog({ provider, first, onClose, onSaved }: { provider: AIPro
             </Field>
             <Field label="Requests at once" htmlFor="ai-cc">
               <Input id="ai-cc" type="number" min={1} max={16} value={f.max_concurrency} onChange={(e) => set("max_concurrency", Number(e.target.value))} />
+            </Field>
+            <Field
+              label="Context size (tokens)"
+              htmlFor="ai-ctx"
+              className="sm:col-span-2"
+              hint="How much text the chat model can take at once. Docveta shortens long documents to fit. Local models often run with 4096 (Ollama: num_ctx); set the same number here."
+            >
+              <Input id="ai-ctx" type="number" min={1024} step={1024} list="ai-ctx-sizes" value={f.context_tokens} onChange={(e) => set("context_tokens", Number(e.target.value))} />
+              <datalist id="ai-ctx-sizes">
+                {[2048, 4096, 8192, 16384, 32768, 131072].map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
             </Field>
           </div>
           <div className="divide-y divide-border">

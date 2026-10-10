@@ -141,8 +141,12 @@ func (im *importer) structure(ctx context.Context, tx pgx.Tx, m *Manifest) error
 			err := tx.QueryRow(ctx, `SELECT s.id FROM spaces s JOIN space_members m ON m.space_id=s.id AND m.user_id=$1 WHERE s.kind='personal' LIMIT 1`, owner).Scan(&id)
 			if db.IsNoRows(err) {
 				id = s.ID
-				if _, err := tx.Exec(ctx, `INSERT INTO spaces (id, name, kind, description, color, default_language, ai_policy, ai_apply_mode, created_by)
-					VALUES ($1,$2,'personal',$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING`, id, s.Name, s.Description, s.Color, s.DefaultLanguage, s.AIPolicy, s.AIApplyMode, owner); err != nil {
+				if _, err := tx.Exec(ctx, `INSERT INTO spaces (id, name, kind, description, color, default_language, ai_policy, ai_apply_mode, created_by, ai_new_tags)
+					VALUES ($1,$2,'personal',$3,$4,$5,$6,$7,$8,coalesce($9,true)) ON CONFLICT (id) DO NOTHING`, id, s.Name, s.Description, s.Color, s.DefaultLanguage, s.AIPolicy, s.AIApplyMode, owner, s.AINewTags); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE spaces SET ai_auto_confidence=coalesce($2,ai_auto_confidence), ai_new_confidence=coalesce($3,ai_new_confidence),
+					ai_max_new_tags=coalesce($4,ai_max_new_tags), ai_new_types=coalesce($5,ai_new_types) WHERE id=$1`, id, s.AIAutoConfidence, s.AINewConfidence, s.AIMaxNewTags, s.AINewTypes); err != nil {
 					return err
 				}
 				if _, err := tx.Exec(ctx, `INSERT INTO space_members (space_id, user_id, role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING`, id, owner); err != nil {
@@ -156,8 +160,12 @@ func (im *importer) structure(ctx context.Context, tx pgx.Tx, m *Manifest) error
 			err := tx.QueryRow(ctx, `SELECT id FROM spaces WHERE id=$1`, s.ID).Scan(&id)
 			if db.IsNoRows(err) {
 				id = s.ID
-				if _, err := tx.Exec(ctx, `INSERT INTO spaces (id, name, kind, description, color, default_language, ai_policy, ai_apply_mode)
-					VALUES ($1,$2,'shared',$3,$4,$5,$6,$7)`, id, s.Name, s.Description, s.Color, s.DefaultLanguage, s.AIPolicy, s.AIApplyMode); err != nil {
+				if _, err := tx.Exec(ctx, `INSERT INTO spaces (id, name, kind, description, color, default_language, ai_policy, ai_apply_mode, ai_new_tags)
+					VALUES ($1,$2,'shared',$3,$4,$5,$6,$7,coalesce($8,true))`, id, s.Name, s.Description, s.Color, s.DefaultLanguage, s.AIPolicy, s.AIApplyMode, s.AINewTags); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE spaces SET ai_auto_confidence=coalesce($2,ai_auto_confidence), ai_new_confidence=coalesce($3,ai_new_confidence),
+					ai_max_new_tags=coalesce($4,ai_max_new_tags), ai_new_types=coalesce($5,ai_new_types) WHERE id=$1`, id, s.AIAutoConfidence, s.AINewConfidence, s.AIMaxNewTags, s.AINewTypes); err != nil {
 					return err
 				}
 				im.rep.Spaces++

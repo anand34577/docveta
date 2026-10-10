@@ -20,6 +20,13 @@ export interface Space {
   read_asn_barcodes?: boolean;
   ai_policy: "off" | "local_only" | "any";
   ai_apply_mode: "suggest" | "auto";
+  ai_new_tags: boolean;
+  /** Percent sure before "apply automatically" applies a suggestion. */
+  ai_auto_confidence: number;
+  /** Percent sure before AI proposes a tag, sender or type that doesn't exist yet. */
+  ai_new_confidence: number;
+  ai_max_new_tags: number;
+  ai_new_types: boolean;
   default_language: string;
   role: SpaceRole;
   member_count: number;
@@ -404,6 +411,14 @@ export interface CustomValue {
   currency?: string | null;
 }
 
+/** Server-wide AI settings (Administration → AI). */
+export interface AITuning {
+  common_types: string[];
+  ask_sources: number;
+  ask_sources_per_document: number;
+  suggest_text_tokens: number;
+}
+
 export interface AISuggestion {
   id: UUID;
   field: "tag" | "correspondent" | "document_type" | "document_date" | "title" | "custom_field";
@@ -423,6 +438,7 @@ export interface AIProvider {
   enabled: boolean;
   timeout_seconds: number;
   max_concurrency: number;
+  context_tokens: number;
   has_api_key: boolean;
   last_error: string;
   last_ok_at?: string | null;

@@ -148,7 +148,7 @@ fun SpaceScreen(id: String, onBack: () -> Unit, onNavigate: (String) -> Unit) {
         if (!s.isPersonal) NavRow("Members", "Who can see and change documents", Icons.Outlined.Group) { onNavigate("space/$id/members") }
         NavRow("Tags", "Labels like Tax, Medical or Car", Icons.AutoMirrored.Outlined.Label) { onNavigate("space/$id/tags") }
         NavRow("Correspondents", "Who documents are from or to", Icons.Outlined.Person) { onNavigate("space/$id/correspondents") }
-        NavRow("Document types", "Bill, Invoice, Policy, Certificate…", Icons.Outlined.Category) { onNavigate("space/$id/document-types") }
+        NavRow("Document types", "Identification, Bill, Insurance, Certificate…", Icons.Outlined.Category) { onNavigate("space/$id/document-types") }
         NavRow("Custom fields", "Amount, due date, policy number…", Icons.AutoMirrored.Outlined.ListAlt) { onNavigate("space/$id/fields") }
         NavRow("Workflows", "Do things automatically", Icons.Outlined.AccountTree) { onNavigate("space/$id/workflows") }
         NavRow("AI", "Suggestions for new documents", Icons.Outlined.AutoAwesome) { onNavigate("space/$id/ai") }
@@ -259,7 +259,7 @@ fun SpaceMembersScreen(id: String, onBack: () -> Unit) = WithSpace(id, "Members"
 private val kindInfo = mapOf(
     "tags" to Triple("tag", "Tags", "Labels like Tax, Medical or Car. A document can have many."),
     "correspondents" to Triple("correspondent", "Correspondents", "Who a document is from or to: a bank, a hospital, a company."),
-    "document-types" to Triple("document type", "Document types", "What a document is: Bill, Invoice, Policy, Certificate."),
+    "document-types" to Triple("document type", "Document types", "The broad kind of document: Identification, Bill, Insurance, Certificate. Each document has one; tags (Aadhaar, PAN) say what exactly it is."),
 )
 
 private val matchHelp = listOf(
@@ -445,11 +445,34 @@ fun SpaceAiScreen(id: String, onBack: () -> Unit) = WithSpace(id, "AI", onBack) 
     val stats = rememberLoader(s.id) { runCatching { c.repo.aiStats(s.id) }.getOrNull() }
     fun save(k: String, v: String) = run.run("Saved") { c.repo.updateSpace(s.id, buildJsonObject { put(k, v) }); reloadMe() }
     Page("AI", onBack, subtitle = s.label) {
-        Hint("Suggest tags, sender, type, date and custom fields for new documents. You see what it would change first, unless you pick automatic.")
+        Hint("AI reads each new document and works out what kind of document it is, who it is from, its date, its tags and your custom fields. You see what it would change first, unless you pick automatic.")
         if (!s.isOwner) Hint("Only owners of this space can change these.")
         SelectField("Use AI for this space", listOf("off" to "Off", "local_only" to "Only with a local provider", "any" to "Any configured provider"), s.aiPolicy, enabled = s.isOwner,
             supporting = "“Local only” sends text only to providers marked as running on your own hardware.") { save("ai_policy", it) }
         if (s.aiPolicy != "off") SelectField("When AI has suggestions", listOf("suggest" to "Ask me first (shown in the Inbox)", "auto" to "Apply automatically"), s.aiApplyMode, enabled = s.isOwner) { save("ai_apply_mode", it) }
+        if (s.aiPolicy != "off") {
+            fun saveFlag(k: String, v: Boolean) = run.run("Saved") { c.repo.updateSpace(s.id, buildJsonObject { put(k, v) }); reloadMe() }
+            fun saveNumber(k: String, v: String) = run.run("Saved") { c.repo.updateSpace(s.id, buildJsonObject { put(k, v.toInt()) }); reloadMe() }
+            // The steps offered, and the saved value if it was set to something in between on the web.
+            fun choices(range: IntProgression, current: Int, suffix: String) = (range.toList() + current).distinct().sorted().map { it.toString() to "$it$suffix" }
+            SectionDivider()
+            SectionLabel("Fine-tuning")
+            Hint("How much AI may decide by itself in this space. The defaults suit most; change them if it files too eagerly or too timidly.")
+            if (s.aiApplyMode == "auto") SelectField("Apply automatically when AI is at least this sure", choices(50..100 step 5, s.aiAutoConfidence, "%"), s.aiAutoConfidence.toString(), enabled = s.isOwner,
+                supporting = "Lower applies more by itself and gets more wrong; higher leaves more for you to check.") { saveNumber("ai_auto_confidence", it) }
+            ToggleRow("Let AI create new tags", "When a document has no fitting tag yet (say, Aadhaar or PAN), AI may add one. Turn this off to keep to the tags you made yourself.", s.aiNewTags, enabled = s.isOwner) { saveFlag("ai_new_tags", it) }
+            if (s.aiNewTags) SelectField("New tags per document, at most", choices(1..10, s.aiMaxNewTags, ""), s.aiMaxNewTags.toString(), enabled = s.isOwner) { saveNumber("ai_max_new_tags", it) }
+            ToggleRow("Let AI create new document types", "When none of this space's types fits (say, Identification), AI may add one. Turn this off to keep to your own types.", s.aiNewTypes, enabled = s.isOwner) { saveFlag("ai_new_types", it) }
+            if (s.aiNewTags || s.aiNewTypes) SelectField("Create something new when AI is at least this sure", choices(0..100 step 10, s.aiNewConfidence, "%"), s.aiNewConfidence.toString(), enabled = s.isOwner,
+                supporting = "For tags, senders and types that don't exist yet.") { saveNumber("ai_new_confidence", it) }
+            if (s.isOwner && (s.aiAutoConfidence != 85 || s.aiNewConfidence != 60 || s.aiMaxNewTags != 3 || !s.aiNewTags || !s.aiNewTypes)) TextButton({
+                run.run("Back to the defaults") {
+                    c.repo.updateSpace(s.id, buildJsonObject { put("ai_auto_confidence", 85); put("ai_new_confidence", 60); put("ai_max_new_tags", 3); put("ai_new_tags", true); put("ai_new_types", true) })
+                    reloadMe()
+                }
+            }, Modifier.padding(horizontal = 8.dp)) { Text("Back to the defaults") }
+            SectionDivider()
+        }
         val st = stats.data
         if (s.aiPolicy != "off" && st != null) {
             SectionLabel("How well is it doing?")

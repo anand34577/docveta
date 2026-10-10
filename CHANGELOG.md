@@ -5,6 +5,33 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-10
+
+### Added
+- **AI can add new tags.** When a document's topic has no tag yet, the AI may propose one (up to
+  three per document) besides picking from your tags. New tags are created when you accept them,
+  or straight away in spaces set to apply automatically. Turn it off per space with **Let AI
+  create new tags** (Space settings → AI assistance; also in the Android app).
+- **Browse by document type.** Home and the sidebar (web) and a row of chips above the list
+  (Android) show your document types with how many documents each has; one click lists them.
+  Document cards and rows show the type.
+- Web: **⋯ → Ask AI for suggestions** on a document asks the AI again, for example after the AI
+  server was down when the document arrived (the Android app already had it).
+- **Context size for AI providers.** Tell Docveta how much text your chat model takes at once
+  (Administration → AI → the provider, web and Android; 8192 by default) and suggestions and Ask
+  are fitted to it: for a local model running with 4096 tokens, long documents are shortened to
+  their start and end and the lists sent along are kept short.
+- **Tune the AI from Settings** (web and Android). Per space: how sure the AI must be before it
+  applies something by itself (85% unless you change it) or creates something new (60%), how
+  many new tags per document, and whether it may create tags and document types at all. For the
+  whole server (Administration → AI → Tuning): the list of document types offered to the AI, how
+  many passages an answer is made from, and how much of a long document is read for suggestions.
+
+### Changed
+- The AI names document types more consistently: it picks from the space's own types, then from
+  a list of broad ones (Identification, Banking, Tax, Bill, Insurance, Medical…), before making up
+  a name, and leaves the specifics to tags (type *Identification*, tag *Aadhaar*).
+
 ## [0.13.0] - 2026-10-10
 
 ### Added

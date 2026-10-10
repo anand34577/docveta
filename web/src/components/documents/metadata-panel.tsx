@@ -139,7 +139,7 @@ export function MetadataPanel({ doc }: { doc: Document }) {
           spaceId={doc.space.id}
           value={doc.document_type ? [doc.document_type.id] : []}
           onChange={(v) => save({ document_type_id: v[0] ?? null })}
-          placeholder="e.g. Bill, Invoice, Certificate"
+          placeholder="e.g. Identification, Bill, Insurance"
           disabled={!canEdit}
         />
       </Field>

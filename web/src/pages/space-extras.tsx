@@ -66,7 +66,7 @@ export function SpaceAI({ space }: { space: Space }) {
   });
   return (
     <>
-      <SettingsCard title="AI assistance" description="Suggest tags, sender, type, date and custom fields for new documents. You always see what it would change first, unless you pick automatic.">
+      <SettingsCard title="AI assistance" description="AI reads each new document and works out what kind of document it is, who it is from, its date, its tags and your custom fields. You always see what it would change first, unless you pick automatic.">
         <div className="grid max-w-md gap-4">
           <Field label="Use AI for this space" htmlFor="ai-policy" hint="“Local only” sends text only to providers marked as running on your own hardware.">
             <NativeSelect id="ai-policy" disabled={!owner} value={space.ai_policy} onChange={(e) => save({ ai_policy: e.target.value })}>
@@ -85,6 +85,58 @@ export function SpaceAI({ space }: { space: Space }) {
           )}
         </div>
       </SettingsCard>
+      {space.ai_policy !== "off" && (
+        <SettingsCard title="Fine-tuning" description="How much AI may decide by itself in this space. The defaults suit most; change them if it files too eagerly or too timidly.">
+          <div className="max-w-xl divide-y divide-border">
+            {space.ai_apply_mode === "auto" && (
+              <NumberRow
+                label="Apply automatically when AI is at least this sure"
+                description="Lower applies more by itself and gets more wrong; higher leaves more for you to check."
+                value={space.ai_auto_confidence}
+                min={50}
+                max={100}
+                unit="%"
+                disabled={!owner}
+                onSave={(v) => save({ ai_auto_confidence: v })}
+              />
+            )}
+            <SwitchRow
+              label="Let AI create new tags"
+              description="When a document has no fitting tag yet (say, Aadhaar or PAN), AI may add one. Turn this off to keep to the tags you made yourself."
+              checked={space.ai_new_tags}
+              disabled={!owner}
+              onCheckedChange={(v) => save({ ai_new_tags: v })}
+            />
+            {space.ai_new_tags && (
+              <NumberRow label="New tags per document, at most" value={space.ai_max_new_tags} min={1} max={10} disabled={!owner} onSave={(v) => save({ ai_max_new_tags: v })} />
+            )}
+            <SwitchRow
+              label="Let AI create new document types"
+              description="When none of this space's types fits (say, Identification), AI may add one. Turn this off to keep to your own types."
+              checked={space.ai_new_types}
+              disabled={!owner}
+              onCheckedChange={(v) => save({ ai_new_types: v })}
+            />
+            {(space.ai_new_tags || space.ai_new_types) && (
+              <NumberRow
+                label="Create something new when AI is at least this sure"
+                description="For tags, senders and types that don't exist yet."
+                value={space.ai_new_confidence}
+                min={0}
+                max={100}
+                unit="%"
+                disabled={!owner}
+                onSave={(v) => save({ ai_new_confidence: v })}
+              />
+            )}
+          </div>
+          {owner && (space.ai_auto_confidence !== 85 || space.ai_new_confidence !== 60 || space.ai_max_new_tags !== 3 || !space.ai_new_tags || !space.ai_new_types) && (
+            <Button size="sm" variant="ghost" className="mt-3" onClick={() => save({ ai_auto_confidence: 85, ai_new_confidence: 60, ai_max_new_tags: 3, ai_new_tags: true, ai_new_types: true })}>
+              Back to the defaults
+            </Button>
+          )}
+        </SettingsCard>
+      )}
       {space.ai_policy !== "off" && stats.data && (
         <SettingsCard title="How well is it doing?" description="Based on the suggestions you've accepted or dismissed.">
           <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -103,6 +155,45 @@ export function SpaceAI({ space }: { space: Space }) {
         </SettingsCard>
       )}
     </>
+  );
+}
+
+/** A number setting in a row, saved when you leave the box or press Enter. */
+function NumberRow({ label, description, value, min, max, unit, disabled, onSave }: { label: string; description?: string; value: number; min: number; max: number; unit?: string; disabled?: boolean; onSave: (v: number) => void }) {
+  const id = React.useId();
+  const [text, setText] = React.useState(String(value));
+  React.useEffect(() => setText(String(value)), [value]);
+  const commit = () => {
+    const n = Math.round(Number(text));
+    if (!text.trim() || Number.isNaN(n)) return setText(String(value));
+    const v = Math.min(max, Math.max(min, n));
+    setText(String(v));
+    if (v !== value) onSave(v);
+  };
+  return (
+    <div className="flex items-start justify-between gap-4 py-3">
+      <label htmlFor={id} className="flex-1 cursor-pointer">
+        <div className="text-sm font-medium">{label}</div>
+        {description && <div className="mt-0.5 text-[13px] text-muted">{description}</div>}
+      </label>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Input
+          id={id}
+          type="number"
+          inputMode="numeric"
+          min={min}
+          max={max}
+          disabled={disabled}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+          className="h-8 w-20 text-right tabular-nums"
+          title={`${min} to ${max}`}
+        />
+        {unit && <span className="w-3 text-sm text-muted">{unit}</span>}
+      </div>
+    </div>
   );
 }
 

@@ -15,6 +15,7 @@ import {
   Plus,
   Search,
   Settings,
+  Shapes,
   Shield,
   Sun,
   Trash2,
@@ -23,7 +24,7 @@ import {
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, setUnauthorizedHandler } from "@/lib/api";
-import { useAIEnabled, useMe, useSavedViews, useStats, useStatus } from "@/lib/queries";
+import { nameSearch, useAIEnabled, useDocumentTypes, useMe, useSavedViews, useStats, useStatus } from "@/lib/queries";
 import { isAuthPage, safeRedirect } from "@/lib/redirect";
 import { cn, modKey, setDateFormat, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
 import { applyTheme, useUI } from "@/stores/ui";
@@ -326,11 +327,36 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
         ))}
       </div>
       {newSpace && <NewSpaceDialog onClose={() => setNewSpace(false)} />}
+      <TypeLinks onNavigate={onNavigate} />
 
       <div className="mt-5 space-y-0.5 border-t border-border pt-3">
         <NavItem to="/trash" icon={<Trash2 />} label="Trash" onClick={onNavigate} />
         <NavItem to="/settings/profile" icon={<Settings />} label="Settings" onClick={onNavigate} />
         {me.is_admin && <NavItem to="/admin/users" icon={<Shield />} label="Administration" onClick={onNavigate} />}
+      </div>
+    </>
+  );
+}
+
+/** The most common kinds of documents, so they can be browsed by what they are as well as by space. */
+function TypeLinks({ onNavigate }: { onNavigate?: () => void }) {
+  const types = useDocumentTypes();
+  const current = useRouterState({ select: (s) => (s.location.pathname === "/documents" ? parseDocQuery(s.location.search).q : undefined) });
+  if (!types.length) return null;
+  return (
+    <>
+      <SectionLabel>Document types</SectionLabel>
+      <div className="space-y-0.5">
+        {types.slice(0, 6).map((t) => {
+          const q = nameSearch("type", t.name);
+          return (
+            <Link key={t.name} to="/documents" search={{ q }} onClick={onNavigate} data-status={current === q ? "active" : undefined} className={navItem}>
+              <Shapes />
+              <span className="flex-1 truncate">{t.name}</span>
+              <span className="text-xs tabular-nums text-subtle">{t.count}</span>
+            </Link>
+          );
+        })}
       </div>
     </>
   );

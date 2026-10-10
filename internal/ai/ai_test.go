@@ -150,15 +150,15 @@ func TestTrimHistory(t *testing.T) {
 		{Role: "user", Content: "And the amount?"},
 		{Role: "assistant", Content: "₹1,842 [1]."},
 	}
-	got := trimHistory(hist)
+	got := trimHistory(hist, historyTokens)
 	if len(got) != 4 || got[0].Role != "user" || got[1].Content != "On 5 August." || got[3].Content != "₹1,842." {
 		t.Fatalf("got %+v", got)
 	}
 	if lastQuestion(hist) != "And the amount?" {
 		t.Fatal("last question")
 	}
-	long := []Message{{Role: "user", Content: strings.Repeat("x", historyChars)}, {Role: "assistant", Content: "a"}, {Role: "user", Content: "q"}, {Role: "assistant", Content: "b"}}
-	if got := trimHistory(long); len(got) != 2 || got[0].Content != "q" {
+	long := []Message{{Role: "user", Content: strings.Repeat("x", historyTokens*4)}, {Role: "assistant", Content: "a"}, {Role: "user", Content: "q"}, {Role: "assistant", Content: "b"}}
+	if got := trimHistory(long, historyTokens); len(got) != 2 || got[0].Content != "q" {
 		t.Fatalf("budget: %+v", got)
 	}
 }
@@ -207,5 +207,39 @@ func TestVectorHelpers(t *testing.T) {
 	}
 	if stripCitations("Due 5 Aug [1] and [12].") != "Due 5 Aug and." {
 		t.Fatal(stripCitations("Due 5 Aug [1] and [12]."))
+	}
+}
+
+func TestPromptFitsContext(t *testing.T) {
+	latin := strings.Repeat("word ", 4000) // about 5000 tokens
+	if got := excerpt("short text", 1000); got != "short text" {
+		t.Errorf("a short document was cut: %q", got)
+	}
+	got := excerpt(latin, 1000)
+	if n := estTokens(got); n > 1010 || n < 900 {
+		t.Errorf("excerpt is %d tokens, want about 1000", n)
+	}
+	if !strings.HasPrefix(got, "word ") || !strings.Contains(got, "[…]") || !strings.HasSuffix(got, "word ") {
+		t.Errorf("excerpt should keep the start and the end: %.40q … %.20q", got, got[len(got)-20:])
+	}
+	// Devanagari costs about a token per character: the same budget holds far fewer letters.
+	hindi := strings.Repeat("बिजली बिल ", 2000)
+	h := excerpt(hindi, 1000)
+	if n := estTokens(h); n > 1010 {
+		t.Errorf("Hindi excerpt is %d tokens", n)
+	}
+	if len([]rune(h)) >= len([]rune(got)) {
+		t.Errorf("Hindi excerpt (%d characters) should be shorter than the English one (%d)", len([]rune(h)), len([]rune(got)))
+	}
+	if !utf8.ValidString(h) || !utf8.ValidString(cutToTokens(hindi, 7)) || !utf8.ValidString(tailTokens(hindi, 7)) {
+		t.Error("a cut landed inside a character")
+	}
+	p := Provider{}
+	if p.contextTokens() != defaultContextTokens {
+		t.Errorf("default context: %d", p.contextTokens())
+	}
+	p.ContextTokens = 10
+	if p.contextTokens() != minContextTokens {
+		t.Errorf("context floor: %d", p.contextTokens())
 	}
 }

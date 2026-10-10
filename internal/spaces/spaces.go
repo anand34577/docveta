@@ -56,7 +56,13 @@ type Space struct {
 	Color           string    `json:"color"`
 	AIPolicy        string    `json:"ai_policy"`
 	AIApplyMode     string    `json:"ai_apply_mode"`
+	AINewTags       bool      `json:"ai_new_tags"` // the AI may propose tags that don't exist yet
 	DefaultLanguage string    `json:"default_language"`
+	// Fine-tuning of the AI for this space. Confidences are percentages.
+	AIAutoConfidence int  `json:"ai_auto_confidence"` // how sure before "apply automatically" applies
+	AINewConfidence  int  `json:"ai_new_confidence"`  // how sure before proposing a name that doesn't exist yet
+	AIMaxNewTags     int  `json:"ai_max_new_tags"`    // new tags per document
+	AINewTypes       bool `json:"ai_new_types"`       // may propose document types the space doesn't have
 	// Batch scanning: split a scanned batch at separator sheets; read ASN labels.
 	SplitOnSeparators bool      `json:"split_on_separators"`
 	ReadASNBarcodes   bool      `json:"read_asn_barcodes"`
@@ -144,14 +150,14 @@ func (s *Service) VisibleSpaceIDs(ctx context.Context, userID uuid.UUID) ([]uuid
 // Queries
 // ---------------------------------------------------------------------------
 
-const spaceCols = `s.id, s.name, s.kind, s.description, s.color, s.ai_policy, s.ai_apply_mode, s.default_language,
-	s.split_on_separators, s.read_asn_barcodes, m.role, (SELECT count(*) FROM space_members x WHERE x.space_id=s.id),
+const spaceCols = `s.id, s.name, s.kind, s.description, s.color, s.ai_policy, s.ai_apply_mode, s.ai_new_tags, s.default_language,
+	s.split_on_separators, s.read_asn_barcodes, s.ai_auto_confidence, s.ai_new_confidence, s.ai_max_new_tags, s.ai_new_types, m.role, (SELECT count(*) FROM space_members x WHERE x.space_id=s.id),
 	(SELECT count(*) FROM documents d WHERE d.space_id=s.id AND d.deleted_at IS NULL), s.created_at`
 
 func scanSpace(row pgx.Row) (*Space, error) {
 	var sp Space
-	err := row.Scan(&sp.ID, &sp.Name, &sp.Kind, &sp.Description, &sp.Color, &sp.AIPolicy, &sp.AIApplyMode,
-		&sp.DefaultLanguage, &sp.SplitOnSeparators, &sp.ReadASNBarcodes, &sp.Role, &sp.MemberCount, &sp.DocumentCount, &sp.CreatedAt)
+	err := row.Scan(&sp.ID, &sp.Name, &sp.Kind, &sp.Description, &sp.Color, &sp.AIPolicy, &sp.AIApplyMode, &sp.AINewTags,
+		&sp.DefaultLanguage, &sp.SplitOnSeparators, &sp.ReadASNBarcodes, &sp.AIAutoConfidence, &sp.AINewConfidence, &sp.AIMaxNewTags, &sp.AINewTypes, &sp.Role, &sp.MemberCount, &sp.DocumentCount, &sp.CreatedAt)
 	return &sp, err
 }
 
@@ -193,10 +199,16 @@ type Input struct {
 	Color           *string `json:"color"`
 	AIPolicy        *string `json:"ai_policy"`
 	AIApplyMode     *string `json:"ai_apply_mode"`
+	AINewTags       *bool   `json:"ai_new_tags"`
 	DefaultLanguage *string `json:"default_language"`
 
 	SplitOnSeparators *bool `json:"split_on_separators"`
 	ReadASNBarcodes   *bool `json:"read_asn_barcodes"`
+
+	AIAutoConfidence *int  `json:"ai_auto_confidence"`
+	AINewConfidence  *int  `json:"ai_new_confidence"`
+	AIMaxNewTags     *int  `json:"ai_max_new_tags"`
+	AINewTypes       *bool `json:"ai_new_types"`
 }
 
 func (in *Input) validate(create bool) error {
@@ -216,6 +228,15 @@ func (in *Input) validate(create bool) error {
 	if in.AIApplyMode != nil && *in.AIApplyMode != "suggest" && *in.AIApplyMode != "auto" {
 		v.Add("ai_apply_mode", "Must be suggest or auto")
 	}
+	if in.AIAutoConfidence != nil && (*in.AIAutoConfidence < 50 || *in.AIAutoConfidence > 100) {
+		v.Add("ai_auto_confidence", "Between 50 and 100 percent")
+	}
+	if in.AINewConfidence != nil && (*in.AINewConfidence < 0 || *in.AINewConfidence > 100) {
+		v.Add("ai_new_confidence", "Between 0 and 100 percent")
+	}
+	if in.AIMaxNewTags != nil && (*in.AIMaxNewTags < 1 || *in.AIMaxNewTags > 10) {
+		v.Add("ai_max_new_tags", "Between 1 and 10")
+	}
 	if in.Description != nil && len(*in.Description) > 500 {
 		v.Add("description", "Description is too long")
 	}
@@ -232,18 +253,28 @@ func (s *Service) Create(ctx context.Context, p *auth.Principal, in Input) (*Spa
 	}
 	id := uuid.Must(uuid.NewV7())
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO spaces (id, name, kind, description, color, ai_policy, ai_apply_mode, default_language, created_by)
-			VALUES ($1,$2,'shared',coalesce($3,''),coalesce($4,'indigo'),coalesce($5,'off'),coalesce($6,'suggest'),coalesce($7,'en'),$8)`,
-			id, *in.Name, in.Description, in.Color, in.AIPolicy, in.AIApplyMode, in.DefaultLanguage, p.UserID); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO spaces (id, name, kind, description, color, ai_policy, ai_apply_mode, default_language, created_by, ai_new_tags)
+			VALUES ($1,$2,'shared',coalesce($3,''),coalesce($4,'indigo'),coalesce($5,'off'),coalesce($6,'suggest'),coalesce($7,'en'),$8,coalesce($9,true))`,
+			id, *in.Name, in.Description, in.Color, in.AIPolicy, in.AIApplyMode, in.DefaultLanguage, p.UserID, in.AINewTags); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO space_members (space_id, user_id, role) VALUES ($1,$2,'owner')`, id, p.UserID)
-		return err
+		if _, err := tx.Exec(ctx, `INSERT INTO space_members (space_id, user_id, role) VALUES ($1,$2,'owner')`, id, p.UserID); err != nil {
+			return err
+		}
+		return tuneAI(ctx, tx, id, in)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return s.Get(ctx, p, id)
+}
+
+// tuneAI saves the AI fine-tuning fields that were given.
+func tuneAI(ctx context.Context, q db.Querier, id uuid.UUID, in Input) error {
+	_, err := q.Exec(ctx, `UPDATE spaces SET ai_auto_confidence=coalesce($2,ai_auto_confidence), ai_new_confidence=coalesce($3,ai_new_confidence),
+		ai_max_new_tags=coalesce($4,ai_max_new_tags), ai_new_types=coalesce($5,ai_new_types) WHERE id=$1`,
+		id, in.AIAutoConfidence, in.AINewConfidence, in.AIMaxNewTags, in.AINewTypes)
+	return err
 }
 
 // CreatePersonal creates the personal space for a new user inside an existing transaction.
@@ -270,8 +301,12 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id uuid.UUID, i
 	_, err := s.pool.Exec(ctx, `UPDATE spaces SET
 		name=coalesce($2,name), description=coalesce($3,description), color=coalesce($4,color),
 		ai_policy=coalesce($5,ai_policy), ai_apply_mode=coalesce($6,ai_apply_mode), default_language=coalesce($7,default_language),
-		split_on_separators=coalesce($8,split_on_separators), read_asn_barcodes=coalesce($9,read_asn_barcodes)
-		WHERE id=$1`, id, in.Name, in.Description, in.Color, in.AIPolicy, in.AIApplyMode, in.DefaultLanguage, in.SplitOnSeparators, in.ReadASNBarcodes)
+		split_on_separators=coalesce($8,split_on_separators), read_asn_barcodes=coalesce($9,read_asn_barcodes),
+		ai_new_tags=coalesce($10,ai_new_tags)
+		WHERE id=$1`, id, in.Name, in.Description, in.Color, in.AIPolicy, in.AIApplyMode, in.DefaultLanguage, in.SplitOnSeparators, in.ReadASNBarcodes, in.AINewTags)
+	if err == nil {
+		err = tuneAI(ctx, s.pool, id, in)
+	}
 	if err != nil {
 		return nil, err
 	}

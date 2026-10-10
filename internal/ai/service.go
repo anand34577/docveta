@@ -51,6 +51,7 @@ type ProviderInput struct {
 	Enabled        *bool   `json:"enabled"`
 	TimeoutSeconds *int    `json:"timeout_seconds"`
 	MaxConcurrency *int    `json:"max_concurrency"`
+	ContextTokens  *int    `json:"context_tokens"`
 }
 
 func (in *ProviderInput) validate(create bool) error {
@@ -81,17 +82,20 @@ func (in *ProviderInput) validate(create bool) error {
 	if in.MaxConcurrency != nil && (*in.MaxConcurrency < 1 || *in.MaxConcurrency > 32) {
 		v.Add("max_concurrency", "Between 1 and 32")
 	}
+	if in.ContextTokens != nil && (*in.ContextTokens < minContextTokens || *in.ContextTokens > 2_000_000) {
+		v.Add("context_tokens", "Between %d and 2,000,000 tokens", minContextTokens)
+	}
 	return v.Err()
 }
 
 const providerCols = `id, name, base_url, api_key_enc, chat_model, embedding_model, is_local, is_default, enabled, timeout_seconds,
-	max_concurrency, last_error, last_ok_at`
+	max_concurrency, last_error, last_ok_at, context_tokens`
 
 func (s *Service) scanProvider(row pgx.Row) (*Provider, error) {
 	var p Provider
 	var key []byte
 	if err := row.Scan(&p.ID, &p.Name, &p.BaseURL, &key, &p.ChatModel, &p.EmbeddingModel, &p.IsLocal, &p.IsDefault, &p.Enabled,
-		&p.TimeoutSeconds, &p.MaxConcurrency, &p.LastError, &p.LastOKAt); err != nil {
+		&p.TimeoutSeconds, &p.MaxConcurrency, &p.LastError, &p.LastOKAt, &p.ContextTokens); err != nil {
 		if db.IsNoRows(err) {
 			return nil, apperr.NotFound("AI provider")
 		}
@@ -153,9 +157,10 @@ func (s *Service) CreateProvider(ctx context.Context, p *auth.Principal, in Prov
 				return err
 			}
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO ai_providers (id, name, base_url, api_key_enc, chat_model, embedding_model, is_local, is_default, enabled, timeout_seconds, max_concurrency)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, *in.Name, *in.BaseURL, key, deref(in.ChatModel, ""), deref(in.EmbeddingModel, ""),
-			deref(in.IsLocal, false), makeDefault, deref(in.Enabled, true), deref(in.TimeoutSeconds, 90), deref(in.MaxConcurrency, 2))
+		_, err := tx.Exec(ctx, `INSERT INTO ai_providers (id, name, base_url, api_key_enc, chat_model, embedding_model, is_local, is_default, enabled, timeout_seconds, max_concurrency, context_tokens)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, id, *in.Name, *in.BaseURL, key, deref(in.ChatModel, ""), deref(in.EmbeddingModel, ""),
+			deref(in.IsLocal, false), makeDefault, deref(in.Enabled, true), deref(in.TimeoutSeconds, 90), deref(in.MaxConcurrency, 2),
+			deref(in.ContextTokens, defaultContextTokens))
 		return err
 	})
 	if err != nil {
@@ -202,8 +207,9 @@ func (s *Service) UpdateProvider(ctx context.Context, p *auth.Principal, id uuid
 		}
 		_, err := tx.Exec(ctx, `UPDATE ai_providers SET name=coalesce($2,name), base_url=coalesce($3,base_url), chat_model=coalesce($4,chat_model),
 			embedding_model=coalesce($5,embedding_model), is_local=coalesce($6,is_local), is_default=coalesce($7,is_default), enabled=coalesce($8,enabled),
-			timeout_seconds=coalesce($9,timeout_seconds), max_concurrency=coalesce($10,max_concurrency), updated_at=now() WHERE id=$1`,
-			id, in.Name, in.BaseURL, in.ChatModel, in.EmbeddingModel, in.IsLocal, in.IsDefault, in.Enabled, in.TimeoutSeconds, in.MaxConcurrency)
+			timeout_seconds=coalesce($9,timeout_seconds), max_concurrency=coalesce($10,max_concurrency),
+			context_tokens=coalesce($11,context_tokens), updated_at=now() WHERE id=$1`,
+			id, in.Name, in.BaseURL, in.ChatModel, in.EmbeddingModel, in.IsLocal, in.IsDefault, in.Enabled, in.TimeoutSeconds, in.MaxConcurrency, in.ContextTokens)
 		return err
 	})
 	if err != nil {

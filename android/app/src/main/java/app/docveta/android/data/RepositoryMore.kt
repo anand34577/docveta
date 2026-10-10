@@ -280,6 +280,9 @@ suspend fun Repository.setProviderEnabled(id: String, on: Boolean): AiProvider =
 suspend fun Repository.deleteProvider(id: String) = api.delete("/admin/ai/providers/$id")
 suspend fun Repository.testProvider(id: String): AiTestResult = api.post("/admin/ai/providers/$id/test")
 suspend fun Repository.reindex(): Int = api.post<Queued>("/admin/ai/reindex").queued
+suspend fun Repository.aiTuning(): AiTuning = api.get("/admin/ai/settings")
+suspend fun Repository.saveAiTuning(body: JsonObject): AiTuning = api.put("/admin/ai/settings", body.toString())
+suspend fun Repository.resetAiTuning(): AiTuning { api.delete("/admin/ai/settings"); return aiTuning() }
 
 suspend fun Repository.folders(): FolderList = api.get("/admin/folders")
 suspend fun Repository.saveFolder(id: String?, body: JsonObject): WatchedFolder = if (id == null) api.post("/admin/folders", body.toString()) else api.patch("/admin/folders/$id", body.toString())

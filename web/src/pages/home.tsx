@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
-import { AlertCircle, ArrowRight, Bookmark, CalendarPlus, Files, History, Inbox, Loader2, Settings, Tags, Upload, User } from "lucide-react";
+import { AlertCircle, ArrowRight, Bookmark, CalendarPlus, Files, History, Inbox, Loader2, Settings, Shapes, Tags, Upload, User } from "lucide-react";
 import { recentDocs } from "@/lib/recent";
-import { useDocuments, useSavedViews, useStats, useTaxonomy } from "@/lib/queries";
+import { nameSearch, useDocumentTypes, useDocuments, useSavedViews, useStats, useTaxonomy } from "@/lib/queries";
 import { cn, formatBytes, formatDocDate, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
 import { useCurrentUser, useFilePicker } from "@/components/app-shell";
 import { Thumbnail, StatusBadge } from "@/components/documents/doc-items";
@@ -140,6 +140,7 @@ export function HomePage() {
           </section>
           <RecentlyOpened />
           <SavedViewsCard />
+          <TopTypes />
           <TopTags />
         </aside>
       </div>
@@ -199,6 +200,26 @@ function SavedViewsCard() {
   );
 }
 
+/** What kinds of documents there are (invoices, contracts, certificates…), most common first. */
+function TopTypes() {
+  const types = useDocumentTypes();
+  if (!types.length) return null;
+  return (
+    <section aria-labelledby="types-h">
+      <SectionHeader id="types-h" title="Browse by type" />
+      <Card className="divide-y divide-border overflow-hidden">
+        {types.slice(0, 8).map((t) => (
+          <Link key={t.name} to="/documents" search={{ q: nameSearch("type", t.name) }} className="flex items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-surface-2">
+            <Shapes className="size-4 shrink-0 text-subtle" />
+            <span className="min-w-0 flex-1 truncate">{t.name}</span>
+            <span className="text-xs tabular-nums text-subtle">{t.count.toLocaleString()}</span>
+          </Link>
+        ))}
+      </Card>
+    </section>
+  );
+}
+
 function TopTags() {
   const tags = useTaxonomy("tags");
   // The same tag name can exist in several spaces; show it once. `tag:` search matches all of them.
@@ -216,7 +237,7 @@ function TopTags() {
       <SectionHeader id="tags-h" title="Browse by tag" />
       <div className="flex flex-wrap gap-1.5">
         {top.map((t) => (
-          <Link key={t.name} to="/documents" search={{ q: /\s/.test(t.name) ? `tag:"${t.name}"` : `tag:${t.name}` }} className="rounded-md transition-opacity hover:opacity-80">
+          <Link key={t.name} to="/documents" search={{ q: nameSearch("tag", t.name) }} className="rounded-md transition-opacity hover:opacity-80">
             <TagChip name={`${t.name} · ${t.count}`} color={t.color} className="px-2 py-1" />
           </Link>
         ))}

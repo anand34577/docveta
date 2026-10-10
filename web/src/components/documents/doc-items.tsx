@@ -152,7 +152,7 @@ export function DocumentCard({ doc, selected, selecting, onToggle, query }: Item
         <div className="flex flex-1 flex-col gap-1.5 p-3">
           <h3 className="line-clamp-2 break-words text-sm font-medium leading-snug" title={doc.title}>{doc.title}</h3>
           <div className="truncate text-xs text-muted">
-            {[formatDocDate(doc.document_date), doc.correspondent?.name].filter(Boolean).join(" · ") || " "}
+            {[formatDocDate(doc.document_date), doc.document_type?.name, doc.correspondent?.name].filter(Boolean).join(" · ") || " "}
           </div>
           <Snippet segments={doc.snippet} />
           <div className="mt-auto space-y-1.5 pt-1">
@@ -198,7 +198,7 @@ export function DocumentRow({ doc, selected, selecting, onToggle, query }: ItemP
             <Snippet segments={doc.snippet} className="line-clamp-1" />
           ) : (
             <div className="truncate text-xs text-muted lg:hidden">
-              {[formatDocDate(doc.document_date), doc.correspondent?.name].filter(Boolean).join(" · ")}
+              {[formatDocDate(doc.document_date), doc.document_type?.name, doc.correspondent?.name].filter(Boolean).join(" · ")}
             </div>
           )}
         </div>

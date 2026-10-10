@@ -66,15 +66,21 @@ type UserRec struct {
 }
 
 type SpaceRec struct {
-	ID              uuid.UUID   `json:"id"`
-	Name            string      `json:"name"`
-	Kind            string      `json:"kind"`
-	Description     string      `json:"description"`
-	Color           string      `json:"color"`
-	DefaultLanguage string      `json:"default_language"`
-	AIPolicy        string      `json:"ai_policy"`
-	AIApplyMode     string      `json:"ai_apply_mode"`
-	Members         []MemberRec `json:"members"`
+	ID              uuid.UUID `json:"id"`
+	Name            string    `json:"name"`
+	Kind            string    `json:"kind"`
+	Description     string    `json:"description"`
+	Color           string    `json:"color"`
+	DefaultLanguage string    `json:"default_language"`
+	AIPolicy        string    `json:"ai_policy"`
+	AIApplyMode     string    `json:"ai_apply_mode"`
+	AINewTags       *bool     `json:"ai_new_tags,omitempty"` // missing in older exports: on
+	// AI fine-tuning; missing in older exports, which then get the defaults.
+	AIAutoConfidence *int        `json:"ai_auto_confidence,omitempty"`
+	AINewConfidence  *int        `json:"ai_new_confidence,omitempty"`
+	AIMaxNewTags     *int        `json:"ai_max_new_tags,omitempty"`
+	AINewTypes       *bool       `json:"ai_new_types,omitempty"`
+	Members          []MemberRec `json:"members"`
 }
 
 type MemberRec struct {
@@ -348,10 +354,10 @@ func loadManifest(ctx context.Context, pool *pgxpool.Pool, m *Manifest, opt Expo
 	}); err != nil {
 		return err
 	}
-	if m.Spaces, err = collect(mustQuery(pool.Query(ctx, `SELECT id, name, kind, description, color, default_language, ai_policy, ai_apply_mode FROM spaces ORDER BY created_at`)),
+	if m.Spaces, err = collect(mustQuery(pool.Query(ctx, `SELECT id, name, kind, description, color, default_language, ai_policy, ai_apply_mode, ai_new_tags, ai_auto_confidence, ai_new_confidence, ai_max_new_tags, ai_new_types FROM spaces ORDER BY created_at`)),
 		func(r pgx.Rows) (SpaceRec, error) {
 			var s SpaceRec
-			err := r.Scan(&s.ID, &s.Name, &s.Kind, &s.Description, &s.Color, &s.DefaultLanguage, &s.AIPolicy, &s.AIApplyMode)
+			err := r.Scan(&s.ID, &s.Name, &s.Kind, &s.Description, &s.Color, &s.DefaultLanguage, &s.AIPolicy, &s.AIApplyMode, &s.AINewTags, &s.AIAutoConfidence, &s.AINewConfidence, &s.AIMaxNewTags, &s.AINewTypes)
 			s.Members = []MemberRec{}
 			return s, err
 		}); err != nil {

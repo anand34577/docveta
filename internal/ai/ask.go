@@ -53,13 +53,10 @@ type AskInput struct {
 }
 
 const (
-	maxQuestion   = 2000  // characters
-	maxSources    = 8     // passages given to the model
-	perDocSources = 3     // at most this many from one document
-	contextBudget = 16000 // characters of passages in the prompt
-	passageChars  = 1600  // a keyword hit is cut to this window around the matching words
-	historyTurns  = 6     // earlier messages sent along for follow-up questions
-	historyChars  = 6000
+	maxQuestion  = 2000 // characters
+	passageCap   = 4000 // characters of one page read whole ("summarise this")
+	passageChars = 1600 // a keyword hit is cut to this window around the matching words
+	historyTurns = 6    // earlier messages sent along for follow-up questions
 )
 
 var stop = map[string]bool{}
@@ -164,7 +161,7 @@ type docInfo struct {
 // retrieve finds the passages to answer from: keyword matches on the pages plus, when
 // embeddings exist, meaning-based matches, fused with reciprocal rank fusion. docs limits
 // the search to those documents.
-func (s *Service) retrieve(ctx context.Context, question string, spaceIDs, docs []uuid.UUID, semantic bool) ([]source, error) {
+func (s *Service) retrieve(ctx context.Context, question string, spaceIDs, docs []uuid.UUID, semantic bool, maxSources, perDocSources int) ([]source, error) {
 	type key struct {
 		doc  uuid.UUID
 		page int
@@ -209,7 +206,7 @@ func (s *Service) retrieve(ctx context.Context, question string, spaceIDs, docs 
 	}
 	if semantic {
 		// Meaning-based search is a bonus: when the embedding server is down, keywords still answer.
-		if hits, err := s.Passages(ctx, question, spaceIDs, docs, 16, perDocSources); err == nil {
+		if hits, err := s.Passages(ctx, question, spaceIDs, docs, 2*maxSources, perDocSources); err == nil {
 			for i, h := range hits {
 				k := key{h.DocumentID, h.Page}
 				scores[k] += 1 / float64(60+i)
@@ -262,8 +259,8 @@ func (s *Service) retrieve(ctx context.Context, question string, spaceIDs, docs 
 				rows.Close()
 				return nil, err
 			}
-			if r := []rune(sc.text); len(r) > contextBudget/maxSources*2 {
-				sc.text = string(r[:contextBudget/maxSources*2]) + "…"
+			if r := []rune(sc.text); len(r) > passageCap {
+				sc.text = string(r[:passageCap]) + "…"
 			}
 			out = append(out, sc)
 		}
@@ -355,9 +352,16 @@ func (s *Service) Ask(ctx context.Context, p *auth.Principal, in AskInput, emit 
 		}
 		return err
 	}
-	convID, history, prevQuestion, err := s.conversation(ctx, p, in.ConversationID)
+	// The provider's context window is shared out: room for the answer first, then the earlier
+	// conversation (a quarter at most), and the rest for the passages found.
+	sys := fmt.Sprintf(systemPrompt, time.Now().Format("2 January 2006"))
+	room := prov.contextTokens() - askReplyTokens - estTokens(sys) - estTokens(q)
+	convID, history, prevQuestion, err := s.conversation(ctx, p, in.ConversationID, min(historyTokens, max(room/4, 0)))
 	if err != nil {
 		return err
+	}
+	for _, m := range history {
+		room -= estTokens(m.Content)
 	}
 
 	emit("status", map[string]string{"stage": "searching"})
@@ -366,7 +370,8 @@ func (s *Service) Ask(ctx context.Context, p *auth.Principal, in AskInput, emit 
 	if prevQuestion != "" && isFollowUp(q) {
 		searchText = prevQuestion + "\n" + q
 	}
-	srcs, err := s.retrieve(ctx, searchText, allowed, in.DocumentIDs, prov.EmbeddingModel != "")
+	tune := s.tuning(ctx)
+	srcs, err := s.retrieve(ctx, searchText, allowed, in.DocumentIDs, prov.EmbeddingModel != "", tune.AskSources, tune.AskSourcesPerDocument)
 	if err != nil {
 		return err
 	}
@@ -408,16 +413,14 @@ func (s *Service) Ask(ctx context.Context, p *auth.Principal, in AskInput, emit 
 	emit("citations", cites)
 
 	var ctxText strings.Builder
-	budget := contextBudget
+	budget := min(max(room, 300), askPassageTokens)
 	for i, sc := range srcs {
 		d := info[sc.doc]
-		t := strings.TrimSpace(sc.text)
-		if r := []rune(t); len(r) > budget {
-			t = string(r[:max(budget, 0)])
+		if budget < 50 && i > 0 {
+			break // no room for more than a scrap of this passage
 		}
-		if budget -= utf8.RuneCountInString(t); budget < 0 && i > 0 {
-			break
-		}
+		t := cutToTokens(strings.TrimSpace(sc.text), max(budget, 0))
+		budget -= estTokens(t) + 40 // and its heading line
 		fmt.Fprintf(&ctxText, "[%d] %q, page %d", i+1, d.title, sc.page)
 		for _, f := range [][2]string{{"from", d.from}, {"type", d.typ}, {"dated", d.date}, {"tags", d.tags}} {
 			if f[1] != "" {
@@ -426,7 +429,7 @@ func (s *Service) Ask(ctx context.Context, p *auth.Principal, in AskInput, emit 
 		}
 		fmt.Fprintf(&ctxText, "\n%s\n\n", t)
 	}
-	msgs := []Message{{Role: "system", Content: fmt.Sprintf(systemPrompt, time.Now().Format("2 January 2006")) + "\n\nSOURCES:\n" + ctxText.String()}}
+	msgs := []Message{{Role: "system", Content: sys + "\n\nSOURCES:\n" + ctxText.String()}}
 	msgs = append(msgs, history...)
 	msgs = append(msgs, Message{Role: "user", Content: q})
 
@@ -471,7 +474,7 @@ func aiErrorMessage(err error) string {
 // conversation checks an existing conversation and returns recent turns for context and the
 // last question asked. A new conversation (id nil) is only created when the first answer
 // is saved, so failed first questions don't leave empty conversations behind.
-func (s *Service) conversation(ctx context.Context, p *auth.Principal, id *uuid.UUID) (uuid.UUID, []Message, string, error) {
+func (s *Service) conversation(ctx context.Context, p *auth.Principal, id *uuid.UUID, maxTokens int) (uuid.UUID, []Message, string, error) {
 	if id == nil {
 		return uuid.Nil, nil, "", nil
 	}
@@ -492,11 +495,11 @@ func (s *Service) conversation(ctx context.Context, p *auth.Principal, id *uuid.
 	if err != nil {
 		return uuid.Nil, nil, "", err
 	}
-	return *id, trimHistory(hist), lastQuestion(hist), nil
+	return *id, trimHistory(hist, maxTokens), lastQuestion(hist), nil
 }
 
 // trimHistory drops citation markers from earlier answers and keeps the newest turns that fit.
-func trimHistory(hist []Message) []Message {
+func trimHistory(hist []Message, maxTokens int) []Message {
 	out := make([]Message, 0, len(hist))
 	total := 0
 	for i := len(hist) - 1; i >= 0; i-- {
@@ -504,7 +507,7 @@ func trimHistory(hist []Message) []Message {
 		if m.Role == "assistant" {
 			m.Content = stripCitations(m.Content)
 		}
-		if total += utf8.RuneCountInString(m.Content); total > historyChars {
+		if total += estTokens(m.Content); total > maxTokens {
 			break
 		}
 		out = append(out, m)

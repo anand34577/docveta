@@ -33,6 +33,7 @@ type Provider struct {
 	Enabled        bool       `json:"enabled"`
 	TimeoutSeconds int        `json:"timeout_seconds"`
 	MaxConcurrency int        `json:"max_concurrency"`
+	ContextTokens  int        `json:"context_tokens"` // the chat model's context window
 	HasAPIKey      bool       `json:"has_api_key"`
 	LastError      string     `json:"last_error"`
 	LastOKAt       *time.Time `json:"last_ok_at"`
