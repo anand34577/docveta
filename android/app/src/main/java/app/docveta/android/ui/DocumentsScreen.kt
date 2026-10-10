@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -40,9 +41,12 @@ import androidx.compose.material.icons.outlined.Clear
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.FolderZip
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.outlined.MoreVert
@@ -116,10 +120,12 @@ import app.docveta.android.data.Taxonomy
 import app.docveta.android.data.bulk
 import app.docveta.android.data.createView
 import app.docveta.android.data.customFields
+import app.docveta.android.data.datePresets
 import app.docveta.android.data.deleteView
 import app.docveta.android.data.merge
 import app.docveta.android.data.savedViews
 import app.docveta.android.data.updateView
+import app.docveta.android.data.zip
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -498,6 +504,9 @@ private fun DocumentBrowser(
     val listState = rememberLazyListState()
     val session = LocalContainer.current.session
     var recent by remember { mutableStateOf(session.recentSearches) }
+    var recentDocs by remember { mutableStateOf(session.recentDocs) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { recentDocs = session.recentDocs } // back from a document
+    var tips by remember { mutableStateOf(false) }
     val openDoc: (String) -> Unit = { id -> vm.opened(); recent = session.recentSearches; onOpen(id) }
     val nearEnd by remember { derivedStateOf { val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0; last >= vm.items.size - 6 } }
     LaunchedEffect(nearEnd, vm.items.size) { if (nearEnd && vm.items.isNotEmpty()) vm.loadMore() }
@@ -508,8 +517,11 @@ private fun DocumentBrowser(
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) keyboard?.hide() }
 
+    val undo = remember { SnackbarHostState() }
+    val undoScope = rememberCoroutineScope()
+    val container = LocalContainer.current
     Column(Modifier.fillMaxSize()) {
-        if (vm.selecting) SelectionBar(vm)
+        if (vm.selecting) SelectionBar(vm, onTrashed = { ids, msg -> undoScope.launch { offerUndoTrash(undo, container, vm, ids, msg) } })
         else {
             if (title != null) TopAppBar(title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, navigationIcon = { if (onBack != null) BackButton(onBack) }, actions = { titleActions() })
             SearchBar(vm.query.q, vm::typing, "Search documents", onSearch = { vm.searchNow(); recent = session.recentSearches }, trailing = {
@@ -523,15 +535,20 @@ private fun DocumentBrowser(
                 }
                 if (title == null) IconButton(pickFiles) { Icon(Icons.Outlined.UploadFile, "Upload files") }
             })
-            if (title == null && vm.query.q.isBlank() && recent.isNotEmpty()) LazyRow(
+            // With nothing typed: the way back to what was opened or searched for last.
+            if (title == null && vm.query.q.isBlank() && (recent.isNotEmpty() || recentDocs.isNotEmpty())) LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(bottom = 4.dp),
             ) {
+                items(recentDocs.take(4), key = { "opened-${it.first}" }) { (id, name) ->
+                    androidx.compose.material3.AssistChip({ onOpen(id) }, label = { Text(name, Modifier.widthIn(max = 180.dp), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Outlined.Description, "Recently opened", Modifier.size(16.dp)) })
+                }
                 items(recent, key = { "recent-$it" }) { r ->
                     androidx.compose.material3.AssistChip({ vm.setQuery(vm.query.copy(q = r)) }, label = { Text(r, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         leadingIcon = { Icon(Icons.Outlined.History, null, Modifier.size(16.dp)) })
                 }
-                item(key = "recent-clear") { TextButton({ session.recentSearches = emptyList(); recent = emptyList() }) { Text("Clear") } }
+                item(key = "recent-clear") { TextButton({ session.recentSearches = emptyList(); session.recentDocs = emptyList(); recent = emptyList(); recentDocs = emptyList() }) { Text("Clear") } }
             }
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 chipsStart()
@@ -544,6 +561,7 @@ private fun DocumentBrowser(
                 }
                 chipsEnd()
                 if (vm.query.filterCount > 0) item(key = "clear") { TextButton({ vm.setQuery(vm.query.clearedFilters()) }) { Text("Clear") } }
+                item(key = "tips") { androidx.compose.material3.AssistChip({ tips = true }, label = { Text("Search tips") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.HelpOutline, null, Modifier.size(16.dp)) }) }
             }
         }
         Spacer(Modifier.height(4.dp))
@@ -569,13 +587,55 @@ private fun DocumentBrowser(
             )
         })
     }
+    Box(Modifier.fillMaxSize()) { SnackbarHost(undo, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) }
     if (filters) FilterSheet(vm.query, me.spaces, onDismiss = { filters = false }, onApply = { vm.setQuery(it); filters = false })
+    if (tips) SearchTipsDialog(onDismiss = { tips = false }) { term -> tips = false; vm.setQuery(vm.query.copy(q = listOf(vm.query.q.trim(), term).filter { it.isNotEmpty() }.joinToString(" "))) }
+}
+
+/** What the search box understands beyond plain words; the same list as the web app's. */
+private val searchTips = listOf(
+    "tag:tax" to "has the tag",
+    "from:hdfc" to "from this sender",
+    "type:invoice" to "of this type",
+    "date:2026" to "dated in a year, a month (2026-03) or a range (2026-01..2026-06)",
+    "added:7d" to "added in the last 7 days (also 4w, 6m, 1y)",
+    "is:inbox" to "not reviewed yet",
+    "untagged" to "without any tag",
+    "\"due date\"" to "these exact words together",
+    "-draft" to "without this word (also -tag:old)",
+)
+
+@Composable
+private fun SearchTipsDialog(onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss, title = { Text("Search tips") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Tap one to add it to your search.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                searchTips.forEach { (term, what) ->
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { onPick(term) }.padding(vertical = 8.dp)) {
+                        Text(term, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace), color = MaterialTheme.colorScheme.primary)
+                        Text(what, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Text("Names with spaces go in quotes: from:\"State Bank\". Search also reads the text inside scans.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+            }
+        },
+        confirmButton = { TextButton(onDismiss) { Text("Close") } },
+    )
+}
+
+/** After documents were moved to Trash: says so, and brings them back on Undo. */
+private suspend fun offerUndoTrash(snack: SnackbarHostState, c: AppContainer, vm: DocsViewModel, ids: List<String>, message: String) {
+    if (snack.showSnackbar(message, "Undo", duration = SnackbarDuration.Long) != SnackbarResult.ActionPerformed) return
+    runCatching { c.repo.bulk(ids, "restore") }
+    vm.reload()
 }
 
 /** Replaces the search bar while documents are selected: what can be done with all of them. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SelectionBar(vm: DocsViewModel, trash: Boolean = false) {
+private fun SelectionBar(vm: DocsViewModel, trash: Boolean = false, onTrashed: ((ids: List<String>, message: String) -> Unit)? = null) {
     val c = LocalContainer.current
     val ctx = LocalContext.current
     val run = rememberRunner()
@@ -597,7 +657,15 @@ private fun SelectionBar(vm: DocsViewModel, trash: Boolean = false) {
             } else {
                 IconButton({ run.run { toast(ctx, vm.bulk("update", buildJsonObject { put("inbox", false) }).describe("Marked as reviewed")) } }) { Icon(Icons.Outlined.DoneAll, "Mark as reviewed") }
                 IconButton({ dialog = "tags" }) { Icon(Icons.AutoMirrored.Outlined.Label, "Tags") }
-                IconButton({ run.run { toast(ctx, vm.bulk("trash").describe("Moved ${plural(n, "document")} to Trash")) } }) { Icon(Icons.Outlined.Delete, "Move to Trash") }
+                IconButton({
+                    val ids = vm.selected
+                    run.run {
+                        val r = vm.bulk("trash")
+                        val msg = r.describe("Moved ${plural(n, "document")} to Trash")
+                        // The one bulk action that's easy to hit by mistake: offer the way back.
+                        if (onTrashed != null && r.succeeded > 0) onTrashed(ids.filter { id -> r.failed.none { it.id == id } }, msg) else toast(ctx, msg)
+                    }
+                }) { Icon(Icons.Outlined.Delete, "Move to Trash") }
                 Box {
                     IconButton({ menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                     DropdownMenu(menu, { menu = false }) {
@@ -606,6 +674,12 @@ private fun SelectionBar(vm: DocsViewModel, trash: Boolean = false) {
                         DropdownMenuItem(text = { Text("Share the files") }, leadingIcon = { Icon(Icons.Outlined.Share, null) }, onClick = {
                             menu = false
                             run.run { shareFiles(ctx, docs.map { d -> c.repo.originalFile(d) to d.mimeType }) }
+                        })
+                        if (n > 1) DropdownMenuItem(text = { Text("Share as one ZIP file") }, leadingIcon = { Icon(Icons.Outlined.FolderZip, null) }, onClick = {
+                            menu = false
+                            val ids = vm.selected
+                            if (ids.size > 500) toast(ctx, "Choose up to 500 documents for one ZIP")
+                            else { toast(ctx, "Preparing the ZIP…"); run.run { shareFile(ctx, c.repo.zip(ids), "application/zip") } }
                         })
                         DropdownMenuItem(text = { Text("Process again") }, onClick = { menu = false; run.run { toast(ctx, vm.bulk("reprocess").describe("Processing again")) } })
                     }
@@ -800,6 +874,8 @@ fun InboxScreen(onOpen: (String) -> Unit, onScan: () -> Unit) {
     val ctx = LocalContext.current
     val vm = container("inbox") { DocsViewModel(it, DocQuery(inbox = true)) }
     val snack = remember { SnackbarHostState() }
+    val undoScope = rememberCoroutineScope()
+    val container = LocalContainer.current
     val run = rememberRunner()
     var confirmAll by remember { mutableStateOf(false) }
     val stats = LocalStats.current
@@ -810,7 +886,7 @@ fun InboxScreen(onOpen: (String) -> Unit, onScan: () -> Unit) {
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            if (vm.selecting) SelectionBar(vm)
+            if (vm.selecting) SelectionBar(vm, onTrashed = { ids, msg -> undoScope.launch { offerUndoTrash(snack, container, vm, ids, msg) } })
             else Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Inbox", style = MaterialTheme.typography.headlineMedium)
@@ -887,8 +963,7 @@ private fun FilterSheet(q: DocQuery, spaces: List<Space>, onDismiss: () -> Unit,
         types = runCatching { c.repo.taxonomy("document-types", draft.spaceId) }.getOrDefault(emptyList())
     }
     fun names(all: List<Taxonomy>, ids: List<String>) = ids.map { id -> all.firstOrNull { it.id == id }?.name ?: "…" }
-    val y = LocalDate.now().year
-    val presets = listOf(Triple("This year", "$y-01-01", "$y-12-31"), Triple("Last year", "${y - 1}-01-01", "${y - 1}-12-31"), Triple("FY ${y - 1}–${(y % 100).toString().padStart(2, '0')}", "${y - 1}-04-01", "$y-03-31"))
+    val presets = remember { datePresets(LocalDate.now()) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Filters", style = MaterialTheme.typography.titleLarge)

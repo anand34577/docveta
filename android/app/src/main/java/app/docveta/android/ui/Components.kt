@@ -105,9 +105,21 @@ fun Pill(text: String, container: Color, content: Color, modifier: Modifier = Mo
 fun StatusPill(doc: Document) {
     val cs = MaterialTheme.colorScheme
     when (doc.status) {
-        "processing" -> Pill(stageLabel(doc.processingStage), cs.surfaceVariant, cs.onSurfaceVariant)
+        "processing" -> Pill(processingLabel(doc), cs.surfaceVariant, cs.onSurfaceVariant)
         "failed" -> Pill("Couldn't process", cs.errorContainer, cs.error, icon = Icons.Outlined.ErrorOutline)
         "needs_password" -> Pill("Password protected", Color(0x33F59E0B), Color(0xFFB77900), icon = Icons.Outlined.Lock)
+    }
+}
+
+/** The stage, with pages read so far while reading: "Reading text · 3 of 12 pages". */
+fun processingLabel(doc: Document): String {
+    val label = stageLabel(doc.processingStage)
+    val p = doc.progress ?: return label
+    return when {
+        doc.processingStage != "ocr" -> label
+        p.pagesTotal > 1 -> "$label · ${p.pagesDone} of ${p.pagesTotal} pages"
+        p.pagesTotal == 0 && p.pagesDone > 1 -> "$label · ${p.pagesDone} pages read"
+        else -> label
     }
 }
 

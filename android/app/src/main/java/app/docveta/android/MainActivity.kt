@@ -86,6 +86,13 @@ class MainActivity : FragmentActivity() {
         leftAt = System.currentTimeMillis()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // With the app lock on, the recent-apps screen must not show the document that was open.
+        // (Android 13+; screenshots you take yourself still work.)
+        if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(!container.session.appLock)
+    }
+
     override fun onStart() {
         super.onStart()
         // Coming back after a while: ask again if the person turned on the lock.

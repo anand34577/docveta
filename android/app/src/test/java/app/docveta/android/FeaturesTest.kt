@@ -12,6 +12,7 @@ import app.docveta.android.data.Repository
 import app.docveta.android.data.SessionStore
 import app.docveta.android.data.bulk
 import app.docveta.android.data.changePassword
+import app.docveta.android.data.datePresets
 import app.docveta.android.data.editPages
 import app.docveta.android.data.saveOidc
 import java.nio.file.Files
@@ -52,6 +53,51 @@ class DocQueryTest {
         assertEquals("-date", q.sort)
         assertEquals(7, q.filterCount) // space, two tags, sender, date range, untagged, status
         assertEquals(q, DocQuery.fromJson(q.toJson())) // and writes it back the same way
+    }
+
+    @Test
+    fun financialYearPresetsFollowTheMonth() {
+        // October: the financial year that started in April is the current one.
+        val oct = datePresets(java.time.LocalDate.of(2026, 10, 10))
+        assertEquals(listOf("This year", "Last year", "FY 2026–27", "FY 2025–26"), oct.map { it.first })
+        assertEquals(Triple("FY 2026–27", "2026-04-01", "2027-03-31"), oct[2])
+        // February: still in the year that started last April.
+        val feb = datePresets(java.time.LocalDate.of(2027, 2, 1))
+        assertEquals(Triple("FY 2026–27", "2026-04-01", "2027-03-31"), feb[2])
+        assertEquals(Triple("FY 2099–00", "2099-04-01", "2100-03-31"), datePresets(java.time.LocalDate.of(2099, 5, 1))[2])
+    }
+
+    @Test
+    fun cacheKeepsTheNewestCopiesWithinItsLimit() {
+        val dir = Files.createTempDirectory("docveta-cache").toFile()
+        fun file(name: String, bytes: Int, age: Long) = dir.resolve(name).apply { parentFile?.mkdirs(); writeBytes(ByteArray(bytes)); setLastModified(1_700_000_000_000 - age * 60_000) }
+        val oldest = file("a/old.pdf", 400, 30)
+        val middle = file("b/mid.pdf", 400, 20)
+        val newest = file("new.pdf", 400, 10)
+        val downloading = file("big.pdf.part", 5000, 40)
+        val kept = file("just-opened.pdf", 400, 50) // older than all, but the one being shown
+        app.docveta.android.data.trimCache(dir, 1300, keep = kept)
+        assertFalse(oldest.exists())
+        assertFalse(oldest.parentFile!!.exists()) // its empty folder goes too
+        assertTrue(middle.exists() && newest.exists() && kept.exists() && downloading.exists())
+        app.docveta.android.data.trimCache(dir, 10_000, keep = null) // under the limit: nothing goes
+        assertTrue(middle.exists() && newest.exists() && kept.exists())
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun remembersOpenedDocumentsNewestFirst() {
+        val s = SessionStore(MemoryStore())
+        s.rememberDoc("a", "Rent agreement")
+        s.rememberDoc("b", "Passport\tscan\n2026")
+        s.rememberDoc("a", "Rent agreement 2026") // opened again, renamed since
+        assertEquals(listOf("a" to "Rent agreement 2026", "b" to "Passport scan 2026"), s.recentDocs)
+        s.forgetDoc("a")
+        assertEquals(listOf("b" to "Passport scan 2026"), s.recentDocs)
+        (1..9).forEach { s.rememberDoc("d$it", "Doc $it") }
+        assertEquals(6, s.recentDocs.size)
+        s.signOut()
+        assertTrue(s.recentDocs.isEmpty())
     }
 
     @Test

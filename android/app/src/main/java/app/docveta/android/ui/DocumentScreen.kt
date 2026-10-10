@@ -93,6 +93,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
@@ -168,6 +169,15 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
         load()
     }
 
+    /**
+     * Coming back to the screen: look again, unless a load is still running. The screen also
+     * "comes back" when its opening animation ends, and starting over there threw away the
+     * file that was halfway down.
+     */
+    fun refresh() {
+        if (doc != null && poll?.isActive != true) load()
+    }
+
     /** Loads the document; while it's still being read, looks again every few seconds (one loop at a time). */
     fun load() {
         poll?.cancel()
@@ -178,6 +188,7 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
                     val first = doc == null
                     doc = d
                     error = null
+                    if (d.deletedAt == null) c.session.rememberDoc(d.id, d.title)
                     loadFile(d)
                     notes = runCatching { c.repo.notes(id) }.getOrDefault(notes)
                     suggestions = if (d.suggestionCount > 0) runCatching { c.repo.suggestions(id) }.getOrDefault(emptyList()) else emptyList()
@@ -185,6 +196,7 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
                     if (d.status != "processing") break
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
+                    if ((e as? ApiException)?.status == 404) c.session.forgetDoc(id)
                     error = e.friendly()
                     break
                 }
@@ -229,10 +241,17 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
         viewModelScope.launch { loadFile(d) }
     }
 
+    // What is on its way to the server: the field saves on Done, on its tick and when it's left,
+    // and two of those for the same text must not become two requests.
+    private var savingTitle: String? = null
+    private var savingLocation: String? = null
+
     fun rename(title: String) {
         val d = doc ?: return
-        if (title.isBlank() || title.trim() == d.title) return
-        act { updated(c.repo.setTitle(id, title.trim(), d.version)) }
+        val t = title.trim()
+        if (t.isEmpty() || t == d.title || t == savingTitle) return
+        savingTitle = t
+        act { try { updated(c.repo.setTitle(id, t, d.version)) } finally { savingTitle = null } }
     }
 
     fun setDate(iso: String?) = doc?.let { d -> act { updated(c.repo.setDate(id, iso, d.version)) } }
@@ -242,7 +261,12 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
     fun setField(fieldId: String, value: JsonElement) = doc?.let { d -> act { updated(c.repo.setCustomField(id, fieldId, value, d.version)) } }
     fun moveTo(spaceId: String) = doc?.let { d -> act { updated(c.repo.setSpace(id, spaceId, d.version)); message = "Moved" } }
     fun setLanguage(lang: String) = doc?.let { d -> act { updated(c.repo.setLanguage(id, lang, d.version)) } }
-    fun setLocation(where: String) = doc?.let { d -> if (where != d.physicalLocation) act { updated(c.repo.setLocation(id, where, d.version)) } }
+    fun setLocation(where: String) {
+        val d = doc ?: return
+        if (where == d.physicalLocation || where == savingLocation) return
+        savingLocation = where
+        act { try { updated(c.repo.setLocation(id, where, d.version)) } finally { savingLocation = null } }
+    }
     fun assignAsn() = act { val d = c.repo.assignAsn(id); updated(d); message = "Archive number ${d.asn} assigned. Write it on the paper original." }
 
     fun review(onDone: () -> Unit) = act {
@@ -253,12 +277,13 @@ class DocViewModel(private val c: AppContainer, val id: String) : ViewModel() {
 
     fun moveToTrash(onDone: () -> Unit) = act {
         c.repo.trash(id)
+        c.session.forgetDoc(id)
         gone = true
         onDone()
     }
 
     fun restore() = act { c.repo.restore(id); load() }
-    fun deleteForever(onDone: () -> Unit) = act { c.repo.deleteForever(id); gone = true; onDone() }
+    fun deleteForever(onDone: () -> Unit) = act { c.repo.deleteForever(id); c.session.forgetDoc(id); gone = true; onDone() }
     fun reprocess(force: Boolean) = act { c.repo.reprocess(id, force); message = if (force) "Reading the text again" else "Processing again"; load() }
     fun askAi() = act { c.repo.runAi(id); message = "Asked AI for suggestions. They appear here in a moment."; delay(4000); load() }
     fun unlock(password: String, onDone: (Boolean) -> Unit) = act {
@@ -338,7 +363,7 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit, onOpenDoc
         }
     }
     // Opening a page from Ask or a search result: start on the preview.
-    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { if (vm.doc != null) vm.load() }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { vm.refresh() }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snack) },
@@ -438,7 +463,7 @@ private fun Preview(vm: DocViewModel, doc: Document, ctx: Context, scope: kotlin
         if (doc.status == "processing") Row(Modifier.align(Alignment.TopCenter).padding(10.dp).clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.9f)).padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             androidx.compose.material3.CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.inverseOnSurface)
             Spacer(Modifier.width(8.dp))
-            Text(stageLabel(doc.processingStage) + "…", color = MaterialTheme.colorScheme.inverseOnSurface, style = MaterialTheme.typography.labelMedium)
+            Text(processingLabel(doc) + "…", color = MaterialTheme.colorScheme.inverseOnSurface, style = MaterialTheme.typography.labelMedium)
         }
         if (find.open && isPdf) FindBar(find, Modifier.align(Alignment.TopCenter))
         androidx.activity.compose.BackHandler(find.open) { find.close() }
@@ -464,7 +489,11 @@ private fun Details(vm: DocViewModel, doc: Document, canEdit: Boolean) {
     Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         if (doc.status == "processing") Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(12.dp)).padding(12.dp)) {
             Column {
-                Text(stageLabel(doc.processingStage) + "…", style = MaterialTheme.typography.titleSmall)
+                Text(processingLabel(doc) + "…", style = MaterialTheme.typography.titleSmall)
+                val p = doc.progress
+                if (p != null && p.pagesTotal > 1 && doc.processingStage == "ocr") {
+                    LinearProgressIndicator(progress = { p.pagesDone.toFloat() / p.pagesTotal }, Modifier.fillMaxWidth().padding(vertical = 6.dp))
+                }
                 Text("You can already view, share and edit this document.", style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -478,7 +507,8 @@ private fun Details(vm: DocViewModel, doc: Document, canEdit: Boolean) {
         }
         if (vm.suggestions.isNotEmpty() && canEdit) SuggestionsCard(vm)
         OutlinedTextField(
-            title, { title = it }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth(), enabled = canEdit, singleLine = false, maxLines = 3,
+            // Leaving the field saves it, as on the web: a new title typed and then abandoned was lost.
+            title, { title = it }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused && canEdit) vm.rename(title) }, enabled = canEdit, singleLine = false, maxLines = 3,
             trailingIcon = { if (title.trim() != doc.title && title.isNotBlank()) IconButton({ vm.rename(title) }) { Icon(Icons.Filled.Check, "Save title") } },
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done), keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { vm.rename(title) }),
         )
@@ -511,7 +541,7 @@ private fun Details(vm: DocViewModel, doc: Document, canEdit: Boolean) {
             SelectField("Space", spaces.map { it.id to it.label }, doc.space.id, Modifier.fillMaxWidth(), enabled = canEdit, supporting = "Moving keeps tags and sender by matching names in the new space.") { if (it != doc.space.id) vm.moveTo(it) }
             SelectField("Language", languageOptions(doc.language), doc.language, Modifier.fillMaxWidth(), enabled = canEdit, supporting = "Used for text recognition and search.") { vm.setLanguage(it) }
             OutlinedTextField(
-                location, { location = it }, label = { Text("Where is the paper original?") }, placeholder = { Text("e.g. Blue folder, cupboard 2") }, modifier = Modifier.fillMaxWidth(), enabled = canEdit, singleLine = true,
+                location, { location = it }, label = { Text("Where is the paper original?") }, placeholder = { Text("e.g. Blue folder, cupboard 2") }, modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused && canEdit) vm.setLocation(location) }, enabled = canEdit, singleLine = true,
                 trailingIcon = { if (location != doc.physicalLocation) IconButton({ vm.setLocation(location) }) { Icon(Icons.Filled.Check, "Save") } },
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done), keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { vm.setLocation(location) }),
             )
@@ -667,6 +697,7 @@ private fun NotesTab(vm: DocViewModel, canEdit: Boolean) {
     val c = LocalContainer.current
     var text by remember { mutableStateOf("") }
     var mentioning by remember { mutableStateOf(false) }
+    val confirm = rememberConfirmation()
     val people = rememberLoader { runCatching { c.repo.directory() }.getOrDefault(emptyList()) }
     Column(Modifier.fillMaxSize().imePadding()) {
         LazyColumn(Modifier.weight(1f), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -676,7 +707,7 @@ private fun NotesTab(vm: DocViewModel, canEdit: Boolean) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(n.author?.name ?: "Former member", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
                         Text(timeAgo(n.createdAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (n.canDelete) IconButton({ vm.deleteNote(n) }, Modifier.size(28.dp)) { Icon(Icons.Outlined.Delete, "Delete note", Modifier.size(16.dp)) }
+                        if (n.canDelete) IconButton({ confirm.ask("Delete this note?", "This can't be undone.", "Delete note", true) { vm.deleteNote(n) } }, Modifier.size(28.dp)) { Icon(Icons.Outlined.Delete, "Delete note", Modifier.size(16.dp)) }
                     }
                     SelectionContainer { Text(n.body.replace(mentionRe, "@$1"), style = MaterialTheme.typography.bodyMedium) }
                 }

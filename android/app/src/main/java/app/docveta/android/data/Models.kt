@@ -11,6 +11,10 @@ import kotlinx.serialization.json.JsonObject
 @Serializable
 data class Ref(val id: String, val name: String, val color: String = "")
 
+/** Pages read so far; pagesTotal is 0 when only the worker knows the page count. */
+@Serializable
+data class Progress(@SerialName("pages_done") val pagesDone: Int = 0, @SerialName("pages_total") val pagesTotal: Int = 0)
+
 @Serializable
 data class Space(
     val id: String,
@@ -85,6 +89,7 @@ data class Document(
     val status: String = "ready", // processing | ready | failed | needs_password
     @SerialName("processing_stage") val processingStage: String = "",
     @SerialName("processing_error") val processingError: String = "",
+    val progress: Progress? = null, // while text is being read
     @SerialName("mime_type") val mimeType: String = "",
     @SerialName("size_bytes") val sizeBytes: Long = 0,
     @SerialName("original_filename") val originalFilename: String = "",

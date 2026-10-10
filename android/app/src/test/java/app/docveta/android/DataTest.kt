@@ -9,8 +9,14 @@ import app.docveta.android.data.MemoryStore
 import app.docveta.android.data.SessionStore
 import app.docveta.android.data.normalizeServerUrl
 import app.docveta.android.data.pkceChallenge
+import app.docveta.android.data.zip
 import app.docveta.android.upload.TusUploader
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -137,6 +143,58 @@ class ApiTest {
         } catch (_: ApiException) {
         }
         assertTrue(told)
+    }
+
+    @Test
+    fun theSameFileFetchedTwiceAtOnceArrivesOnce(): Unit = runBlocking {
+        // Opening a document used to fetch its file twice; the second fetch then failed to save
+        // it ("Something went wrong, try again") although the first had put it in place.
+        val bytes = ByteArray(300_000) { (it % 251).toByte() }
+        repeat(2) { server.enqueue(MockResponse().setBody(okio.Buffer().write(bytes)).throttleBody(60_000, 100, java.util.concurrent.TimeUnit.MILLISECONDS)) }
+        val dir = java.nio.file.Files.createTempDirectory("docveta-dl").toFile()
+        val dest = File(dir, "doc.pdf")
+        val api = ApiClient(session)
+        listOf(1, 2).map { async(Dispatchers.IO) { api.download("/documents/x/file", emptyMap(), dest) } }.forEach { it.await() }
+        assertTrue(dest.readBytes().contentEquals(bytes))
+        assertEquals(listOf("doc.pdf"), dir.list()!!.toList()) // no half-files left behind
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun asksForAZipOfSeveralDocumentsWithAPost(): Unit = runBlocking {
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/zip").setBody("PK-zip-bytes"))
+        val cache = java.nio.file.Files.createTempDirectory("docveta-zip").toFile()
+        val repo = app.docveta.android.data.Repository(ApiClient(session), session, cache)
+        val f = repo.zip(listOf("a", "b"))
+        assertEquals("PK-zip-bytes", f.readText())
+        assertTrue(f.name.startsWith("docveta-documents-") && f.name.endsWith(".zip"))
+        val r = server.takeRequest()
+        assertEquals("POST", r.method)
+        assertEquals("/api/v1/documents/archive", r.path)
+        assertEquals("""{"ids":["a","b"]}""", r.body.readUtf8())
+        cache.deleteRecursively()
+    }
+
+    @Test
+    fun leavingStopsADownloadWithoutAnError(): Unit = runBlocking {
+        server.enqueue(MockResponse().setBody(okio.Buffer().write(ByteArray(2_000_000))).throttleBody(20_000, 100, java.util.concurrent.TimeUnit.MILLISECONDS))
+        val dir = java.nio.file.Files.createTempDirectory("docveta-dl").toFile()
+        val dest = File(dir, "big.pdf")
+        var failure: Throwable? = null
+        val job = launch(Dispatchers.IO) {
+            try {
+                ApiClient(session).download("/documents/x/file", emptyMap(), dest)
+            } catch (e: ApiException) {
+                failure = e
+            }
+        }
+        delay(400)
+        val started = System.currentTimeMillis()
+        job.cancelAndJoin()
+        assertTrue("the download went on after it was cancelled", System.currentTimeMillis() - started < 3000) // all of it would take 10 s
+        assertNull(failure)
+        assertTrue(dir.list()!!.isEmpty())
+        dir.deleteRecursively()
     }
 
     @Test
