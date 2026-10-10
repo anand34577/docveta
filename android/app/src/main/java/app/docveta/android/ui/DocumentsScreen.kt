@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Bookmark
+import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.automirrored.outlined.CallMerge
 import androidx.compose.material.icons.outlined.Clear
@@ -502,11 +503,21 @@ private fun DocumentBrowser(
     var filters by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val session = LocalContainer.current.session
+    val container = LocalContainer.current
+    val session = container.session
     var recent by remember { mutableStateOf(session.recentSearches) }
     var recentDocs by remember { mutableStateOf(session.recentDocs) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { recentDocs = session.recentDocs } // back from a document
     var tips by remember { mutableStateOf(false) }
+    // Document types that have documents, most used first. The same name can exist in several
+    // spaces: it is one chip that filters by all of them.
+    val typeLoader = rememberLoader(vm.query.spaceId) { runCatching { container.repo.taxonomy("document-types", vm.query.spaceId) }.getOrDefault(emptyList()) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { typeLoader.reload() } // a document may have got a new type meanwhile
+    val types = remember(typeLoader.data) {
+        typeLoader.data.orEmpty().filter { it.documentCount > 0 }.groupBy { it.name.lowercase() }
+            .map { (_, same) -> Triple(same.first().name, same.map { it.id }, same.sumOf { it.documentCount }) }
+            .sortedWith(compareByDescending<Triple<String, List<String>, Int>> { it.third }.thenBy { it.first.lowercase() }).take(12)
+    }
     val openDoc: (String) -> Unit = { id -> vm.opened(); recent = session.recentSearches; onOpen(id) }
     val nearEnd by remember { derivedStateOf { val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0; last >= vm.items.size - 6 } }
     LaunchedEffect(nearEnd, vm.items.size) { if (nearEnd && vm.items.isNotEmpty()) vm.loadMore() }
@@ -519,7 +530,6 @@ private fun DocumentBrowser(
 
     val undo = remember { SnackbarHostState() }
     val undoScope = rememberCoroutineScope()
-    val container = LocalContainer.current
     Column(Modifier.fillMaxSize()) {
         if (vm.selecting) SelectionBar(vm, onTrashed = { ids, msg -> undoScope.launch { offerUndoTrash(undo, container, vm, ids, msg) } })
         else {
@@ -562,6 +572,15 @@ private fun DocumentBrowser(
                 chipsEnd()
                 if (vm.query.filterCount > 0) item(key = "clear") { TextButton({ vm.setQuery(vm.query.clearedFilters()) }) { Text("Clear") } }
                 item(key = "tips") { androidx.compose.material3.AssistChip({ tips = true }, label = { Text("Search tips") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.HelpOutline, null, Modifier.size(16.dp)) }) }
+            }
+            // Browse by what documents are: one tap shows all of a type, another shows everything again.
+            if (title == null && types.isNotEmpty()) LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(types, key = { "type-${it.first}" }) { (name, ids, count) ->
+                    val on = vm.query.typeIds.isNotEmpty() && ids.containsAll(vm.query.typeIds)
+                    FilterChip(on, { vm.setQuery(vm.query.copy(typeIds = if (on) emptyList() else ids)) },
+                        label = { Text("$name · $count", Modifier.widthIn(max = 200.dp), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Outlined.Category, "Document type", Modifier.size(16.dp)) })
+                }
             }
         }
         Spacer(Modifier.height(4.dp))

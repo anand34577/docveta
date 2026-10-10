@@ -29,6 +29,11 @@ data class Space(
     @SerialName("read_asn_barcodes") val readAsnBarcodes: Boolean = false,
     @SerialName("ai_policy") val aiPolicy: String = "off", // off | local_only | any
     @SerialName("ai_apply_mode") val aiApplyMode: String = "suggest", // suggest | auto
+    @SerialName("ai_new_tags") val aiNewTags: Boolean = true,
+    @SerialName("ai_auto_confidence") val aiAutoConfidence: Int = 85, // % sure before "apply automatically" applies
+    @SerialName("ai_new_confidence") val aiNewConfidence: Int = 60, // % sure before proposing a name that doesn't exist yet
+    @SerialName("ai_max_new_tags") val aiMaxNewTags: Int = 3,
+    @SerialName("ai_new_types") val aiNewTypes: Boolean = true,
     @SerialName("default_language") val defaultLanguage: String = "en",
 ) {
     val isPersonal get() = kind == "personal"
@@ -509,6 +514,15 @@ data class AuditEntry(
     val details: JsonObject? = null,
 )
 
+/** Server-wide AI settings (Administration → AI). */
+@Serializable
+data class AiTuning(
+    @SerialName("common_types") val commonTypes: List<String> = emptyList(),
+    @SerialName("ask_sources") val askSources: Int = 8,
+    @SerialName("ask_sources_per_document") val askSourcesPerDocument: Int = 3,
+    @SerialName("suggest_text_tokens") val suggestTextTokens: Int = 4000,
+)
+
 @Serializable
 data class AiProvider(
     val id: String,
@@ -521,6 +535,7 @@ data class AiProvider(
     val enabled: Boolean = true,
     @SerialName("timeout_seconds") val timeoutSeconds: Int = 60,
     @SerialName("max_concurrency") val maxConcurrency: Int = 2,
+    @SerialName("context_tokens") val contextTokens: Int = 8192,
     @SerialName("has_api_key") val hasApiKey: Boolean = false,
     @SerialName("last_error") val lastError: String = "",
     @SerialName("last_ok_at") val lastOkAt: String? = null,

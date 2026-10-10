@@ -66,6 +66,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import app.docveta.android.data.AdminUser
 import app.docveta.android.data.AiProvider
+import app.docveta.android.data.AiTuning
 import app.docveta.android.data.ApiException
 import app.docveta.android.data.OidcConfig
 import app.docveta.android.data.ProcessingSettings
@@ -73,6 +74,7 @@ import app.docveta.android.data.SmtpConfig
 import app.docveta.android.data.WatchedFolder
 import app.docveta.android.data.adminUsers
 import app.docveta.android.data.aiProviders
+import app.docveta.android.data.aiTuning
 import app.docveta.android.data.audit
 import app.docveta.android.data.createInvite
 import app.docveta.android.data.createUser
@@ -87,8 +89,10 @@ import app.docveta.android.data.officeInfo
 import app.docveta.android.data.oidcConfig
 import app.docveta.android.data.processingSettings
 import app.docveta.android.data.reindex
+import app.docveta.android.data.resetAiTuning
 import app.docveta.android.data.resetUserTwoFactor
 import app.docveta.android.data.retryTask
+import app.docveta.android.data.saveAiTuning
 import app.docveta.android.data.revokeInvite
 import app.docveta.android.data.rotateWorkerToken
 import app.docveta.android.data.saveFolder
@@ -492,9 +496,58 @@ fun AdminAiScreen(onBack: () -> Unit) {
                     Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(8.dp)); Text("Prepare existing documents")
                 }
             }
+            if (list.isNotEmpty()) AiTuningSection()
         }
     }
     if (adding || editing != null) ProviderDialog(editing, first = providers.data.isNullOrEmpty(), onDismiss = { adding = false; editing = null }) { providers.reload(); c.refreshAi() }
+}
+
+/** Server-wide AI settings: what every space's AI starts from. */
+@Composable
+private fun AiTuningSection() {
+    val c = LocalContainer.current
+    val run = rememberRunner()
+    val confirm = rememberConfirmation()
+    val saved = rememberLoader { c.repo.aiTuning() }
+    var types by remember { mutableStateOf("") }
+    var sources by remember { mutableStateOf("") }
+    var perDoc by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    fun show(t: AiTuning) { types = t.commonTypes.joinToString("\n"); sources = t.askSources.toString(); perDoc = t.askSourcesPerDocument.toString(); text = t.suggestTextTokens.toString(); error = null }
+    LaunchedEffect(saved.data) { saved.data?.let(::show) }
+    val t = saved.data ?: return
+    val typeList = types.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    val dirty = typeList != t.commonTypes || sources != t.askSources.toString() || perDoc != t.askSourcesPerDocument.toString() || text != t.suggestTextTokens.toString()
+    val number = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
+    val field = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+    SectionDivider()
+    SectionLabel("Tuning")
+    Hint("For every space. How sure AI must be and whether it may create tags and types is set per space (space → AI); how much a model can read at once is set on the provider (Context size).")
+    OutlinedTextField(types, { types = it }, field, label = { Text("Document types AI may suggest") }, minLines = 4, maxLines = 10,
+        supportingText = { Text("One per line. Offered to AI when none of a space's own types fits. Keep them broad (Identification); the specifics (Aadhaar, PAN) are tags.") })
+    OutlinedTextField(sources, { sources = it.filter(Char::isDigit).take(2) }, field, label = { Text("Passages an answer is made from") }, singleLine = true, keyboardOptions = number,
+        supportingText = { Text("For Ask. More gives fuller answers and needs a larger context size (2 to 20).") })
+    OutlinedTextField(perDoc, { perDoc = it.filter(Char::isDigit).take(2) }, field, label = { Text("Of those, from one document at most") }, singleLine = true, keyboardOptions = number)
+    OutlinedTextField(text, { text = it.filter(Char::isDigit).take(6) }, field, label = { Text("Text read for suggestions, at most (tokens)") }, singleLine = true, keyboardOptions = number,
+        supportingText = { Text("How far into a long document AI reads to file it: 4000 is about 16,000 English characters.") })
+    if (error != null) Text(error!!, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        TextButton({ confirm.ask("Go back to the built-in settings?", "The document types and numbers here return to what Docveta came with. Types and tags already on documents stay.", "Reset", false) { run.run("Back to the built-in settings") { c.repo.resetAiTuning(); saved.reload() } } }, enabled = !run.busy) { Text("Reset") }
+        Spacer(Modifier.weight(1f))
+        if (dirty) TextButton({ show(t) }) { Text("Discard") }
+        androidx.compose.material3.Button({
+            error = null
+            // A value the server refuses is explained under the fields, not in a passing toast.
+            run.run("Saved", onError = { e -> e.fields.firstOrNull()?.let { error = it.message; true } ?: false }) {
+                c.repo.saveAiTuning(buildJsonObject {
+                    put("common_types", kotlinx.serialization.json.JsonArray(typeList.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+                    put("ask_sources", sources.toIntOrNull() ?: 0); put("ask_sources_per_document", perDoc.toIntOrNull() ?: 0); put("suggest_text_tokens", text.toIntOrNull() ?: 0)
+                })
+                saved.reload()
+            }
+        }, enabled = dirty && !run.busy) { Text("Save") }
+    }
 }
 
 @Composable
@@ -510,6 +563,7 @@ private fun ProviderDialog(p: AiProvider?, first: Boolean, onDismiss: () -> Unit
     var default by remember { mutableStateOf(p?.isDefault ?: first) }
     var timeout by remember { mutableStateOf((p?.timeoutSeconds ?: 60).toString()) }
     var conc by remember { mutableStateOf((p?.maxConcurrency ?: 2).toString()) }
+    var context by remember { mutableStateOf((p?.contextTokens ?: 8192).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     AlertDialog(
@@ -526,6 +580,8 @@ private fun ProviderDialog(p: AiProvider?, first: Boolean, onDismiss: () -> Unit
                 OutlinedTextField(embed, { embed = it }, label = { Text("Embedding model") }, supportingText = { Text("Used for meaning-based search and similar documents.") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(timeout, { timeout = it.filter(Char::isDigit) }, label = { Text("Waits up to (seconds)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(conc, { conc = it.filter(Char::isDigit) }, label = { Text("Requests at once") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(context, { context = it.filter(Char::isDigit) }, label = { Text("Context size (tokens)") }, supportingText = { Text("How much text the chat model can take at once. Long documents are shortened to fit. Local models often run with 4096.") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) { Text("Runs on my own hardware"); Text("Spaces set to “local only” may use it.", style = MaterialTheme.typography.bodySmall) }
                     Switch(local, { local = it })
@@ -541,7 +597,7 @@ private fun ProviderDialog(p: AiProvider?, first: Boolean, onDismiss: () -> Unit
                     try {
                         c.repo.saveProvider(p?.id, buildJsonObject {
                             put("name", name.trim()); put("base_url", url.trim()); put("chat_model", chat.trim()); put("embedding_model", embed.trim())
-                            put("is_local", local); put("is_default", default); put("timeout_seconds", timeout.toIntOrNull() ?: 60); put("max_concurrency", conc.toIntOrNull() ?: 2)
+                            put("is_local", local); put("is_default", default); put("timeout_seconds", timeout.toIntOrNull() ?: 60); put("max_concurrency", conc.toIntOrNull() ?: 2); put("context_tokens", context.toIntOrNull() ?: 8192)
                             if (key.isNotBlank()) put("api_key", key.trim())
                         })
                         onSaved()
