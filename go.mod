@@ -1,6 +1,6 @@
 module github.com/anand34577/docveta
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
@@ -65,7 +65,7 @@ require (
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
