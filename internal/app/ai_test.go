@@ -173,7 +173,8 @@ func TestAISuggestionsAndSearch(t *testing.T) {
 	if got := e.suggestions(d0.ID); len(got) != 0 {
 		t.Fatalf("AI ran in a space where it is off: %+v", got)
 	}
-	c.do("PATCH", "/api/v1/spaces/"+e.family, map[string]any{"ai_policy": "local_only"}, 200, nil)
+	// This space keeps to its own tags: the AI may not add new ones.
+	c.do("PATCH", "/api/v1/spaces/"+e.family, map[string]any{"ai_policy": "local_only", "ai_new_tags": false}, 200, nil)
 	c.do("POST", "/api/v1/documents/"+d0.ID+"/ai", nil, 204, nil)
 	time.Sleep(time.Second)
 	if got := e.suggestions(d0.ID); len(got) != 0 {
@@ -196,7 +197,7 @@ func TestAISuggestionsAndSearch(t *testing.T) {
 			}
 		}
 	}
-	if tagNames != 1 { // "Invented tag" doesn't exist, so it must be dropped
+	if tagNames != 1 { // "Invented tag" doesn't exist and new tags are off, so it must be dropped
 		t.Errorf("tag suggestions: %d, want 1 (%+v)", tagNames, got)
 	}
 	for _, f := range []string{"correspondent", "document_type", "document_date"} {
@@ -356,6 +357,160 @@ func TestAISuggestionsAndSearch(t *testing.T) {
 	c.do("POST", "/api/v1/ai/ask", map[string]any{"question": "anything"}, 503, &problem)
 	if problem.Code != "ai_off" {
 		t.Errorf("ask with AI off: %+v", problem)
+	}
+}
+
+// The AI makes up tags and a document type for a space that has none, and a provider that
+// is down never keeps a document from becoming ready.
+func TestAINewTagsAndTypes(t *testing.T) {
+	e := newEnv(t)
+	c := e.c
+	fake := newFakeLLM(t)
+	var prov struct {
+		ID      string `json:"id"`
+		Context int    `json:"context_tokens"`
+	}
+	// A small local model: prompts are cut to its 4096-token window.
+	c.do("POST", "/api/v1/admin/ai/providers", map[string]any{"name": "Tiny", "base_url": fake.srv.URL + "/v1", "context_tokens": 100}, 422, nil)
+	c.do("POST", "/api/v1/admin/ai/providers", map[string]any{"name": "Fake", "base_url": fake.srv.URL + "/v1", "chat_model": "fake-chat", "context_tokens": 4096}, 201, &prov)
+	if prov.Context != 4096 {
+		t.Fatalf("context size: %+v", prov)
+	}
+	var sp struct {
+		NewTags bool `json:"ai_new_tags"`
+	}
+	c.do("PATCH", "/api/v1/spaces/"+e.family, map[string]any{"ai_policy": "any"}, 200, &sp)
+	if !sp.NewTags {
+		t.Fatal("new tags should be allowed unless a space turns them off")
+	}
+
+	d := c.upload(e.family, "bill.pdf", minimalPDF("BESCOM electricity bill August with usage of 342 units"))
+	c.waitStatus(d.ID, "ready")
+	e.waitFor("suggestions", func() bool { return len(e.suggestions(d.ID)) > 0 })
+	newTags := map[string]bool{}
+	var typeSug sugDTO
+	for _, s := range e.suggestions(d.ID) {
+		var v struct {
+			Name string `json:"name"`
+			ID   string `json:"id"`
+			New  bool   `json:"new"`
+		}
+		_ = json.Unmarshal(s.Value, &v)
+		switch s.Field {
+		case "tag":
+			if !v.New || v.ID != "" {
+				t.Errorf("tag %q should be marked new: %s", v.Name, s.Value)
+			}
+			newTags[v.Name] = true
+		case "document_type":
+			if !v.New || v.Name != "Bill" {
+				t.Errorf("document type: %s", s.Value)
+			}
+			typeSug = s
+		}
+	}
+	if !newTags["Utilities"] || !newTags["Invented tag"] || len(newTags) != 2 {
+		t.Fatalf("new tag suggestions: %+v", newTags)
+	}
+	// Nothing exists until a person agrees.
+	var tags, types jsonList[struct {
+		Name  string `json:"name"`
+		Count int    `json:"document_count"`
+	}]
+	c.do("GET", "/api/v1/tags?space_id="+e.family, nil, 200, &tags)
+	if len(tags.Items) != 0 {
+		t.Fatalf("tags were created before being accepted: %+v", tags.Items)
+	}
+	c.do("POST", "/api/v1/documents/"+d.ID+"/suggestions/accept", map[string]any{}, 204, nil)
+	var full struct {
+		Type *struct{ Name string }  `json:"document_type"`
+		Tags []struct{ Name string } `json:"tags"`
+	}
+	c.do("GET", "/api/v1/documents/"+d.ID, nil, 200, &full)
+	if full.Type == nil || full.Type.Name != "Bill" || len(full.Tags) != 2 || typeSug.ID == "" {
+		t.Fatalf("after accepting: %+v", full)
+	}
+	c.do("GET", "/api/v1/document-types?space_id="+e.family, nil, 200, &types)
+	if len(types.Items) != 1 || types.Items[0].Name != "Bill" || types.Items[0].Count != 1 {
+		t.Errorf("document types: %+v", types.Items)
+	}
+
+	// The next one reuses them instead of making duplicates; in automatic mode the confident
+	// tags go straight on.
+	c.do("PATCH", "/api/v1/spaces/"+e.family, map[string]any{"ai_apply_mode": "auto"}, 200, nil)
+	d2 := c.upload(e.family, "second.pdf", minimalPDF("BESCOM power usage statement for September, bill number 77"))
+	c.waitStatus(d2.ID, "ready")
+	e.waitFor("auto-applied tags", func() bool {
+		c.do("GET", "/api/v1/documents/"+d2.ID, nil, 200, &full)
+		return len(full.Tags) == 2
+	})
+	c.do("GET", "/api/v1/tags?space_id="+e.family, nil, 200, &tags)
+	if len(tags.Items) != 2 || tags.Items[0].Count != 2 || tags.Items[1].Count != 2 {
+		t.Errorf("tags after the second document: %+v", tags.Items)
+	}
+
+	// The type came back with 70% and waits. A space that is content with 60% gets it applied.
+	c.do("PATCH", "/api/v1/spaces/"+e.family, map[string]any{"ai_auto_confidence": 10}, 422, nil)
+	var tuned struct {
+		Auto     int  `json:"ai_auto_confidence"`
+		New      int  `json:"ai_new_confidence"`
+		MaxTags  int  `json:"ai_max_new_tags"`
+		NewTypes bool `json:"ai_new_types"`
+	}
+	c.do("PATCH", "/api/v1/spaces/"+e.family, map[string]any{"ai_auto_confidence": 60}, 200, &tuned)
+	if tuned.Auto != 60 || tuned.New != 60 || tuned.MaxTags != 3 || !tuned.NewTypes {
+		t.Fatalf("space tuning: %+v", tuned)
+	}
+	c.do("POST", "/api/v1/documents/"+d2.ID+"/ai", nil, 204, nil)
+	e.waitFor("the type to be applied at 60%", func() bool {
+		c.do("GET", "/api/v1/documents/"+d2.ID, nil, 200, &full)
+		return full.Type != nil && full.Type.Name == "Bill"
+	})
+
+	// Server-wide settings: admins only, checked, and back to the defaults on request.
+	var tune struct {
+		Types   []string `json:"common_types"`
+		Sources int      `json:"ask_sources"`
+		PerDoc  int      `json:"ask_sources_per_document"`
+		Text    int      `json:"suggest_text_tokens"`
+	}
+	c.do("GET", "/api/v1/admin/ai/settings", nil, 200, &tune)
+	if tune.Sources != 8 || tune.PerDoc != 3 || tune.Text != 4000 || len(tune.Types) < 10 || tune.Types[0] != "Identification" {
+		t.Fatalf("default AI settings: %+v", tune)
+	}
+	c.do("PUT", "/api/v1/admin/ai/settings", map[string]any{"ask_sources": 1}, 422, nil)
+	c.do("PUT", "/api/v1/admin/ai/settings", map[string]any{"common_types": []string{"Paper", " paper ", ""}, "ask_sources": 4, "ask_sources_per_document": 2}, 200, &tune)
+	if len(tune.Types) != 1 || tune.Types[0] != "Paper" || tune.Sources != 4 || tune.PerDoc != 2 || tune.Text != 4000 {
+		t.Errorf("saved AI settings: %+v", tune)
+	}
+	c.do("GET", "/api/v1/admin/ai/settings", nil, 200, &tune)
+	if len(tune.Types) != 1 || tune.Sources != 4 {
+		t.Errorf("AI settings didn't stick: %+v", tune)
+	}
+	c.do("DELETE", "/api/v1/admin/ai/settings", nil, 200, &tune)
+	if tune.Sources != 8 || len(tune.Types) < 10 {
+		t.Errorf("reset AI settings: %+v", tune)
+	}
+
+	// The AI server goes away: documents are read and become ready all the same.
+	fake.srv.Close()
+	d3 := c.upload(e.family, "third.pdf", minimalPDF("BESCOM notice about a planned outage in October"))
+	c.waitStatus(d3.ID, "ready")
+	c.do("POST", "/api/v1/documents/"+d3.ID+"/ai", nil, 204, nil)
+	var provs jsonList[struct {
+		LastError string `json:"last_error"`
+	}]
+	e.waitFor("the provider's error to be recorded", func() bool {
+		c.do("GET", "/api/v1/admin/ai/providers", nil, 200, &provs)
+		return len(provs.Items) == 1 && provs.Items[0].LastError != ""
+	})
+	c.do("GET", "/api/v1/documents/"+d3.ID, nil, 200, &full)
+	var list struct {
+		Items []docDTO `json:"items"`
+	}
+	c.do("GET", "/api/v1/documents?q=outage", nil, 200, &list)
+	if len(list.Items) != 1 || len(e.suggestions(d3.ID)) != 0 {
+		t.Errorf("with the AI server down: found %d documents, %d suggestions", len(list.Items), len(e.suggestions(d3.ID)))
 	}
 }
 

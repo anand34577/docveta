@@ -70,6 +70,20 @@ func (a *API) registerAI(mux router) {
 		}
 		return a.AI.TestProvider(r.Context(), p, id)
 	}))
+	mux.HandleFunc("GET /api/v1/admin/ai/settings", handle(func(r *http.Request, p *auth.Principal) (*ai.Tuning, error) {
+		return a.AI.GetTuning(r.Context(), p)
+	}))
+	mux.HandleFunc("PUT /api/v1/admin/ai/settings", handle(func(r *http.Request, p *auth.Principal) (*ai.Tuning, error) {
+		in, err := decode[json.RawMessage](r)
+		if err != nil {
+			return nil, err
+		}
+		return a.AI.SetTuning(r.Context(), p, in)
+	}))
+	// Back to the built-in settings.
+	mux.HandleFunc("DELETE /api/v1/admin/ai/settings", handle(func(r *http.Request, p *auth.Principal) (*ai.Tuning, error) {
+		return a.AI.ResetTuning(r.Context(), p)
+	}))
 	mux.HandleFunc("POST /api/v1/admin/ai/reindex", handleAction(func(r *http.Request, p *auth.Principal) (map[string]int, error) {
 		ids, err := a.AI.MissingEmbeddings(r.Context(), p)
 		if err != nil {
