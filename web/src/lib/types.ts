@@ -470,6 +470,8 @@ export interface Conversation {
   id: UUID;
   title: string;
   updated_at: string;
+  /** The documents it is about; empty: all of them. */
+  document_ids?: UUID[];
 }
 
 export interface ConversationMessage {

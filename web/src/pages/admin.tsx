@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useParams } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Bell, Brain, Cpu, Database, FileStack, FolderSync, KeyRound, Mail, Plus, RotateCw, ScrollText, Server, ShieldOff, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
@@ -10,7 +10,7 @@ import { useCurrentUser } from "@/components/app-shell";
 import { SecretReveal, SettingsCard, SettingsLayout } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
 import { Field, Input, NativeSelect } from "@/components/ui/input";
-import { Avatar, Badge, EmptyState, Skeleton, SwitchRow } from "@/components/ui/misc";
+import { Avatar, Badge, EmptyState, LoadMore, Skeleton, SwitchRow } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { confirm } from "@/components/ui/confirm";
 import { Notifications } from "./settings";
@@ -214,15 +214,26 @@ function UserDialog({ user, onClose, onSaved }: { user: User | null; onClose: ()
 
 /* ------------------------------------------------------------------ Processing */
 
+const taskPageSize = 50;
+
 function ProcessingAdmin() {
   const qc = useQueryClient();
   const workers = useQuery({ queryKey: ["workers"], queryFn: () => api.get<{ items: Worker[] }>("/admin/workers").then((r) => r.items), refetchInterval: 10_000 });
-  const [status, setStatus] = React.useState("");
+  const [status, setStatusRaw] = React.useState("");
+  // Pages go forward by cursor; the cursors of pages already seen make "Previous" work.
+  const [cursors, setCursors] = React.useState<string[]>([""]);
+  const cursor = cursors[cursors.length - 1];
+  const setStatus = (v: string) => {
+    setStatusRaw(v);
+    setCursors([""]);
+  };
   const tasks = useQuery({
-    queryKey: ["tasks", status],
-    queryFn: () => api.get<{ items: TaskView[]; stats: QueueStats }>("/admin/tasks", { status, limit: 100 }),
+    queryKey: ["tasks", status, cursor],
+    queryFn: () => api.get<{ items: TaskView[]; stats: QueueStats; next_cursor: string | null }>("/admin/tasks", { status, limit: taskPageSize, cursor: cursor || undefined }),
+    placeholderData: keepPreviousData,
     refetchInterval: 5000,
   });
+  const pageNo = cursors.length;
   const [newWorker, setNewWorker] = React.useState(false);
   const [token, setToken] = React.useState<{ name: string; token: string } | null>(null);
 
@@ -336,17 +347,40 @@ function ProcessingAdmin() {
       <SettingsCard
         title="Recent tasks"
         actions={
+          <>
+          {status === "failed" && (tasks.data?.items.length ?? 0) > 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                if (!(await confirm({ title: "Retry every failed task?", body: "Use this after fixing what made them fail, such as a worker that was offline.", confirmLabel: "Retry all" }))) return;
+                void action(async () => {
+                  const r = await api.post<{ retried: number }>("/admin/tasks/retry-failed");
+                  toast.success(`Queued ${r.retried} task${r.retried === 1 ? "" : "s"} again`);
+                  setCursors([""]);
+                });
+              }}
+            >
+              <RotateCw /> Retry all failed
+            </Button>
+          )}
           <NativeSelect value={status} onChange={(e) => setStatus(e.target.value)} className="h-8 w-auto text-[13px]">
             <option value="">All</option>
             <option value="queued">Waiting</option>
             <option value="leased">In progress</option>
             <option value="failed">Failed</option>
             <option value="done">Done</option>
+            <option value="cancelled">Cancelled</option>
           </NativeSelect>
+          </>
         }
       >
-        {(tasks.data?.items ?? []).length === 0 ? (
-          <EmptyState icon={<Activity />} title="No tasks" className="py-6" />
+        {tasks.isLoading ? (
+          <div className="space-y-2 py-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-9" />)}</div>
+        ) : tasks.isError ? (
+          <EmptyState icon={<Activity />} title="Couldn't load tasks" className="py-6" action={<Button size="sm" onClick={() => tasks.refetch()}>Try again</Button>}>{errorMessage(tasks.error)}</EmptyState>
+        ) : (tasks.data?.items ?? []).length === 0 && pageNo === 1 ? (
+          <EmptyState icon={<Activity />} title={status ? "No tasks with this status" : "No tasks"} className="py-6" />
         ) : (
           <div className="-mx-5 overflow-x-auto">
             <table className="w-full text-left text-[13px]">
@@ -388,6 +422,21 @@ function ProcessingAdmin() {
                 ))}
               </tbody>
             </table>
+            {(pageNo > 1 || tasks.data?.next_cursor) && (
+              <div className="flex items-center justify-between gap-2 border-t border-border px-5 pt-3 text-xs text-subtle">
+                <span>
+                  Page {pageNo} · {taskPageSize} per page{tasks.isFetching && tasks.isPlaceholderData ? " · loading…" : ""}
+                </span>
+                <div className="flex gap-1">
+                  <Button size="sm" variant="ghost" disabled={pageNo === 1} onClick={() => setCursors((c) => c.slice(0, -1))}>
+                    Previous
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={!tasks.data?.next_cursor || tasks.isPlaceholderData} onClick={() => setCursors((c) => [...c, tasks.data!.next_cursor!])}>
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </SettingsCard>
@@ -789,7 +838,13 @@ function ServerAddressCard() {
 
 function AuditAdmin() {
   const [action, setAction] = React.useState("");
-  const q = useQuery({ queryKey: ["audit", action], queryFn: () => api.get<{ items: AuditEntry[] }>("/admin/audit", { action, limit: 200 }).then((r) => r.items) });
+  const q = useInfiniteQuery({
+    queryKey: ["audit", action],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.get<{ items: AuditEntry[] }>("/admin/audit", { action, limit: 100, before: pageParam || undefined }).then((r) => r.items),
+    getNextPageParam: (last) => (last.length === 100 ? last[last.length - 1].id : undefined),
+  });
+  const entries = React.useMemo(() => q.data?.pages.flat() ?? [], [q.data]);
   return (
     <SettingsCard
       title="Audit log"
@@ -806,11 +861,16 @@ function AuditAdmin() {
         </NativeSelect>
       }
     >
-      {(q.data ?? []).length === 0 ? (
-        <EmptyState title="Nothing logged yet" className="py-6" />
+      {q.isLoading ? (
+        <div className="space-y-2 py-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
+      ) : q.isError ? (
+        <EmptyState title="Couldn't load the audit log" className="py-6" action={<Button size="sm" onClick={() => q.refetch()}>Try again</Button>}>{errorMessage(q.error)}</EmptyState>
+      ) : entries.length === 0 ? (
+        <EmptyState title={action ? "Nothing of this kind logged" : "Nothing logged yet"} className="py-6" />
       ) : (
+        <>
         <ul className="divide-y divide-border">
-          {q.data!.map((e) => (
+          {entries.map((e) => (
             <li key={e.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5 text-[13px]">
               <span className={cn("font-medium", e.action.includes("failed") && "text-danger")}>{e.action}</span>
               <span className="text-muted">{e.actor_name || e.actor_type}</span>
@@ -823,6 +883,8 @@ function AuditAdmin() {
             </li>
           ))}
         </ul>
+        <LoadMore hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} onMore={() => q.fetchNextPage()} label="Show older" />
+        </>
       )}
     </SettingsCard>
   );
