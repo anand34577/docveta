@@ -5,6 +5,33 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-10
+
+### Added
+- **Ask keeps your chats.** Leaving Ask (opening a cited page, going to another screen) no longer
+  loses the open chat, and an answer being written keeps arriving. On the web the open chat is in
+  the address, so Back, reload and shared links return to it.
+- **Chat history** is grouped by day, can be searched by title and loads older chats as you
+  scroll. Chats can be renamed and deleted from the chat itself, and **Regenerate** asks the last
+  question again, replacing the answer.
+- **Chats about a document stay about it.** A chat started from a document answers follow-up
+  questions from that document, also when reopened later, and a document that fits the AI's
+  context is read whole instead of a few passages.
+- **Retry failed processing.** Administration → Processing → Failed has **Retry all failed**,
+  and the documents list filtered to failed has **Process failed again**.
+- **More actions on a selection:** **Suggest tags & type with AI** and **Process again** (web);
+  the Android selection menu can ask the AI too.
+
+### Changed
+- Recent tasks (Administration → Processing) shows 50 at a time with Previous/Next, and can show
+  cancelled tasks. The audit log and notifications load older entries as you scroll.
+- The Administration and Settings sidebar stays in place while the page scrolls.
+
+### Fixed
+- The AI now suggests a document type and sender. Small local models answered "none" every time,
+  and answers from models that ignore the requested format were thrown away.
+- Stopping the first answer in a new chat no longer loses the conversation.
+
 ## [0.14.0] - 2026-10-10
 
 ### Added
