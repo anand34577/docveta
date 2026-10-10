@@ -50,3 +50,7 @@ android/build/
 android/app/build/
 android/local.properties
 android/*.iml
+
+# Local tool state and locally built APKs (releases come from CI)
+.claude/
+android/app/release/
