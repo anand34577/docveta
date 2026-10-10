@@ -39,6 +39,7 @@ type Document struct {
 	Status           string               `json:"status"`
 	ProcessingStage  string               `json:"processing_stage"`
 	ProcessingError  string               `json:"processing_error,omitempty"`
+	Progress         *Progress            `json:"progress,omitempty"` // while text is being read
 	MimeType         string               `json:"mime_type"`
 	SizeBytes        int64                `json:"size_bytes"`
 	OriginalFilename string               `json:"original_filename"`
@@ -58,6 +59,13 @@ type Document struct {
 	MatchedPage *int                `json:"matched_page,omitempty"`
 }
 
+// Progress of reading a document's text. PagesTotal is 0 when only the worker knows the page
+// count (a multi-page TIFF, say). Workers report pages done with every heartbeat.
+type Progress struct {
+	PagesDone  int `json:"pages_done"`
+	PagesTotal int `json:"pages_total"`
+}
+
 const hydrateSQL = `SELECT d.id, d.space_id, s.name, s.color, d.title, to_char(d.document_date, 'YYYY-MM-DD'), d.added_at, d.updated_at,
 	d.correspondent_id, c.name, d.document_type_id, t.name,
 	coalesce((SELECT json_agg(json_build_object('id', tg.id, 'name', tg.name, 'color', tg.color) ORDER BY lower(tg.name))
@@ -68,7 +76,16 @@ const hydrateSQL = `SELECT d.id, d.space_id, s.name, s.color, d.title, to_char(d
 	EXISTS (SELECT 1 FROM document_files f WHERE f.document_id = d.id AND f.kind = 'thumbnail' AND f.version_no = d.current_version),
 	EXISTS (SELECT 1 FROM document_files f WHERE f.document_id = d.id AND f.kind = 'derived' AND f.version_no = d.current_version),
 	(SELECT count(*) FROM notes n WHERE n.document_id = d.id), d.version, d.deleted_at,
-	(SELECT count(*) FROM suggestions sg WHERE sg.document_id = d.id AND sg.status = 'pending')
+	(SELECT count(*) FROM suggestions sg WHERE sg.document_id = d.id AND sg.status = 'pending'),
+	CASE WHEN d.status = 'processing' THEN (
+		SELECT json_build_object('pages_total', r.pages_total, 'pages_done', r.pages_total
+			- coalesce(sum(pt.page_to - pt.page_from + 1), 0) -- pages still to read (whole-file tasks have no range)
+			+ coalesce(sum(CASE WHEN pt.status = 'leased' AND jsonb_typeof(pt.progress->'pages_done') = 'number'
+				THEN (pt.progress->>'pages_done')::numeric END), 0))
+		FROM ocr_runs r
+		LEFT JOIN processing_tasks pt ON pt.ocr_run_id = r.id AND pt.type = 'ocr' AND pt.status IN ('queued', 'leased')
+		WHERE r.document_id = d.id AND r.status = 'running'
+		GROUP BY r.id ORDER BY r.created_at DESC LIMIT 1) END
 	FROM documents d
 	JOIN spaces s ON s.id = d.space_id
 	LEFT JOIN correspondents c ON c.id = d.correspondent_id
@@ -79,14 +96,26 @@ func scanDocument(row pgx.Row) (*Document, error) {
 	var d Document
 	var corrID, typeID, ownerID *uuid.UUID
 	var corrName, typeName, ownerName *string
-	var tags []byte
+	var tags, progress []byte
 	err := row.Scan(&d.ID, &d.Space.ID, &d.Space.Name, &d.Space.Color, &d.Title, &d.DocumentDate, &d.AddedAt, &d.UpdatedAt,
 		&corrID, &corrName, &typeID, &typeName, &tags,
 		&d.Language, &d.PageCount, &d.ASN, &d.PhysicalLocation, &d.Inbox, &d.Status, &d.ProcessingStage, &d.ProcessingError,
 		&d.MimeType, &d.SizeBytes, &d.OriginalFilename, &d.Source, &ownerID, &ownerName,
-		&d.HasArchive, &d.HasThumbnail, &d.HasDerived, &d.NoteCount, &d.Version, &d.DeletedAt, &d.SuggestionCount)
+		&d.HasArchive, &d.HasThumbnail, &d.HasDerived, &d.NoteCount, &d.Version, &d.DeletedAt, &d.SuggestionCount, &progress)
 	if err != nil {
 		return nil, err
+	}
+	if progress != nil {
+		var p struct {
+			PagesDone  float64 `json:"pages_done"`
+			PagesTotal float64 `json:"pages_total"`
+		}
+		if json.Unmarshal(progress, &p) == nil {
+			d.Progress = &Progress{PagesDone: max(0, int(p.PagesDone)), PagesTotal: int(p.PagesTotal)}
+			if p.PagesTotal > 0 {
+				d.Progress.PagesDone = min(d.Progress.PagesDone, d.Progress.PagesTotal)
+			}
+		}
 	}
 	if corrID != nil && corrName != nil {
 		d.Correspondent = &Ref{ID: *corrID, Name: *corrName}

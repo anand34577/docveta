@@ -229,7 +229,17 @@ func TestIntegration(t *testing.T) {
 	if !bytes.HasPrefix(body, []byte("\x89PNG")) {
 		t.Fatal("input download is not the original")
 	}
-	w.do("POST", "/worker/v1/tasks/"+task.TaskID+"/heartbeat", map[string]any{"lease_id": task.LeaseID, "progress": map[string]any{"pages_done": 0}}, 200, nil)
+	w.do("POST", "/worker/v1/tasks/"+task.TaskID+"/heartbeat", map[string]any{"lease_id": task.LeaseID, "progress": map[string]any{"pages_done": 1}}, 200, nil)
+	var reading struct {
+		Progress *struct {
+			PagesDone  int `json:"pages_done"`
+			PagesTotal int `json:"pages_total"`
+		} `json:"progress"`
+	}
+	c.do("GET", "/api/v1/documents/"+img.ID, nil, 200, &reading)
+	if p := reading.Progress; p == nil || p.PagesDone != 1 || p.PagesTotal != 0 { // a picture: only the worker knows its pages
+		t.Fatalf("progress while reading: %+v", p)
+	}
 	// A stale lease is rejected.
 	w.do("POST", "/worker/v1/tasks/"+task.TaskID+"/heartbeat", map[string]any{"lease_id": "00000000-0000-0000-0000-000000000000"}, 409, nil)
 

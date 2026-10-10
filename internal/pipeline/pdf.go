@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf16"
 
 	"github.com/klippa-app/go-pdfium"
 	pdferrors "github.com/klippa-app/go-pdfium/errors"
@@ -83,12 +84,12 @@ func (p *PDF) Inspect(r io.ReadSeeker, size int64, password string, maxTextPages
 			info.Texts = append(info.Texts, "")
 			continue
 		}
-		t, err := inst.GetPageText(&requests.GetPageText{Page: requests.Page{ByIndex: &requests.PageByIndex{Document: doc.Document, Index: i}}})
+		t, err := pageText(inst, requests.Page{ByIndex: &requests.PageByIndex{Document: doc.Document, Index: i}})
 		if err != nil {
 			info.Texts = append(info.Texts, "")
 			continue
 		}
-		info.Texts = append(info.Texts, t.Text)
+		info.Texts = append(info.Texts, t)
 	}
 	if pc.PageCount > 0 {
 		r, err := inst.RenderPageInPixels(&requests.RenderPageInPixels{
@@ -105,6 +106,88 @@ func (p *PDF) Inspect(r io.ReadSeeker, size int64, password string, maxTextPages
 		}
 	}
 	return info, nil
+}
+
+// pageText is a page's embedded text, as PDFium reads it, minus the spaces PDFium makes up
+// inside Hindi (and other Indic) words. PDFium inserts a space wherever the next glyph seems
+// far from the previous one, and Indic glyphs (ि drawn left of its letter, matras with odd
+// widths) fool it: "शि क्षा", "ना म". A made-up space whose letters touch on the page goes.
+func pageText(inst pdfium.Pdfium, page requests.Page) (string, error) {
+	tp, err := inst.FPDFText_LoadPage(&requests.FPDFText_LoadPage{Page: page})
+	if err != nil {
+		return "", err
+	}
+	defer inst.FPDFText_ClosePage(&requests.FPDFText_ClosePage{TextPage: tp.TextPage}) //nolint:errcheck
+	n, err := inst.FPDFText_CountChars(&requests.FPDFText_CountChars{TextPage: tp.TextPage})
+	if err != nil {
+		return "", err
+	}
+	units := make([]uint16, n.Count)
+	for i := range units {
+		u, err := inst.FPDFText_GetUnicode(&requests.FPDFText_GetUnicode{TextPage: tp.TextPage, Index: i})
+		if err != nil {
+			return "", err
+		}
+		units[i] = uint16(u.Unicode)
+	}
+	drop := falseSpaces(units,
+		func(i int) bool {
+			g, err := inst.FPDFText_IsGenerated(&requests.FPDFText_IsGenerated{TextPage: tp.TextPage, Index: i})
+			return err == nil && g.IsGenerated
+		},
+		func(i int) (charBox, bool) {
+			b, err := inst.FPDFText_GetCharBox(&requests.FPDFText_GetCharBox{TextPage: tp.TextPage, Index: i})
+			if err != nil || b.Right <= b.Left || b.Top <= b.Bottom {
+				return charBox{}, false
+			}
+			fs, err := inst.FPDFText_GetFontSize(&requests.FPDFText_GetFontSize{TextPage: tp.TextPage, Index: i})
+			if err != nil {
+				return charBox{}, false
+			}
+			return charBox{b.Left, b.Right, b.Bottom, b.Top, fs.FontSize}, true
+		})
+	kept := units[:0]
+	for i, u := range units {
+		if u != 0 && !drop[i] { // 0: a glyph PDFium couldn't map to a character
+			kept = append(kept, u)
+		}
+	}
+	return string(utf16.Decode(kept)), nil
+}
+
+type charBox struct{ left, right, bottom, top, size float64 } // size: font size, points
+
+func indic(u uint16) bool { return u >= 0x0900 && u <= 0x0DFF } // Devanagari … Sinhala
+
+// falseSpaces finds generated spaces between two Indic characters where the next glyph starts
+// within a tenth of an em of the word before it (measured to the word's rightmost ink, since ि
+// sits left of its letter). Glyphs inside a word touch or overlap; a real word gap is about
+// 1/6 em of ink even in tight Hindi type (2.6 pt at 16 pt in Chrome's PDFs).
+func falseSpaces(units []uint16, generated func(int) bool, box func(int) (charBox, bool)) map[int]bool {
+	drop := map[int]bool{}
+	for i := 1; i+1 < len(units); i++ {
+		if units[i] != ' ' || !indic(units[i-1]) || !indic(units[i+1]) || !generated(i) {
+			continue
+		}
+		next, ok := box(i + 1)
+		if !ok {
+			continue
+		}
+		word, found := charBox{right: -1e9, bottom: 1e9, top: -1e9}, false
+		for j := i - 1; j >= 0 && !unicode.IsSpace(rune(units[j])); j-- {
+			if b, ok := box(j); ok {
+				word = charBox{0, max(word.right, b.right), min(word.bottom, b.bottom), max(word.top, b.top), b.size}
+				found = true
+			}
+		}
+		// The smaller of font size and line height: a PDF that scales up a 1 pt font gets fewer joins, never wrong ones.
+		em := min(next.size, 1.2*max(word.top-word.bottom, next.top-next.bottom))
+		sameLine := next.bottom < word.top && next.top > word.bottom
+		if found && sameLine && next.left-word.right < 0.1*em {
+			drop[i] = true
+		}
+	}
+	return drop
 }
 
 // flattenWhite composites a possibly transparent page onto white.

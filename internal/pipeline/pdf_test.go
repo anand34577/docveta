@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 // minimalPDF builds a valid PDF with one text line per page (correct xref offsets).
@@ -67,5 +68,30 @@ func TestPDFInspect(t *testing.T) {
 	}
 	if _, err := p.Inspect(bytes.NewReader([]byte("%PDF-1.4 broken")), 15, "", 10); err == nil {
 		t.Fatal("broken PDF should fail")
+	}
+}
+
+func TestFalseSpacesInIndicWords(t *testing.T) {
+	// "शि क्षा का" as PDFium reads it: spaces after शि and क्षा are both made up. The ि glyph is
+	// drawn left of श, so "शि" seems to end far left of क्ष; क्षा really is followed by a word gap.
+	text := []rune("शि क्षा का")
+	units := utf16.Encode(text)
+	boxes := map[int]charBox{
+		0: {10, 20, 0, 10, 16}, 1: {6, 11, 0, 12, 16}, // श, ि (left of श)
+		3: {21, 31, 0, 10, 16}, 4: {30, 34, 0, 10, 16}, 5: {33, 38, 0, 10, 16}, 6: {37, 40, 0, 10, 16}, // क ् ष ा
+		8: {44, 52, 0, 10, 16}, 9: {51, 54, 0, 10, 16}, // क ा: 4 units after the previous word
+	}
+	box := func(i int) (charBox, bool) { b, ok := boxes[i]; return b, ok }
+	got := falseSpaces(units, func(int) bool { return true }, box)
+	if !got[2] || got[7] || len(got) != 1 {
+		t.Fatalf("dropped %v, want only the space after शि", got)
+	}
+	if got := falseSpaces(units, func(int) bool { return false }, box); len(got) != 0 {
+		t.Fatalf("real spaces must stay: %v", got)
+	}
+	// A made-up space before a glyph on the next line is a line break, not a false space.
+	boxes[3], boxes[4], boxes[5], boxes[6] = charBox{21, 31, 20, 30, 16}, charBox{30, 34, 20, 30, 16}, charBox{33, 38, 20, 30, 16}, charBox{37, 40, 20, 30, 16}
+	if got := falseSpaces(units, func(int) bool { return true }, box); got[2] {
+		t.Fatalf("line break joined: %v", got)
 	}
 }
