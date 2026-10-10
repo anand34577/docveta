@@ -2,7 +2,7 @@
 
 Runs on an x86_64 Linux machine (RKNN-Toolkit2 is x86-only), NOT on the board.
 
-    pip install rknn-toolkit2 paddle2onnx onnx "onnxsim==0.4.36"
+    pip install rknn-toolkit2 "paddlepaddle==3.2.0" "paddle2onnx==2.1.0" onnx "onnxsim==0.4.36" pyyaml packaging
     python convert.py --soc rk3588 --scripts en devanagari --calib-dir ./calib --out ../models
     python convert.py --soc rk3576 ...
     python convert.py --soc rk3566 ...      # also used on RK3568
@@ -33,17 +33,25 @@ import tempfile
 import urllib.request
 
 PADDLE = "https://paddleocr.bj.bcebos.com"
+PADDLE3 = "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0"
 DICT_BASE = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils"
 
-# Model sources. Override with --det-url / --rec-url script=URL if Paddle moves them.
+# Model sources. Override with --det-url if Paddle moves them.
+# The v4 detector still finds lines better on documents than PP-OCRv5_mobile_det, and the
+# compiled Allwinner det.nb is built from it.
 DET_URL = f"{PADDLE}/PP-OCRv4/chinese/ch_PP-OCRv4_det_infer.tar"  # multilingual-capable text detector
+# Script -> (model, dictionary). A None dictionary is read from the model's inference.yml (PP-OCRv5).
+# PP-OCRv5 readers: Hindi lines went from ~36% to ~2% character errors (v3 lost the spaces and
+# the ि sign), and phone-photo English from ~5% to ~0.1%. "en" is the Latin model: it also reads
+# the accents of German, French, Spanish… Kannada has no v5 model yet.
 REC = {
-    "en": (f"{PADDLE}/PP-OCRv4/english/en_PP-OCRv4_rec_infer.tar", f"{DICT_BASE}/en_dict.txt"),
-    "devanagari": (f"{PADDLE}/PP-OCRv3/multilingual/devanagari_PP-OCRv3_rec_infer.tar", f"{DICT_BASE}/dict/devanagari_dict.txt"),
-    "ta": (f"{PADDLE}/PP-OCRv3/multilingual/ta_PP-OCRv3_rec_infer.tar", f"{DICT_BASE}/dict/ta_dict.txt"),
-    "te": (f"{PADDLE}/PP-OCRv3/multilingual/te_PP-OCRv3_rec_infer.tar", f"{DICT_BASE}/dict/te_dict.txt"),
+    "en": (f"{PADDLE3}/latin_PP-OCRv5_mobile_rec_infer.tar", None),
+    "devanagari": (f"{PADDLE3}/devanagari_PP-OCRv5_mobile_rec_infer.tar", None),
+    "ta": (f"{PADDLE3}/ta_PP-OCRv5_mobile_rec_infer.tar", None),
+    "te": (f"{PADDLE3}/te_PP-OCRv5_mobile_rec_infer.tar", None),
     "ka": (f"{PADDLE}/PP-OCRv3/multilingual/ka_PP-OCRv3_rec_infer.tar", f"{DICT_BASE}/dict/ka_dict.txt"),
 }
+MODELS_VERSION = "ppocr-v4det+v5rec"
 
 DET_SIZE = {"rk3588": 960, "rk3576": 960, "rk3566": 640, "rk3568": 640}
 REC_WIDTHS = (320, 640, 960, 1280)
@@ -58,17 +66,36 @@ def fetch(url: str, dest: str) -> str:
     return dest
 
 
+def model_dir(work: str) -> str:
+    return next(d for d in glob.glob(os.path.join(work, "*")) if os.path.isdir(d) and os.path.exists(os.path.join(d, "inference.pdiparams")))
+
+
 def paddle_to_onnx(tar_path: str, work: str, name: str) -> str:
+    """Paddle inference model (old .pdmodel or PaddlePaddle 3 .json) -> ONNX. Needs paddle2onnx 2.x."""
     with tarfile.open(tar_path) as t:
         t.extractall(work)
-    model_dir = next(d for d in glob.glob(os.path.join(work, "*")) if os.path.isdir(d) and os.path.exists(os.path.join(d, "inference.pdiparams")))
+    d = model_dir(work)
+    graph = "inference.json" if os.path.exists(os.path.join(d, "inference.json")) else "inference.pdmodel"
     out = os.path.join(work, f"{name}.onnx")
     subprocess.run([  # via this interpreter: works without paddle2onnx on PATH (venvs, Windows)
-        sys.executable, "-c", "import sys; from paddle2onnx.command import main; sys.exit(main())", "--model_dir", model_dir, "--model_filename", "inference.pdmodel",
+        sys.executable, "-c", "import sys; from paddle2onnx.command import main; sys.exit(main())", "--model_dir", d, "--model_filename", graph,
         "--params_filename", "inference.pdiparams", "--save_file", out, "--opset_version", "12",
         "--enable_onnx_checker", "True",
     ], check=True)
     return out
+
+
+def rec_dict(work: str, dict_url: str | None, dest: str) -> None:
+    """The reader's character list: downloaded, or from the model's inference.yml (PP-OCRv5)."""
+    if dict_url:
+        fetch(dict_url, dest)
+        return
+    import yaml
+
+    with open(os.path.join(model_dir(work), "inference.yml"), encoding="utf-8") as f:
+        chars = yaml.safe_load(f)["PostProcess"]["character_dict"]
+    with open(dest, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(chars) + "\n")
 
 
 def fix_shape(onnx_path: str, shape: list[int]) -> str:
@@ -158,13 +185,14 @@ def main() -> None:
         for i, script in enumerate(args.scripts, start=2):
             url, dict_url = REC[script]
             print(f"[{i}/{len(args.scripts) + 1}] recognition model '{script}' (FP16, widths {REC_WIDTHS})")
-            rec_onnx = paddle_to_onnx(fetch(url, os.path.join(work, f"rec_{script}.tar")), os.path.join(work, f"rec_{script}"), f"rec_{script}")
+            rec_work = os.path.join(work, f"rec_{script}")
+            rec_onnx = paddle_to_onnx(fetch(url, os.path.join(work, f"rec_{script}.tar")), rec_work, f"rec_{script}")
             dynamic = [[[1, 3, 48, w]] for w in REC_WIDTHS]
             build_rknn(rec_onnx, os.path.join(target, f"rec_{script}.rknn"), args.soc, REC_MEAN, REC_STD, False, None, dynamic=dynamic)
-            fetch(dict_url, os.path.join(target, f"dict_{script}.txt"))
+            rec_dict(rec_work, dict_url, os.path.join(target, f"dict_{script}.txt"))
 
         with open(os.path.join(target, "VERSION"), "w") as f:
-            f.write("ppocr-v4det+" + "+".join(args.scripts) + "\n")
+            f.write(MODELS_VERSION + "+" + "+".join(args.scripts) + "\n")
     shutil.rmtree(os.path.join(target, "__pycache__"), ignore_errors=True)
     print(f"done: copy {target} to the board's models/{args.soc}/ (or mount it into the worker container)")
 

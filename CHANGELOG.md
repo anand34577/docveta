@@ -5,6 +5,31 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Much better text recognition, above all for Hindi.** The OCR engines (GPU/CPU, Rockchip,
+  Allwinner and the Android app) read with PaddleOCR's PP-OCRv5 models. On test lines, Hindi
+  character errors fell from about 36% to 2% (the old model lost the spaces between words and the
+  ि sign, so Hindi words ran together and couldn't be searched), Tamil from 42% to 2%, Telugu from
+  46% to 6%, and English from phone photos from 5% to under 1%. On whole Hindi pages, 98% of words
+  are found instead of 50%. The English reader is now the Latin one, so German, French, Spanish…
+  keep their accents. Kannada keeps its old model (there's no newer one yet).
+- **Allwinner A733: text is read on the NPU too.** Until now only finding the text ran on the
+  NPU; reading each line took about 0.3 s on a Cortex-A76 core. The reading models are rewritten
+  so the A733's NPU computes them correctly (its compiler merges layers in a way that reads every
+  line as blank on the chip), and read exactly as accurately as the CPU, about 7x faster. Lines too
+  wide for the NPU's fixed input sizes are cut at word gaps. The worker checks its NPU readers on
+  test lines at start and only falls back to the CPU if they misread them.
+
+### Fixed
+- **Android: search didn't search while typing.** The list only updated when a filter changed,
+  and the keyboard's Search key did nothing. Both work now.
+- **Android: "Can't reach the server" showed when the server was fine.** The app checked the
+  connection in the background, where Android cuts the network, so the bar greeted you on return;
+  one failed check (a Wi-Fi/mobile handover) was also enough. It now checks only while the app is
+  on screen, at once on return, and says the server is unreachable after two failed checks.
+- Rockchip NPU: line images were padded with black instead of PaddleOCR's grey, which cost
+  accuracy (with the new models it would have cost almost all of it).
+
 ## [0.11.0] - 2026-10-06
 
 ### Added

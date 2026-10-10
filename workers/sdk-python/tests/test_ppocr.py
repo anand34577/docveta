@@ -66,10 +66,37 @@ class RecognitionTest(unittest.TestCase):
         self.assertEqual(x.shape, (1, 48, 640, 3))
         self.assertEqual(bucket, 640)
         self.assertEqual(content, 480)
+        self.assertTrue((x[0, :, content:] == ppocr.REC_PAD).all())  # grey: black padding wrecks PP-OCRv5
         huge = np.zeros((10, 2000, 3), dtype=np.uint8)
         x, bucket, content = ppocr.rec_input(huge)
         self.assertEqual(bucket, 1280)
         self.assertEqual(content, 1280)
+
+    def test_split_line_cuts_in_gaps(self):
+        line = np.full((40, 1000, 3), 250, np.uint8)
+        for x0, x1 in ((0, 280), (300, 690), (720, 1000)):  # three words
+            line[8:32, x0:x1] = 10
+        pieces = ppocr.split_line(line, 500)
+        self.assertEqual(len(pieces), 3)
+        self.assertTrue(all(x1 - x0 <= 500 and gap for x0, x1, gap in pieces[:-1]))
+        self.assertTrue(285 <= pieces[0][1] <= 295 and 695 <= pieces[1][1] <= 715)  # in the gaps
+        self.assertEqual(ppocr.split_line(line[:, :400], 500), [(0, 400, False)])
+
+    def test_split_line_without_gaps_still_fits(self):
+        solid = np.full((40, 1000, 3), 250, np.uint8)
+        solid[8:32] = 10  # ink in every column: no gap anywhere
+        self.assertTrue(all(x1 - x0 <= 400 and not gap for x0, x1, gap in ppocr.split_line(solid, 400)))
+
+    def test_join_pieces(self):
+        a = ppocr.RecResult("Amount", 0.9, [("Amount", 0.0, 1.0)])
+        b = ppocr.RecResult("due", 0.7, [("due", 0.0, 0.5)])
+        r = ppocr.join_pieces([(0, 60, True, a), (60, 100, False, b)], 100)
+        self.assertEqual(r.text, "Amount due")
+        self.assertEqual([t for t, _, _ in r.words], ["Amount", "due"])
+        self.assertAlmostEqual(r.words[1][2], 0.8)
+        self.assertAlmostEqual(r.confidence, (0.9 * 6 + 0.7 * 3) / 9)
+        r = ppocr.join_pieces([(0, 50, False, ppocr.RecResult("Amo", 1, [("Amo", 0, 1)])), (50, 100, False, ppocr.RecResult("unt", 1, [("unt", 0, 1)]))], 100)
+        self.assertEqual((r.text, [t for t, _, _ in r.words]), ("Amount", ["Amount"]))  # cut inside a word
 
     def test_ctc_decode_with_word_positions(self):
         charset = ["a", "b", "c", " "]  # index 1..4; 0 is blank
