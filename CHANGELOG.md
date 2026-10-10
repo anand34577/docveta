@@ -5,6 +5,13 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-10
+
+### Security
+- Built with Go 1.26.9 and golang.org/x/net 0.60.0: fixes standard-library vulnerabilities in
+  HTML templates and the HTTP server, and a denial of service through HTTP/2 SETTINGS frames
+  (CVE-2026-78669). Updating is recommended for servers reachable from the internet.
+
 ## [0.12.0] - 2026-10-10
 
 ### Changed
