@@ -1,3 +1,19 @@
+import { create } from "zustand";
+
+/** A match to show: its page, its number on that page, and a counter that changes on every move. */
+export interface FindTarget {
+  q: string;
+  page: number;
+  n: number;
+  seq: number;
+}
+
+/** Text selected in a document's Text tab, which the viewer highlights on the page. */
+export const useLocate = create<{ docId?: string; target: FindTarget | null; set: (docId: string, target: FindTarget | null) => void }>((set) => ({
+  target: null,
+  set: (docId, target) => set({ docId, target }),
+}));
+
 /**
  * Find in a PDF. Matching ignores case and all spaces, so "amount due" also finds text that a
  * scan's text layer stores word by word ("Amount" "due") or split mid-word ("Elec" "tricity").

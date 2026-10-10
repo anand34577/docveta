@@ -3,9 +3,10 @@ import { Command } from "cmdk";
 import { Dialog as D } from "radix-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, FileText, FolderOpen, Home, Inbox, Moon, Search, Settings, Sun, Tag, Trash2, Upload } from "lucide-react";
+import { recentDocs, type RecentDoc } from "@/lib/recent";
+import { ArrowRight, Bell, Bookmark, FileText, FolderOpen, History, Home, Inbox, MessageSquareText, Moon, Search, Settings, Shield, Sun, Tag, Trash2, Upload } from "lucide-react";
 import { api } from "@/lib/api";
-import { useSavedViews, useTaxonomy } from "@/lib/queries";
+import { useAIEnabled, useSavedViews, useTaxonomy } from "@/lib/queries";
 import { useCurrentUser } from "./app-shell";
 import { spaceLabel } from "@/lib/utils";
 import { useUI } from "@/stores/ui";
@@ -35,6 +36,7 @@ export function CommandPalette() {
   const views = useSavedViews();
   const me = useCurrentUser();
   const tags = useTaxonomy("tags");
+  const ai = useAIEnabled().data;
   const needle = dq.toLowerCase();
   const spaceHits = needle ? me.spaces.filter((s) => spaceLabel(s).toLowerCase().includes(needle)).slice(0, 4) : [];
   const tagHits = needle ? [...new Map((tags.data ?? []).filter((t) => t.name.toLowerCase().includes(needle)).map((t) => [t.name.toLowerCase(), t])).values()].slice(0, 5) : [];
@@ -45,14 +47,42 @@ export function CommandPalette() {
     staleTime: 10_000,
   });
 
+  const [recent, setRecent] = React.useState<RecentDoc[]>([]);
   React.useEffect(() => {
     if (!open) setQ("");
+    else setRecent(recentDocs().slice(0, 4));
   }, [open]);
 
   const go = (fn: () => void) => {
     setOpen(false);
     fn();
   };
+
+  type Cmd = { id: string; label: string; icon: React.ReactNode; run: () => void };
+  const nav: Cmd[] = [
+    { id: "home", label: "Home", icon: <Home />, run: () => navigate({ to: "/" }) },
+    { id: "inbox", label: "Inbox", icon: <Inbox />, run: () => navigate({ to: "/inbox" }) },
+    { id: "documents", label: "All documents", icon: <FileText />, run: () => navigate({ to: "/documents" }) },
+    ...(ai?.chat ? [{ id: "ask", label: "Ask your documents", icon: <MessageSquareText />, run: () => navigate({ to: "/ask" }) }] : []),
+    ...(views.data ?? []).map((v) => ({ id: `view-${v.id}`, label: v.name, icon: <Bookmark />, run: () => navigate({ to: "/views/$id", params: { id: v.id } }) })),
+    ...me.spaces.map((s) => ({ id: `space-${s.id}`, label: spaceLabel(s), icon: <FolderOpen />, run: () => navigate({ to: "/documents", search: { space_id: [s.id] } }) })),
+    { id: "notifications", label: "Notifications", icon: <Bell />, run: () => navigate({ to: "/notifications" }) },
+    { id: "trash", label: "Trash", icon: <Trash2 />, run: () => navigate({ to: "/trash" }) },
+  ];
+  const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const actions: Cmd[] = [
+    { id: "upload", label: "Upload documents", icon: <Upload />, run: () => pick() },
+    { id: "theme", label: `Switch to ${dark ? "light" : "dark"} theme`, icon: dark ? <Sun /> : <Moon />, run: () => setTheme(dark ? "light" : "dark") },
+    { id: "settings", label: "Settings", icon: <Settings />, run: () => navigate({ to: "/settings/$section", params: { section: "profile" } }) },
+    ...(me.is_admin ? [{ id: "admin", label: "Administration", icon: <Shield />, run: () => navigate({ to: "/admin/$section", params: { section: "users" } }) }] : []),
+  ];
+  // Typing filters the commands too (spaces already show as their own matches above them).
+  const cmdHits = needle ? [...nav, ...actions].filter((c) => !c.id.startsWith("space-") && c.label.toLowerCase().includes(needle)) : [];
+  // Results arrive after the debounce, so keep the top one highlighted for Enter.
+  const top = results.data?.[0];
+  const first = !dq ? (recent[0] ? `recent-${recent[0].id}` : "home") : cmdHits[0] ? `cmd-${cmdHits[0].id}` : top ? `doc-${top.id}` : spaceHits[0] ? `space-${spaceHits[0].id}` : tagHits[0] ? `tag-${tagHits[0].id}` : "search-all";
+  const [selected, setSelected] = React.useState(first);
+  React.useEffect(() => setSelected(first), [first]);
 
   const item =
     "flex cursor-default items-center gap-3 rounded-md px-3 py-2.5 text-sm data-[selected=true]:bg-surface-2 [&_svg]:size-4 [&_svg]:text-muted";
@@ -66,7 +96,7 @@ export function CommandPalette() {
           aria-describedby={undefined}
         >
           <D.Title className="sr-only">Search and commands</D.Title>
-          <Command shouldFilter={false} loop>
+          <Command shouldFilter={false} loop value={selected} onValueChange={setSelected}>
             <div className="flex items-center gap-2 border-b border-border px-3">
               <Search className="size-4 text-subtle" />
               <Command.Input
@@ -77,6 +107,15 @@ export function CommandPalette() {
               />
             </div>
             <Command.List className="max-h-[60vh] overflow-y-auto scrollbar-thin p-1.5">
+              {cmdHits.length > 0 && (
+                <Command.Group heading="Commands" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:text-subtle">
+                  {cmdHits.map((c) => (
+                    <Command.Item key={c.id} value={`cmd-${c.id}`} className={item} onSelect={() => go(c.run)}>
+                      {c.icon} {c.label}
+                    </Command.Item>
+                  ))}
+                </Command.Group>
+              )}
               {dq && (
                 <Command.Group heading="Documents" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:text-subtle">
                   {(results.data ?? []).map((r) => (
@@ -110,49 +149,26 @@ export function CommandPalette() {
                   </Command.Item>
                 </Command.Group>
               )}
-              {!dq && (
-                <>
-                  <Command.Group heading="Go to" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:text-subtle">
-                    <Command.Item value="home" className={item} onSelect={() => go(() => navigate({ to: "/" }))}>
-                      <Home /> Home
+              {!dq && recent.length > 0 && (
+                <Command.Group heading="Recently opened" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:text-subtle">
+                  {recent.map((r) => (
+                    <Command.Item key={r.id} value={`recent-${r.id}`} className={item} onSelect={() => go(() => navigate({ to: "/documents/$id", params: { id: r.id } }))}>
+                      <History />
+                      <span className="flex-1 truncate">{r.title}</span>
                     </Command.Item>
-                    <Command.Item value="inbox" className={item} onSelect={() => go(() => navigate({ to: "/inbox" }))}>
-                      <Inbox /> Inbox
-                    </Command.Item>
-                    <Command.Item value="documents" className={item} onSelect={() => go(() => navigate({ to: "/documents" }))}>
-                      <FileText /> All documents
-                    </Command.Item>
-                    {(views.data ?? []).map((v) => (
-                      <Command.Item key={v.id} value={`view-${v.id}`} className={item} onSelect={() => go(() => navigate({ to: "/views/$id", params: { id: v.id } }))}>
-                        <FileText /> {v.name}
-                      </Command.Item>
-                    ))}
-                    {me.spaces.map((s) => (
-                      <Command.Item key={s.id} value={`space-${s.id}`} className={item} onSelect={() => go(() => navigate({ to: "/documents", search: { space_id: [s.id] } }))}>
-                        <FolderOpen /> {spaceLabel(s)}
-                      </Command.Item>
-                    ))}
-                    <Command.Item value="trash" className={item} onSelect={() => go(() => navigate({ to: "/trash" }))}>
-                      <Trash2 /> Trash
-                    </Command.Item>
-                  </Command.Group>
-                  <Command.Group heading="Actions" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:text-subtle">
-                    <Command.Item value="upload" className={item} onSelect={() => go(() => pick())}>
-                      <Upload /> Upload documents
-                    </Command.Item>
-                    <Command.Item
-                      value="theme"
-                      className={item}
-                      onSelect={() => go(() => setTheme(theme === "dark" ? "light" : "dark"))}
-                    >
-                      {theme === "dark" ? <Sun /> : <Moon />} Switch to {theme === "dark" ? "light" : "dark"} theme
-                    </Command.Item>
-                    <Command.Item value="settings" className={item} onSelect={() => go(() => navigate({ to: "/settings/$section", params: { section: "profile" } }))}>
-                      <Settings /> Settings
-                    </Command.Item>
-                  </Command.Group>
-                </>
+                  ))}
+                </Command.Group>
               )}
+              {!dq &&
+                ([["Go to", nav], ["Actions", actions]] as const).map(([heading, list]) => (
+                  <Command.Group key={heading} heading={heading} className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:text-subtle">
+                    {list.map((c) => (
+                      <Command.Item key={c.id} value={c.id} className={item} onSelect={() => go(c.run)}>
+                        {c.icon} {c.label}
+                      </Command.Item>
+                    ))}
+                  </Command.Group>
+                ))}
             </Command.List>
             <div className="hidden items-center gap-4 border-t border-border px-3 py-2 text-xs text-subtle sm:flex">
               <span>↑↓ to navigate</span>

@@ -2,7 +2,8 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, CheckCheck, Settings } from "lucide-react";
-import { api } from "@/lib/api";
+import { toast } from "sonner";
+import { api, errorMessage } from "@/lib/api";
 import { keys } from "@/lib/queries";
 import type { Notification } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -26,11 +27,11 @@ export function NotificationsPage() {
     qc.invalidateQueries({ queryKey: ["notifications-all"] });
   };
   const markAll = async () => {
-    await api.post("/notifications/read", { all: true });
-    refresh();
+    await api.post("/notifications/read", { all: true }).then(refresh, (e) => toast.error(errorMessage(e)));
   };
   const open = async (n: Notification) => {
-    if (!n.read_at) await api.post("/notifications/read", { ids: [n.id] }).then(refresh);
+    // Marking it read mustn't stand in the way of opening it.
+    if (!n.read_at) void api.post("/notifications/read", { ids: [n.id] }).then(refresh, () => undefined);
     if (n.link) navigate({ to: n.link });
   };
   const items = list.data?.items ?? [];
@@ -67,6 +68,10 @@ export function NotificationsPage() {
         </div>
         {list.isLoading ? (
           <Skeleton className="h-40" />
+        ) : list.isError && !list.data ? (
+          <EmptyState icon={<Bell />} title="Couldn't load notifications" action={<Button onClick={() => list.refetch()} loading={list.isFetching}>Try again</Button>}>
+            {errorMessage(list.error)}
+          </EmptyState>
         ) : items.length === 0 ? (
           <EmptyState icon={<Bell />} title={unreadOnly ? "Nothing unread" : "No notifications yet"} />
         ) : (

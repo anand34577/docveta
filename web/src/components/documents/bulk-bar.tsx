@@ -2,7 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCheck, Combine, Download, FolderInput, RotateCcw, Tag, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, errorMessage } from "@/lib/api";
+import { api, downloadZip, errorMessage, ZIP_MAX } from "@/lib/api";
 import { invalidateDocuments, useTaxonomy } from "@/lib/queries";
 import { useSelection } from "@/stores/ui";
 import { Button } from "@/components/ui/button";
@@ -42,10 +42,25 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
   const run = async (action: string, update?: Record<string, unknown>, success?: string) => {
     setBusy(true);
     try {
-      const res = await api.post<BulkResult>("/documents/bulk", { ids: [...ids], action, update: update ?? {} });
+      const chosen = [...ids];
+      const res = await api.post<BulkResult>("/documents/bulk", { ids: chosen, action, update: update ?? {} });
       invalidateDocuments(qc);
-      if (res.failed.length) toast.warning(`${res.succeeded} done, ${res.failed.length} failed`, { description: res.failed[0].message });
-      else toast.success(success ?? `Updated ${res.succeeded} document${res.succeeded === 1 ? "" : "s"}`);
+      // Moving to Trash is the bulk action that's easiest to hit by mistake: offer the way back.
+      const undo =
+        action === "trash" && res.succeeded > 0
+          ? {
+              label: "Undo",
+              onClick: () => {
+                const failed = new Set(res.failed.map((f) => f.id));
+                api.post<BulkResult>("/documents/bulk", { ids: chosen.filter((id) => !failed.has(id)), action: "restore", update: {} }).then(
+                  () => invalidateDocuments(qc),
+                  (e) => toast.error(errorMessage(e)),
+                );
+              },
+            }
+          : undefined;
+      if (res.failed.length) toast.warning(`${res.succeeded} done, ${res.failed.length} failed`, { description: res.failed[0].message, action: undo });
+      else toast.success(success ?? `Updated ${res.succeeded} document${res.succeeded === 1 ? "" : "s"}`, { action: undo });
       clear();
       setDialog(null);
     } catch (e) {
@@ -100,11 +115,25 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
                 <Combine /> <span className="hidden sm:inline">Merge</span>
               </Button>
             )}
-            {n === 1 && (
+            {n === 1 ? (
               <Button size="sm" variant="ghost" asChild>
-                <a href={`/api/v1/documents/${[...ids][0]}/file?kind=original&download=1`}>
+                <a href={`/api/v1/documents/${[...ids][0]}/file?kind=original&download=1`} aria-label="Download" title="Download">
                   <Download />
                 </a>
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`Download ${n} documents as a ZIP file`}
+                title="Download as one ZIP file"
+                onClick={() => {
+                  if (n > ZIP_MAX) return void toast.error(`Choose up to ${ZIP_MAX} documents for one download.`);
+                  downloadZip([...ids]);
+                  toast.success(`Preparing a ZIP of ${n} documents`, { description: "The download starts in a moment." });
+                }}
+              >
+                <Download /> <span className="hidden sm:inline">ZIP</span>
               </Button>
             )}
             <Button size="sm" variant="danger-ghost" loading={busy} onClick={() => run("trash", undefined, `Moved ${n} to Trash`)}>

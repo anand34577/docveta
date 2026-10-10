@@ -85,6 +85,8 @@ export interface Document {
   inbox: boolean;
   status: DocStatus;
   processing_stage: string;
+  /** While text is being read; pages_total is 0 when only the worker knows the page count. */
+  progress?: { pages_done: number; pages_total: number };
   processing_error?: string;
   mime_type: string;
   size_bytes: number;

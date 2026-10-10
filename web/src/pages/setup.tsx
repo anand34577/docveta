@@ -74,6 +74,7 @@ export function SetupPage() {
             <button
               key={p.id}
               type="button"
+              aria-pressed={preset === p.id}
               onClick={() => {
                 setPreset(p.id);
                 setSpace(p.space);

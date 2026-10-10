@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link } from "@tanstack/react-router";
-import { cn } from "@/lib/utils";
+import { cn, usePageTitle } from "@/lib/utils";
 import { Card, useScrollEdges } from "./ui/misc";
 
 export interface SectionDef {
@@ -19,6 +19,7 @@ export function SettingsLayout({ title, description, base, sections, active, chi
   children: React.ReactNode;
 }) {
   const nav = useScrollEdges<HTMLElement>();
+  usePageTitle(title);
   return (
     <div className="mx-auto max-w-5xl page-x pb-16 pt-6 sm:pt-8">
       <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>

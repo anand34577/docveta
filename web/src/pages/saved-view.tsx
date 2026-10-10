@@ -42,12 +42,21 @@ export function SavedViewPage() {
   const rename = async () => {
     const name = await prompt({ title: "Rename view", defaultValue: view.name, confirmLabel: "Rename" });
     if (!name || name === view.name) return;
-    await api.patch(`/saved-views/${view.id}`, { name }).catch((e) => toast.error(errorMessage(e)));
-    qc.invalidateQueries({ queryKey: keys.views });
+    try {
+      await api.patch(`/saved-views/${view.id}`, { name });
+      qc.invalidateQueries({ queryKey: keys.views });
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
   };
   const remove = async () => {
     if (!(await confirm({ title: `Delete “${view.name}”?`, body: "Only the saved view is deleted, not the documents.", confirmLabel: "Delete view", destructive: true }))) return;
-    await api.del(`/saved-views/${view.id}`).catch((e) => toast.error(errorMessage(e)));
+    try {
+      await api.del(`/saved-views/${view.id}`);
+    } catch (e) {
+      toast.error(errorMessage(e)); // still there: stay on it
+      return;
+    }
     qc.invalidateQueries({ queryKey: keys.views });
     navigate({ to: "/documents" });
   };

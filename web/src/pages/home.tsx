@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { AlertCircle, ArrowRight, Bookmark, CalendarPlus, Files, Inbox, Loader2, Settings, Tags, Upload, User } from "lucide-react";
+import { AlertCircle, ArrowRight, Bookmark, CalendarPlus, Files, History, Inbox, Loader2, Settings, Tags, Upload, User } from "lucide-react";
+import { recentDocs } from "@/lib/recent";
 import { useDocuments, useSavedViews, useStats, useTaxonomy } from "@/lib/queries";
-import { cn, formatBytes, formatDocDate, spaceDot, spaceLabel } from "@/lib/utils";
+import { cn, formatBytes, formatDocDate, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
 import { useCurrentUser, useFilePicker } from "@/components/app-shell";
 import { Thumbnail, StatusBadge } from "@/components/documents/doc-items";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ export function HomePage() {
   const pick = useFilePicker();
   const docs = recent.data?.pages[0]?.items.slice(0, 8) ?? [];
   const s = stats.data;
+  usePageTitle("Home");
 
   return (
     <div className="mx-auto max-w-6xl page-x pb-12 pt-6 sm:pt-8">
@@ -51,7 +53,7 @@ export function HomePage() {
         <StatCard to="/documents" icon={<Files />} label="Documents" value={s?.total} hint={s ? formatBytes(s.bytes) : undefined} />
         <StatCard to="/documents" search={{ status: "processing" }} icon={<Loader2 className={s?.processing ? "animate-spin" : ""} />} label="Processing" value={s?.processing} />
         <StatCard to="/documents" search={{ status: "failed,needs_password" }} icon={<AlertCircle />} label="Need attention" value={s?.failed} tone={s?.failed ? "warning" : undefined} />
-        <StatCard to="/documents" icon={<CalendarPlus />} label="Added this week" value={s?.added_this_week} />
+        <StatCard to="/documents" search={{ q: "added:7d", sort: "-added" }} icon={<CalendarPlus />} label="Added this week" value={s?.added_this_week} />
       </div>
 
       <div className="mt-10 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
@@ -136,6 +138,7 @@ export function HomePage() {
               ))}
             </Card>
           </section>
+          <RecentlyOpened />
           <SavedViewsCard />
           <TopTags />
         </aside>
@@ -156,6 +159,25 @@ function SectionHeader({ id, title, link }: { id: string; title: string; link?: 
         </Link>
       )}
     </div>
+  );
+}
+
+/** The documents last opened in this browser: the ones people come back for. */
+function RecentlyOpened() {
+  const docs = recentDocs().slice(0, 5);
+  if (!docs.length) return null;
+  return (
+    <section aria-labelledby="opened-h">
+      <SectionHeader id="opened-h" title="Recently opened" />
+      <Card className="divide-y divide-border overflow-hidden">
+        {docs.map((d) => (
+          <Link key={d.id} to="/documents/$id" params={{ id: d.id }} className="flex items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-surface-2">
+            <History className="size-4 shrink-0 text-subtle" />
+            <span className="truncate">{d.title}</span>
+          </Link>
+        ))}
+      </Card>
+    </section>
   );
 }
 

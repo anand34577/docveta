@@ -13,7 +13,7 @@ import { useCurrentUser } from "@/components/app-shell";
 import { api } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { keys } from "@/lib/queries";
-import { stageLabel } from "./doc-items";
+import { processingLabel } from "./doc-items";
 import { Suggestions } from "./suggestions";
 import { CustomFieldsEditor } from "./custom-fields";
 import { UnlockDialog } from "./unlock-dialog";
@@ -246,11 +246,18 @@ export function MetadataPanel({ doc }: { doc: Document }) {
 function ProcessingNotice({ doc, canEdit }: { doc: Document; canEdit: boolean }) {
   const [unlocking, setUnlocking] = React.useState(false);
   if (doc.status === "processing") {
+    const p = doc.progress;
+    const pct = p && p.pages_total > 1 && doc.processing_stage === "ocr" ? Math.round((p.pages_done / p.pages_total) * 100) : null;
     return (
       <div className="flex items-start gap-2.5 rounded-lg bg-accent-soft px-3 py-2.5 text-sm text-accent-soft-fg">
         <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin" />
-        <div>
-          <div className="font-medium">{stageLabel(doc.processing_stage)}…</div>
+        <div className="min-w-0 flex-1">
+          <div className="font-medium">{processingLabel(doc)}…</div>
+          {pct !== null && (
+            <div role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Pages read" className="my-1.5 h-1.5 overflow-hidden rounded-full bg-current/15">
+              <div className="h-full rounded-full bg-current transition-[width] duration-500" style={{ width: `${pct}%` }} />
+            </div>
+          )}
           <div className="text-[13px] opacity-80">You can already view, download and edit this document.</div>
         </div>
       </div>

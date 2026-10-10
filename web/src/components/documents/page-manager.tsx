@@ -32,6 +32,7 @@ export function PageManager({ doc, onClose }: { doc: Document; onClose: () => vo
   const [picked, setPicked] = React.useState<Set<number>>(new Set());
   const [busy, setBusy] = React.useState(false);
   const [dragKey, setDragKey] = React.useState<number | null>(null);
+  const [failed, setFailed] = React.useState(false);
   const original = React.useRef<Item[]>([]);
 
   React.useEffect(() => {
@@ -49,7 +50,7 @@ export function PageManager({ doc, onClose }: { doc: Document; onClose: () => vo
         original.current = Array.from({ length: d.numPages }, (_, i) => ({ key: i + 1, rotate: 0 }));
         setItems(original.current);
       },
-      () => toast.error("Couldn't open the pages of this file"),
+      () => !dead && setFailed(true),
     );
     return () => {
       dead = true;
@@ -131,7 +132,12 @@ export function PageManager({ doc, onClose }: { doc: Document; onClose: () => vo
         description={isPdf ? "Turn, reorder or delete pages. Select pages to copy them into a new document." : "Turn the picture the right way up."}
         className="sm:top-[6vh] sm:max-h-[88vh]"
       >
-        {!items.length ? (
+        {failed ? (
+          <div className="flex h-48 flex-col items-center justify-center gap-3 text-center text-sm text-muted" role="alert">
+            Couldn't open the pages of this file. It may be damaged or still locked with a password.
+            <Button onClick={onClose}>Close</Button>
+          </div>
+        ) : !items.length ? (
           <div className="flex h-48 items-center justify-center">
             <Spinner />
           </div>
@@ -191,7 +197,8 @@ export function PageManager({ doc, onClose }: { doc: Document; onClose: () => vo
                 </li>
               ))}
             </ul>
-            <div className="sticky bottom-0 -mx-5 mt-5 flex flex-col-reverse gap-2 border-t border-border bg-surface px-5 pt-3 sm:flex-row sm:justify-end">
+            {/* Sticky boxes stop at the scroll area's padding: reach past it so no page shows under the buttons. */}
+            <div className="sticky -bottom-5 -mx-5 -mb-5 mt-5 flex flex-col-reverse gap-2 border-t border-border bg-surface px-5 py-3 sm:flex-row sm:justify-end">
               <Button disabled={!changed} onClick={() => setItems(original.current)}>
                 <Undo2 /> Reset
               </Button>
@@ -210,8 +217,17 @@ export function PageManager({ doc, onClose }: { doc: Document; onClose: () => vo
 function PageThumb({ pdf, page, rotate, src }: { pdf: PDFDocumentProxy | null; page: number; rotate: number; src?: string }) {
   const canvas = React.useRef<HTMLCanvasElement>(null);
   const [ratio, setRatio] = React.useState(1.35);
+  // Draw a page only when its tile comes near the screen: a 300-page file would otherwise
+  // render all 300 the moment the dialog opens.
+  const [seen, setSeen] = React.useState(false);
   React.useEffect(() => {
-    if (!pdf || !canvas.current) return;
+    if (!canvas.current) return;
+    const io = new IntersectionObserver((e) => e.some((x) => x.isIntersecting) && setSeen(true), { rootMargin: "400px" });
+    io.observe(canvas.current);
+    return () => io.disconnect();
+  }, []);
+  React.useEffect(() => {
+    if (!pdf || !canvas.current || !seen) return;
     let dead = false;
     pdf.getPage(page).then((p) => {
       if (dead || !canvas.current) return;
@@ -227,7 +243,7 @@ function PageThumb({ pdf, page, rotate, src }: { pdf: PDFDocumentProxy | null; p
     return () => {
       dead = true;
     };
-  }, [pdf, page]);
+  }, [pdf, page, seen]);
   const turned = rotate % 180 !== 0;
   return (
     <div className="flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded bg-surface-3">

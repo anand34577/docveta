@@ -8,7 +8,9 @@ import { formatDateTime, timeAgo } from "@/lib/utils";
 import { Avatar, EmptyState, Skeleton } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
+import { findAll, squashQuery, useLocate } from "./pdf-find";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/overlay";
+import { confirm } from "@/components/ui/confirm";
 
 const mentionRe = /@\[([^\]]{1,80})\]\(([0-9a-fA-F-]{36})\)/g;
 
@@ -51,8 +53,10 @@ export function NotesTab({ id }: { id: string }) {
     }
   };
   const remove = async (noteId: string) => {
+    if (!(await confirm({ title: "Delete this note?", body: "This can't be undone.", confirmLabel: "Delete note", destructive: true }))) return;
     await api.del(`/documents/${id}/notes/${noteId}`).catch((e) => toast.error(errorMessage(e)));
     qc.invalidateQueries({ queryKey: keys.notes(id) });
+    qc.invalidateQueries({ queryKey: keys.document(id) }); // the count on the Notes tab
   };
   const mention = (name: string, uid: string) => {
     const el = ref.current;
@@ -115,7 +119,7 @@ export function NotesTab({ id }: { id: string }) {
                     {timeAgo(n.created_at)}
                   </span>
                   {n.can_delete && (
-                    <button onClick={() => remove(n.id)} className="ml-auto rounded p-1 text-subtle opacity-0 hover:text-danger group-hover:opacity-100" aria-label="Delete note">
+                    <button onClick={() => remove(n.id)} className="ml-auto rounded p-1 text-subtle opacity-0 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100" aria-label="Delete note">
                       <Trash2 className="size-3.5" />
                     </button>
                   )}
@@ -188,21 +192,39 @@ export function HistoryTab({ id }: { id: string }) {
   );
 }
 
+/** Selecting text shows where it is on the page (PDFs, and scans with a searchable copy). */
+function useShowSelection(id: string) {
+  const set = useLocate((s) => s.set);
+  React.useEffect(() => () => set(id, null), [id, set]);
+  return (e: React.SyntheticEvent<HTMLElement>, page: number) => {
+    const sel = window.getSelection();
+    const el = e.currentTarget;
+    const q = sel && !sel.isCollapsed && el.contains(sel.anchorNode) ? sel.toString() : "";
+    if (squashQuery(q).length < 2) return set(id, null);
+    // Which occurrence on the page: count the ones up to and including the selection.
+    const before = document.createRange();
+    before.setStart(el, 0);
+    const r = sel!.getRangeAt(0);
+    before.setEnd(r.endContainer, r.endOffset);
+    const n = Math.max(0, findAll(squashQuery(before.toString()), squashQuery(q)).length - 1);
+    set(id, { q, page, n, seq: Date.now() });
+  };
+}
+
 export function TextTab({ id }: { id: string }) {
   const pages = usePages(id, true);
+  const showSelection = useShowSelection(id);
   if (pages.isLoading) return <Skeleton className="h-40" />;
   if (!pages.data?.length) return <EmptyState title="No text yet">Text appears here once Docveta has read the document.</EmptyState>;
   const all = pages.data.map((p) => p.text).join("\n\n");
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-subtle">Select text to see it on the page.</span>
         <Button
           size="sm"
           variant="ghost"
-          onClick={() => {
-            void navigator.clipboard.writeText(all);
-            toast.success("Text copied");
-          }}
+          onClick={() => navigator.clipboard.writeText(all).then(() => toast.success("Text copied"), () => toast.error("Couldn't copy the text"))}
         >
           <Copy /> Copy all
         </Button>
@@ -213,7 +235,13 @@ export function TextTab({ id }: { id: string }) {
             Page {p.page_no}
             {p.confidence !== null && <span>· {Math.round(p.confidence * 100)}% confidence</span>}
           </div>
-          <pre className="whitespace-pre-wrap rounded-md bg-surface-2 p-3 font-sans text-[13px] leading-relaxed">{p.text || "(no text)"}</pre>
+          <pre
+            className="whitespace-pre-wrap rounded-md bg-surface-2 p-3 font-sans text-[13px] leading-relaxed"
+            onMouseUp={(e) => showSelection(e, p.page_no)}
+            onKeyUp={(e) => showSelection(e, p.page_no)}
+          >
+            {p.text || "(no text)"}
+          </pre>
         </div>
       ))}
     </div>

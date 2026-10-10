@@ -5,23 +5,17 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { Spinner } from "@/components/ui/misc";
 import { cn } from "@/lib/utils";
-import { findAll, markMatches, squash, squashQuery } from "./pdf-find";
+import { findAll, markMatches, squash, squashQuery, type FindTarget } from "./pdf-find";
 import { usePinchZoom, useViewState, ViewerToolbar } from "./viewer-toolbar";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-
-/** The match to show: its page, its number on that page, and a counter that changes on every move. */
-interface FindTarget {
-  q: string;
-  page: number;
-  n: number;
-  seq: number;
-}
 
 interface Props {
   url: string;
   initialPage?: number;
   highlight?: string[];
+  /** Text to show, e.g. selected in the Text tab; Find takes over while it's open. */
+  locate?: FindTarget | null;
   onPageCount?: (n: number) => void;
 }
 
@@ -30,7 +24,7 @@ interface Props {
  * layer for selection and search-term highlighting, and Find (Ctrl+F) across all pages, including
  * ones not drawn yet. Loaded on demand (separate chunk).
  */
-export default function PdfViewer({ url, initialPage, highlight, onPageCount }: Props) {
+export default function PdfViewer({ url, initialPage, highlight, locate, onPageCount }: Props) {
   const [doc, setDoc] = React.useState<PDFDocumentProxy | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const view = useViewState();
@@ -41,20 +35,23 @@ export default function PdfViewer({ url, initialPage, highlight, onPageCount }: 
   const [thumbs, setThumbs] = React.useState(false);
   const container = React.useRef<HTMLDivElement>(null);
   const content = React.useRef<HTMLDivElement>(null);
+  const scrollFrame = React.useRef(0);
+  React.useEffect(() => () => cancelAnimationFrame(scrollFrame.current), []);
   // Callers often pass a new function or array on every render; don't reload or repaint for that.
   const pageCountCb = React.useRef(onPageCount);
   pageCountCb.current = onPageCount;
   const highlightKey = (highlight ?? []).join("");
   const terms = React.useMemo(() => (highlightKey ? highlightKey.split("") : []), [highlightKey]);
   const find = useFind(doc);
+  const target = find.target ?? locate ?? null;
 
   // Show the chosen match: bring its page into view; the page then scrolls to the match itself.
   React.useEffect(() => {
-    const t = find.target;
+    const t = target;
     if (!t || t.page < 1) return;
     const el = container.current?.querySelector<HTMLElement>(`[data-page="${t.page}"]`);
     if (el && !el.querySelector(".kz-find-active")) el.scrollIntoView({ block: "start" });
-  }, [find.target]);
+  }, [target]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -115,15 +112,19 @@ export default function PdfViewer({ url, initialPage, highlight, onPageCount }: 
           ref={container}
           className={cn("flex-1 overflow-auto scrollbar-thin bg-surface-3 pb-16 [touch-action:pan-x_pan-y]", find.open ? "pt-16" : "pt-4")}
           onScroll={(e) => {
+            // Once per frame: scrolling fires far more often, and this walks every page.
             const el = e.currentTarget;
-            const pages = el.querySelectorAll<HTMLElement>("[data-page]");
-            const mid = el.scrollTop + el.clientHeight / 3;
-            for (const p of pages) {
-              if (p.offsetTop + p.offsetHeight > mid) {
-                setCurrent(Number(p.dataset.page));
-                break;
+            if (scrollFrame.current) return;
+            scrollFrame.current = requestAnimationFrame(() => {
+              scrollFrame.current = 0;
+              const mid = el.scrollTop + el.clientHeight / 3;
+              for (const p of el.querySelectorAll<HTMLElement>("[data-page]")) {
+                if (p.offsetTop + p.offsetHeight > mid) {
+                  setCurrent(Number(p.dataset.page));
+                  break;
+                }
               }
-            }
+            });
           }}
         >
           {!doc || !baseSize ? (
@@ -133,7 +134,7 @@ export default function PdfViewer({ url, initialPage, highlight, onPageCount }: 
           ) : (
             <div ref={content} className="px-4">
               {Array.from({ length: doc.numPages }, (_, i) => (
-                <PdfPage key={i} doc={doc} pageNumber={i + 1} scale={scale} rotation={rotation} estimate={shown ?? baseSize} highlight={terms} find={find.target} root={container} />
+                <PdfPage key={i} doc={doc} pageNumber={i + 1} scale={scale} rotation={rotation} estimate={shown ?? baseSize} highlight={terms} find={target} root={container} />
               ))}
             </div>
           )}
@@ -222,10 +223,18 @@ function PdfPage({ doc, pageNumber, scale, rotation, estimate, highlight, find, 
 
   React.useEffect(() => {
     if (!ref.current) return;
-    const io = new IntersectionObserver((e) => e[0].isIntersecting && setVisible(true), { root: root.current, rootMargin: "800px 0px" });
+    // Pages near the screen are drawn; ones scrolled far away are put away again (below), or a
+    // long document keeps every page it ever showed in memory and phones start drawing blanks.
+    const io = new IntersectionObserver((e) => setVisible(e[e.length - 1].isIntersecting), { root: root.current, rootMargin: "1200px 0px" });
     io.observe(ref.current);
     return () => io.disconnect();
   }, [root]);
+
+  React.useEffect(() => {
+    if (visible || !ref.current) return;
+    ref.current.replaceChildren();
+    spans.current = null;
+  }, [visible]);
 
   React.useEffect(() => {
     if (!visible) return;
@@ -237,7 +246,7 @@ function PdfPage({ doc, pageNumber, scale, rotation, estimate, highlight, find, 
   }, [visible, doc, pageNumber]);
 
   React.useEffect(() => {
-    if (!page || !ref.current) return;
+    if (!page || !ref.current || !visible) return;
     const host = ref.current;
     const viewport = page.getViewport({ scale, rotation });
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -277,11 +286,14 @@ function PdfPage({ doc, pageNumber, scale, rotation, estimate, highlight, find, 
       task.cancel();
       textLayer?.cancel();
     };
-  }, [page, scale, rotation, highlight, applyFind]);
+  }, [page, visible, scale, rotation, highlight, applyFind]);
 
-  const w = Math.floor(estimate.w * scale);
-  const h = Math.floor(estimate.h * scale);
-  return <div ref={ref} data-page={pageNumber} className="pdf-page" style={{ width: page ? undefined : w, height: page ? undefined : h, minWidth: 50, minHeight: 50 }} />;
+  // The page's own size once it's known (the first page's until then), so the page keeps its
+  // place whether or not it is drawn right now.
+  const own = page?.getViewport({ scale, rotation });
+  const w = Math.floor(own ? own.width : estimate.w * scale);
+  const h = Math.floor(own ? own.height : estimate.h * scale);
+  return <div ref={ref} data-page={pageNumber} className="pdf-page" style={{ width: w, height: h, minWidth: 50, minHeight: 50, overflow: "hidden" }} />;
 }
 
 /** Find in document: searches every page's text, not only the pages drawn so far. */

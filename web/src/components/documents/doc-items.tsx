@@ -33,7 +33,7 @@ export function Thumbnail({ doc, className }: { doc: Document; className?: strin
 export function StatusBadge({ doc, className }: { doc: Document; className?: string }) {
   if (doc.status === "ready") return null;
   const map = {
-    processing: { icon: <Loader2 className="size-3 animate-spin" />, label: stageLabel(doc.processing_stage), cls: "bg-surface/90 text-muted" },
+    processing: { icon: <Loader2 className="size-3 animate-spin" />, label: processingLabel(doc), cls: "bg-surface/90 text-muted" },
     failed: { icon: <AlertCircle className="size-3" />, label: "Couldn't process", cls: "bg-danger-soft text-danger" },
     needs_password: { icon: <Lock className="size-3" />, label: "Password protected", cls: "bg-warning-soft text-warning" },
   } as const;
@@ -53,6 +53,15 @@ export function NewBadge({ className }: { className?: string }) {
       New
     </span>
   );
+}
+
+/** The stage, with pages read so far while reading: "Reading text · 3 of 12 pages". */
+export function processingLabel(doc: Document): string {
+  const label = stageLabel(doc.processing_stage);
+  const p = doc.progress;
+  if (!p || doc.processing_stage !== "ocr") return label;
+  if (p.pages_total > 1) return `${label} · ${p.pages_done} of ${p.pages_total} pages`;
+  return p.pages_total === 0 && p.pages_done > 1 ? `${label} · ${p.pages_done} pages read` : label;
 }
 
 export function stageLabel(stage: string): string {
@@ -119,6 +128,13 @@ interface ItemProps {
   query?: string;
 }
 
+/** While selecting, or with Ctrl/⌘/Shift held, a click selects instead of opening. */
+function selectClick(e: React.MouseEvent, selecting: boolean, onToggle: ItemProps["onToggle"]) {
+  if (!selecting && !e.metaKey && !e.ctrlKey && !e.shiftKey) return;
+  e.preventDefault();
+  onToggle(e);
+}
+
 function linkSearch(doc: Document, query?: string) {
   return { page: doc.matched_page, q: query || undefined };
 }
@@ -131,7 +147,7 @@ export function DocumentCard({ doc, selected, selecting, onToggle, query }: Item
         selected ? "border-accent ring-2 ring-accent/30" : "border-border",
       )}
     >
-      <Link to="/documents/$id" params={{ id: doc.id }} search={linkSearch(doc, query)} className="flex flex-1 flex-col" onClick={(e) => selecting && (e.preventDefault(), onToggle(e))}>
+      <Link to="/documents/$id" params={{ id: doc.id }} search={linkSearch(doc, query)} className="flex flex-1 flex-col" onClick={(e) => selectClick(e, selecting, onToggle)}>
         <Thumbnail doc={doc} className="aspect-[4/3.6] border-b border-border" />
         <div className="flex flex-1 flex-col gap-1.5 p-3">
           <h3 className="line-clamp-2 break-words text-sm font-medium leading-snug" title={doc.title}>{doc.title}</h3>
@@ -168,7 +184,7 @@ export function DocumentRow({ doc, selected, selecting, onToggle, query }: ItemP
         to="/documents/$id"
         params={{ id: doc.id }}
         search={linkSearch(doc, query)}
-        onClick={(e) => selecting && (e.preventDefault(), onToggle(e))}
+        onClick={(e) => selectClick(e, selecting, onToggle)}
         className="flex min-w-0 flex-1 items-center gap-3"
       >
         <Thumbnail doc={doc} className="h-12 w-10 shrink-0 rounded border border-border" />
