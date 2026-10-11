@@ -82,6 +82,13 @@ func parseQuery(r *http.Request) (search.Query, error) {
 	q.NoCorrespondent = v.Get("no_correspondent") == "true"
 	q.NoType = v.Get("no_document_type") == "true"
 	q.Trash = v.Get("trash") == "true"
+	if s := v.Get("collection_id"); s != "" {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			return q, apperr.Invalid("collection_id", "Invalid id")
+		}
+		q.CollectionID = &id
+	}
 	switch m := v.Get("mode"); m {
 	case "", "keyword", "semantic", "hybrid":
 		q.Mode = m

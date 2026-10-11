@@ -40,6 +40,16 @@ func (w *MaintenanceWorker) Work(ctx context.Context, _ *river.Job[jobs.Maintena
 		log.Error("worker alerts", "err", err)
 	}
 	w.storageAlert(ctx)
+	if n, err := a.CustomFields.SendDue(ctx, a.Queue); err != nil {
+		log.Error("date reminders", "err", err)
+	} else if n > 0 {
+		log.Info("sent date reminders", "count", n)
+	}
+	if n, err := a.sendDigests(ctx); err != nil {
+		log.Error("weekly summaries", "err", err)
+	} else if n > 0 {
+		log.Info("sent weekly summaries", "count", n)
+	}
 	if err := w.gcBlobs(ctx); err != nil {
 		log.Error("blob gc", "err", err)
 	}

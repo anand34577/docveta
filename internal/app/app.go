@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/anand34577/docveta/internal/collections"
 	"log/slog"
 	"net/http"
 	"time"
@@ -68,6 +69,7 @@ type App struct {
 	Pipeline     *pipeline.Service
 	Notify       *notify.Service
 	Views        *views.Service
+	Collections  *collections.Service
 	Shares       *shares.Service
 	AI           *ai.Service
 	Office       *office.Converter
@@ -122,6 +124,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, version stri
 	a.Documents.OfficeEnabled = func() bool { return a.Office.Enabled(context.Background()) }
 	a.Notify = notify.NewService(a.Pool, a.Keys, a.Settings, cfg, log)
 	a.Views = views.NewService(a.Pool, a.Spaces)
+	a.Collections = collections.NewService(a.Pool, a.Spaces)
 	a.AI = ai.NewService(a.Pool, a.Keys, a.Spaces, a.Audit)
 	a.Shares = shares.NewService(a.Pool, a.Spaces, a.Documents, a.Search, a.Keys, a.Audit)
 	return a, nil
@@ -231,7 +234,7 @@ func (a *App) Handler() http.Handler {
 	m := newMetrics(a)
 	ap := api.New(api.Deps{
 		Cfg: a.Cfg, Log: a.Log, Pool: a.Pool, Store: a.Store, Identity: a.Identity, Spaces: a.Spaces, Taxonomy: a.Taxonomy, CustomFields: a.CustomFields,
-		Documents: a.Documents, Docedit: a.Docedit, Search: a.Search, Pipeline: a.Pipeline, Notify: a.Notify, Views: a.Views, Shares: a.Shares, AI: a.AI, Queue: a.Queue, Office: a.Office, Folders: a.Folders, Workflows: a.Workflows, Uploads: a.Uploads, Audit: a.Audit, Settings: a.Settings, Version: a.Version,
+		Documents: a.Documents, Docedit: a.Docedit, Search: a.Search, Pipeline: a.Pipeline, Notify: a.Notify, Views: a.Views, Collections: a.Collections, Shares: a.Shares, AI: a.AI, Queue: a.Queue, Office: a.Office, Folders: a.Folders, Workflows: a.Workflows, Uploads: a.Uploads, Audit: a.Audit, Settings: a.Settings, Version: a.Version,
 	})
 	ap.Register(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })

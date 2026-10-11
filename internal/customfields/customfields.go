@@ -51,12 +51,17 @@ type Field struct {
 	DataType      string         `json:"data_type"`
 	Options       map[string]any `json:"options"` // select: {"choices":[...]}; monetary: {"currency":"INR"}
 	DocumentCount int            `json:"document_count"`
+	// Remind (date fields only) notifies the space's members RemindDays days before the date.
+	Remind     bool    `json:"remind"`
+	RemindDays []int32 `json:"remind_days"`
 }
 
 type Input struct {
-	Name     *string         `json:"name"`
-	DataType *string         `json:"data_type"`
-	Options  json.RawMessage `json:"options"`
+	Name       *string         `json:"name"`
+	DataType   *string         `json:"data_type"`
+	Options    json.RawMessage `json:"options"`
+	Remind     *bool           `json:"remind"`
+	RemindDays []int32         `json:"remind_days"`
 }
 
 // Value is one field's value on a document. Value is a string, number, bool, []string or
@@ -151,10 +156,40 @@ func normalize(in *Input, create bool, oldType string) (name, typ string, option
 	return name, typ, options, nil
 }
 
+// reminder validates the reminder settings, starting from the field's current ones.
+func reminder(in *Input, typ string, remind bool, days []int32) (bool, []int32, error) {
+	if in.Remind != nil {
+		remind = *in.Remind
+	}
+	if in.RemindDays != nil {
+		days = nil
+		for _, d := range in.RemindDays {
+			if d < 0 || d > 365 {
+				return false, nil, apperr.Invalid("remind_days", "Days before must be between 0 and 365")
+			}
+			if !slices.Contains(days, d) {
+				days = append(days, d)
+			}
+		}
+		slices.Sort(days)
+		slices.Reverse(days)
+		if len(days) > 6 {
+			return false, nil, apperr.Invalid("remind_days", "At most 6 reminders per date")
+		}
+	}
+	if len(days) == 0 {
+		days = []int32{30, 7, 1}
+	}
+	if remind && typ != Date {
+		return false, nil, apperr.Invalid("remind", "Only date fields can remind")
+	}
+	return remind, days, nil
+}
+
 func scanField(row pgx.Row) (*Field, error) {
 	var f Field
 	var opts []byte
-	err := row.Scan(&f.ID, &f.SpaceID, &f.Name, &f.DataType, &opts, &f.DocumentCount)
+	err := row.Scan(&f.ID, &f.SpaceID, &f.Name, &f.DataType, &opts, &f.DocumentCount, &f.Remind, &f.RemindDays)
 	if db.IsNoRows(err) {
 		return nil, apperr.NotFound("Custom field")
 	}
@@ -167,7 +202,8 @@ func scanField(row pgx.Row) (*Field, error) {
 }
 
 const selectSQL = `SELECT f.id, f.space_id, f.name, f.data_type, f.options,
-	(SELECT count(*) FROM custom_field_values v JOIN documents d ON d.id=v.document_id WHERE v.field_id=f.id AND d.deleted_at IS NULL)
+	(SELECT count(*) FROM custom_field_values v JOIN documents d ON d.id=v.document_id WHERE v.field_id=f.id AND d.deleted_at IS NULL),
+	f.remind, f.remind_lead_days
 	FROM custom_fields f`
 
 // List returns the custom fields of one space, or of all spaces the caller can see.
@@ -212,9 +248,13 @@ func (s *Service) Create(ctx context.Context, p *auth.Principal, spaceID uuid.UU
 	if err != nil {
 		return nil, err
 	}
+	remind, days, err := reminder(&in, typ, false, nil)
+	if err != nil {
+		return nil, err
+	}
 	id := uuid.Must(uuid.NewV7())
-	if _, err := s.pool.Exec(ctx, `INSERT INTO custom_fields (id, space_id, name, data_type, options) VALUES ($1,$2,$3,$4,$5)`,
-		id, spaceID, name, typ, opts); err != nil {
+	if _, err := s.pool.Exec(ctx, `INSERT INTO custom_fields (id, space_id, name, data_type, options, remind, remind_lead_days) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		id, spaceID, name, typ, opts, remind, days); err != nil {
 		if db.IsUniqueViolation(err) {
 			return nil, apperr.Conflict("name_taken", "A field called \""+name+"\" already exists in this space")
 		}
@@ -231,10 +271,14 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id uuid.UUID, i
 	if _, err := s.spaces.Require(ctx, p, f.SpaceID, spaces.ActEdit); err != nil {
 		return nil, apperr.NotFound("Custom field")
 	}
-	if in.Name == nil && in.Options == nil && in.DataType == nil {
+	if in.Name == nil && in.Options == nil && in.DataType == nil && in.Remind == nil && in.RemindDays == nil {
 		return f, nil
 	}
 	name, _, opts, err := normalize(&in, false, f.DataType)
+	if err != nil {
+		return nil, err
+	}
+	remind, days, err := reminder(&in, f.DataType, f.Remind, f.RemindDays)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +288,7 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id uuid.UUID, i
 	if in.Options == nil {
 		opts, _ = json.Marshal(f.Options)
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE custom_fields SET name=$2, options=$3 WHERE id=$1`, id, name, opts); err != nil {
+	if _, err := s.pool.Exec(ctx, `UPDATE custom_fields SET name=$2, options=$3, remind=$4, remind_lead_days=$5 WHERE id=$1`, id, name, opts, remind, days); err != nil {
 		if db.IsUniqueViolation(err) {
 			return nil, apperr.Conflict("name_taken", "A field called \""+name+"\" already exists in this space")
 		}

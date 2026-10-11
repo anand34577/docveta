@@ -21,6 +21,12 @@ import (
 
 // listDocuments runs keyword search, or meaning-based / hybrid search when asked for and available.
 func (a *API) listDocuments(r *http.Request, p *auth.Principal, q search.Query) (*documents.ListResult, error) {
+	if q.CollectionID != nil {
+		// Only collections the caller can see: membership of others' collections is theirs.
+		if _, err := a.Collections.Get(r.Context(), p, *q.CollectionID); err != nil {
+			return nil, err
+		}
+	}
 	if (q.Mode == "semantic" || q.Mode == "hybrid") && q.Q != "" && a.AI != nil {
 		return a.AI.Hybrid(r.Context(), a.Documents, p, q)
 	}

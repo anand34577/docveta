@@ -1004,6 +1004,12 @@ paths:
       - name: no_document_type
         in: query
         schema: *id007
+      - name: collection_id
+        in: query
+        description: Only documents in this collection (one you can see).
+        schema:
+          type: string
+          format: uuid
       - name: trash
         in: query
         schema: *id007
@@ -1861,6 +1867,195 @@ paths:
               schema: *id002
         default: *id001
       security: *id004
+  /api/v1/collections:
+    get:
+      summary: List collections (with document_id, the ones holding that document)
+      tags:
+      - collections
+      parameters:
+      - name: document_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Collection'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      summary: Create a collection
+      tags:
+      - collections
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectionInput'
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/collections/{id}:
+    get:
+      summary: Get a collection
+      tags:
+      - collections
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      summary: Rename, describe, recolour or share a collection
+      tags:
+      - collections
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectionInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      summary: Delete a collection (its documents stay)
+      tags:
+      - collections
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/collections/{id}/documents:
+    post:
+      summary: Add documents you can see to a collection
+      tags:
+      - collections
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - ids
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        '200':
+          description: How many documents changed
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - count
+                properties:
+                  count:
+                    type: integer
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/collections/{id}/documents/remove:
+    post:
+      summary: Take documents out of a collection
+      tags:
+      - collections
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - ids
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        '200':
+          description: How many documents changed
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - count
+                properties:
+                  count:
+                    type: integer
+        default:
+          $ref: '#/components/responses/Problem'
   /api/v1/saved-views:
     get:
       summary: List saved views
@@ -2943,6 +3138,35 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CustomFieldInput'
+  /api/v1/reminders:
+    get:
+      summary: Dates set to remind that are coming up (and those passed in the last 30 days)
+      tags:
+      - taxonomy
+      parameters:
+      - name: days
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 366
+          default: 90
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Upcoming'
+        default:
+          $ref: '#/components/responses/Problem'
   /api/v1/custom-fields/{id}:
     patch:
       summary: Rename a field or change its choices
@@ -5419,6 +5643,65 @@ components:
       - from
       - has_password
       type: object
+    Collection:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        space_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The space it is shared with; null for a personal collection.
+        owner_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        color:
+          type: string
+        document_count:
+          type: integer
+          description: Documents in it that you can see.
+        covers:
+          type: array
+          description: Up to four of those documents, last added first.
+          items:
+            type: string
+            format: uuid
+        can_edit:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - space_id
+      - owner_id
+      - name
+      - description
+      - color
+      - document_count
+      - covers
+      - can_edit
+      - updated_at
+    CollectionInput:
+      type: object
+      properties:
+        space_id:
+          type: string
+          format: uuid
+          description: Share with this space; the zero UUID makes it personal.
+        name:
+          type: string
+        description:
+          type: string
+        color:
+          type: string
+          enum: [slate, red, orange, amber, green, teal, cyan, blue, indigo, violet, pink]
     SavedView:
       properties:
         can_edit:
@@ -5515,6 +5798,9 @@ components:
           type: boolean
         no_type:
           type: boolean
+        collection_id:
+          type: string
+          format: uuid
         not_tag_ids:
           items:
             format: uuid
@@ -6167,6 +6453,16 @@ components:
           additionalProperties: true
         document_count:
           type: integer
+        remind:
+          type: boolean
+          description: Date fields only. Notify the space's members before the date.
+        remind_days:
+          type: array
+          description: How many days before the date to remind, largest first.
+          items:
+            type: integer
+            minimum: 0
+            maximum: 365
       required:
       - id
       - space_id
@@ -6174,6 +6470,38 @@ components:
       - data_type
       - options
       - document_count
+      - remind
+      - remind_days
+    Upcoming:
+      type: object
+      properties:
+        document_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        space_id:
+          type: string
+          format: uuid
+        field_id:
+          type: string
+          format: uuid
+        field_name:
+          type: string
+        due:
+          type: string
+          format: date
+        days_left:
+          type: integer
+          description: Negative once the date has passed.
+      required:
+      - document_id
+      - title
+      - space_id
+      - field_id
+      - field_name
+      - due
+      - days_left
     CustomFieldInput:
       type: object
       properties:
@@ -6187,6 +6515,12 @@ components:
         options:
           type: object
           additionalProperties: true
+        remind:
+          type: boolean
+        remind_days:
+          type: array
+          items:
+            type: integer
     CustomValue:
       type: object
       properties:
