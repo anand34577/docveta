@@ -13,7 +13,7 @@ import { ask, claim, currentSession, forget, maxQuestion, newChat, openConversat
 import { useCurrentUser } from "@/components/app-shell";
 import { Markdown } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
-import { Input, NativeSelect, Textarea } from "@/components/ui/input";
+import { Input, Select, Textarea } from "@/components/ui/input";
 import { EmptyState, LoadMore, Skeleton, Spinner } from "@/components/ui/misc";
 import { Dialog, DialogContent, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/overlay";
 import { confirm, prompt } from "@/components/ui/confirm";
@@ -383,14 +383,14 @@ export function AskPage() {
               {me.spaces.length > 1 && !docId ? (
                 <label className="flex items-center gap-2">
                   Look in
-                  <NativeSelect className="h-8 w-auto text-xs sm:h-8" value={space} onChange={(e) => useChat.setState({ space: e.target.value })}>
+                  <Select className="h-8 w-auto text-xs sm:h-8" value={space} onChange={(e) => useChat.setState({ space: e.target.value })}>
                     <option value="">All my spaces</option>
                     {me.spaces.map((s) => (
                       <option key={s.id} value={s.id}>
                         {spaceLabel(s)}
                       </option>
                     ))}
-                  </NativeSelect>
+                  </Select>
                 </label>
               ) : (
                 <span />

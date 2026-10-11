@@ -7,7 +7,7 @@ import { useShares } from "@/lib/queries";
 import type { Share } from "@/lib/types";
 import { formatDateTime, timeAgo } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Field, Input, NativeSelect } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/input";
 import { Badge, Checkbox, Skeleton } from "@/components/ui/misc";
 import { Dialog, DialogContent } from "@/components/ui/overlay";
 import { confirm } from "@/components/ui/confirm";
@@ -54,12 +54,12 @@ export function ShareDialog({ docId, title, onClose }: { docId: string; title: s
         <div className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Link works for" htmlFor="sh-days">
-              <NativeSelect id="sh-days" value={days} onChange={(e) => setDays(e.target.value)}>
+              <Select id="sh-days" value={days} onChange={(e) => setDays(e.target.value)}>
                 <option value="1">1 day</option>
                 <option value="7">7 days</option>
                 <option value="30">30 days</option>
                 <option value="">Until I stop it</option>
-              </NativeSelect>
+              </Select>
             </Field>
             <Field label="Password (optional)" htmlFor="sh-pw">
               <Input id="sh-pw" type="text" autoComplete="off" value={password} placeholder="No password" onChange={(e) => setPassword(e.target.value)} />

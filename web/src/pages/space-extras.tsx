@@ -9,10 +9,11 @@ import { cn, colorNames, formatDateTime, tagDot, timeAgo } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { SettingsCard } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
-import { Field, Input, NativeSelect, Textarea } from "@/components/ui/input";
+import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Badge, EmptyState, Skeleton, Switch, SwitchRow } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { EntityPicker } from "@/components/ui/entity-picker";
+import { TimeInput } from "@/components/ui/time-input";
 import { confirm } from "@/components/ui/confirm";
 
 function useSaveSpace(space: Space) {
@@ -69,18 +70,18 @@ export function SpaceAI({ space }: { space: Space }) {
       <SettingsCard title="AI assistance" description="AI reads each new document and works out what kind of document it is, who it is from, its date, its tags and your custom fields. You always see what it would change first, unless you pick automatic.">
         <div className="grid max-w-md gap-4">
           <Field label="Use AI for this space" htmlFor="ai-policy" hint="“Local only” sends text only to providers marked as running on your own hardware.">
-            <NativeSelect id="ai-policy" disabled={!owner} value={space.ai_policy} onChange={(e) => save({ ai_policy: e.target.value })}>
+            <Select id="ai-policy" disabled={!owner} value={space.ai_policy} onChange={(e) => save({ ai_policy: e.target.value })}>
               <option value="off">Off</option>
               <option value="local_only">Only with a local provider</option>
               <option value="any">Any configured provider</option>
-            </NativeSelect>
+            </Select>
           </Field>
           {space.ai_policy !== "off" && (
             <Field label="When AI has suggestions" htmlFor="ai-mode">
-              <NativeSelect id="ai-mode" disabled={!owner} value={space.ai_apply_mode} onChange={(e) => save({ ai_apply_mode: e.target.value })}>
+              <Select id="ai-mode" disabled={!owner} value={space.ai_apply_mode} onChange={(e) => save({ ai_apply_mode: e.target.value })}>
                 <option value="suggest">Ask me first (shown in the Inbox)</option>
                 <option value="auto">Apply automatically</option>
-              </NativeSelect>
+              </Select>
             </Field>
           )}
         </div>
@@ -297,6 +298,7 @@ export function SpaceFields({ space }: { space: Space }) {
                 <div className="text-xs text-subtle">
                   {fieldTypes.find(([t]) => t === f.data_type)?.[1] ?? f.data_type} · used on {f.document_count} document{f.document_count === 1 ? "" : "s"}
                   {f.options.choices?.length ? ` · ${f.options.choices.join(", ")}` : ""}
+                  {f.remind && ` · reminds ${f.remind_days.map((d) => (d ? `${d}d` : "on the day")).join(", ")} before`}
                 </div>
               </div>
               {owner && (
@@ -324,6 +326,8 @@ function FieldDialog({ spaceId, field, onClose }: { spaceId: string; field: Cust
   const [type, setType] = React.useState<FieldType>(field?.data_type ?? "text");
   const [choices, setChoices] = React.useState((field?.options.choices ?? []).join("\n"));
   const [currency, setCurrency] = React.useState(field?.options.currency ?? "INR");
+  const [remind, setRemind] = React.useState(field?.remind ?? false);
+  const [days, setDays] = React.useState<number[]>(field?.remind_days ?? [30, 7, 1]);
   const [err, setErr] = React.useState<ApiError | null>(null);
   const [busy, setBusy] = React.useState(false);
   const listType = type === "select" || type === "multiselect";
@@ -335,8 +339,9 @@ function FieldDialog({ spaceId, field, onClose }: { spaceId: string; field: Cust
     if (listType) options.choices = choices.split("\n").map((c) => c.trim()).filter(Boolean);
     if (type === "monetary") options.currency = currency.trim().toUpperCase();
     try {
-      if (field) await api.patch(`/custom-fields/${field.id}`, { name, options });
-      else await api.post("/custom-fields", { space_id: spaceId, name, data_type: type, options });
+      const reminder = type === "date" ? { remind, remind_days: days } : {};
+      if (field) await api.patch(`/custom-fields/${field.id}`, { name, options, ...reminder });
+      else await api.post("/custom-fields", { space_id: spaceId, name, data_type: type, options, ...reminder });
       qc.invalidateQueries({ queryKey: ["custom-fields"] });
       onClose();
     } catch (e) {
@@ -353,13 +358,13 @@ function FieldDialog({ spaceId, field, onClose }: { spaceId: string; field: Cust
             <Input id="cf-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Amount, Due date" required autoFocus />
           </Field>
           <Field label="Type" htmlFor="cf-type" hint={field ? "The type can't change after creation." : undefined}>
-            <NativeSelect id="cf-type" value={type} disabled={!!field} onChange={(e) => setType(e.target.value as FieldType)}>
+            <Select id="cf-type" value={type} disabled={!!field} onChange={(e) => setType(e.target.value as FieldType)}>
               {fieldTypes.map(([t, l]) => (
                 <option key={t} value={t}>
                   {l}
                 </option>
               ))}
-            </NativeSelect>
+            </Select>
           </Field>
           {type === "monetary" && (
             <Field label="Currency code" htmlFor="cf-cur" hint="For example INR, USD, EUR.">
@@ -370,6 +375,27 @@ function FieldDialog({ spaceId, field, onClose }: { spaceId: string; field: Cust
             <Field label="Choices" htmlFor="cf-choices" hint="One per line." error={err?.fieldError("options")}>
               <Textarea id="cf-choices" rows={4} value={choices} onChange={(e) => setChoices(e.target.value)} />
             </Field>
+          )}
+          {type === "date" && (
+            <div className="rounded-lg border border-border p-3">
+              <SwitchRow label="Remind before this date" description="Everyone in the space gets a notification, for example before a policy or passport expires. Upcoming dates show on Home." checked={remind} onCheckedChange={setRemind} />
+              {remind && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-1" role="group" aria-label="When to remind">
+                  {[90, 60, 30, 14, 7, 3, 1, 0].map((d) => {
+                    const on = days.includes(d);
+                    return (
+                      <button key={d} type="button" aria-pressed={on}
+                        onClick={() => setDays(on ? days.filter((x) => x !== d) : [...days, d].sort((a, b) => b - a))}
+                        className={cn("rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                          on ? "border-accent bg-accent-soft text-accent-soft-fg" : "border-border text-muted hover:border-border-strong hover:text-fg")}>
+                        {d === 0 ? "On the day" : `${d} day${d === 1 ? "" : "s"}`}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {err?.fieldError("remind_days") && <p className="mt-1 text-[13px] text-danger">{err.fieldError("remind_days")}</p>}
+            </div>
           )}
           {err && !err.fields.length && <p className="text-sm text-danger">{err.message}</p>}
           <DialogFooter>
@@ -526,14 +552,14 @@ function WorkflowDialog({ space, workflow, onClose, onSaved }: { space: Space; w
           <section className="space-y-3 rounded-lg border border-border p-4">
             <h3 className="text-sm font-semibold">When</h3>
             <div className="flex flex-wrap items-center gap-2">
-              <NativeSelect aria-label="Trigger" className="max-w-xs" value={trigger} onChange={(e) => setTrigger(e.target.value as Workflow["trigger"])}>
+              <Select aria-label="Trigger" className="max-w-xs" value={trigger} onChange={(e) => setTrigger(e.target.value as Workflow["trigger"])}>
                 {(Object.keys(triggers) as Workflow["trigger"][]).map((t) => (
                   <option key={t} value={t}>
                     {triggers[t][0].toUpperCase() + triggers[t].slice(1)}
                   </option>
                 ))}
-              </NativeSelect>
-              {trigger === "schedule" && <Input type="time" aria-label="Time" className="w-32" value={time} onChange={(e) => setTime(e.target.value)} />}
+              </Select>
+              {trigger === "schedule" && <TimeInput aria-label="Time" value={time} onChange={setTime} />}
             </div>
             <h3 className="pt-1 text-sm font-semibold">…and the document matches</h3>
             <p className="-mt-2 text-xs text-muted">Leave everything empty to match every document.</p>
@@ -582,13 +608,13 @@ function ActionRow({ space, action, onChange, onRemove }: { space: Space; action
   const field = (fields.data ?? []).find((f) => f.id === action.field_id);
   return (
     <div className="flex flex-wrap items-start gap-2 rounded-md bg-surface-2/60 p-2.5">
-      <NativeSelect aria-label="Action" className="w-full sm:w-56" value={t} onChange={(e) => onChange({ type: e.target.value as WorkflowAction["type"] })}>
+      <Select aria-label="Action" className="w-full sm:w-56" value={t} onChange={(e) => onChange({ type: e.target.value as WorkflowAction["type"] })}>
         {(Object.keys(actionLabels) as WorkflowAction["type"][]).map((k) => (
           <option key={k} value={k}>
             {actionLabels[k]}
           </option>
         ))}
-      </NativeSelect>
+      </Select>
       <div className="min-w-0 flex-1 basis-56 space-y-2">
         {(t === "add_tags" || t === "remove_tags") && (
           <Input aria-label="Tag names" placeholder="Tag names, comma-separated" value={names} onChange={(e) => onChange({ ...action, names: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
@@ -596,48 +622,48 @@ function ActionRow({ space, action, onChange, onRemove }: { space: Space; action
         {(t === "set_correspondent" || t === "set_document_type") && <Input aria-label="Name" placeholder="Name (created if missing)" value={action.name ?? ""} onChange={(e) => onChange({ ...action, name: e.target.value })} />}
         {t === "set_field" && (
           <div className="flex flex-wrap gap-2">
-            <NativeSelect aria-label="Field" className="w-44" value={action.field_id ?? ""} onChange={(e) => onChange({ ...action, field_id: e.target.value, value: undefined })}>
+            <Select aria-label="Field" className="w-44" value={action.field_id ?? ""} onChange={(e) => onChange({ ...action, field_id: e.target.value, value: undefined })}>
               <option value="">Choose a field…</option>
               {(fields.data ?? []).filter((f) => f.space_id === space.id).map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}
                 </option>
               ))}
-            </NativeSelect>
+            </Select>
             {field?.data_type === "boolean" ? (
-              <NativeSelect aria-label="Value" className="w-28" value={String(action.value ?? "")} onChange={(e) => onChange({ ...action, value: e.target.value === "true" })}>
+              <Select aria-label="Value" className="w-28" value={String(action.value ?? "")} onChange={(e) => onChange({ ...action, value: e.target.value === "true" })}>
                 <option value="">—</option>
                 <option value="true">Yes</option>
                 <option value="false">No</option>
-              </NativeSelect>
+              </Select>
             ) : (
               <Input aria-label="Value" className="min-w-0 flex-1" placeholder="Value" value={String(action.value ?? "")} onChange={(e) => onChange({ ...action, value: e.target.value })} />
             )}
           </div>
         )}
         {t === "set_inbox" && (
-          <NativeSelect aria-label="Inbox" className="w-48" value={String(action.value ?? true)} onChange={(e) => onChange({ ...action, value: e.target.value === "true" })}>
+          <Select aria-label="Inbox" className="w-48" value={String(action.value ?? true)} onChange={(e) => onChange({ ...action, value: e.target.value === "true" })}>
             <option value="true">Put in the Inbox</option>
             <option value="false">Mark as reviewed</option>
-          </NativeSelect>
+          </Select>
         )}
         {t === "move_to_space" && (
-          <NativeSelect aria-label="Space" value={action.space_id ?? ""} onChange={(e) => onChange({ ...action, space_id: e.target.value })}>
+          <Select aria-label="Space" value={action.space_id ?? ""} onChange={(e) => onChange({ ...action, space_id: e.target.value })}>
             <option value="">Choose a space…</option>
             {me.spaces.filter((s) => s.role !== "viewer" && s.id !== space.id).map((s) => (
               <option key={s.id} value={s.id}>
                 {s.kind === "personal" ? "Personal" : s.name}
               </option>
             ))}
-          </NativeSelect>
+          </Select>
         )}
         {t === "notify" && (
           <>
-            <NativeSelect aria-label="Who to notify" className="w-56" value={action.to ?? "space_owners"} onChange={(e) => onChange({ ...action, to: e.target.value as WorkflowAction["to"] })}>
+            <Select aria-label="Who to notify" className="w-56" value={action.to ?? "space_owners"} onChange={(e) => onChange({ ...action, to: e.target.value as WorkflowAction["to"] })}>
               <option value="owner">The person who added it</option>
               <option value="space_owners">Space owners</option>
               <option value="space_members">Everyone in the space</option>
-            </NativeSelect>
+            </Select>
             <Input aria-label="Title" placeholder="Title" value={action.title ?? ""} onChange={(e) => onChange({ ...action, title: e.target.value })} />
             <Input aria-label="Message" placeholder="Message (optional)" value={action.message ?? ""} onChange={(e) => onChange({ ...action, message: e.target.value })} />
           </>

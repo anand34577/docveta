@@ -7,7 +7,7 @@ import type { CustomField, DocQuery, TaxonomyKind } from "@/lib/types";
 import { cn, formatDocDate, spaceLabel, tagDot } from "@/lib/utils";
 import { useUI } from "@/stores/ui";
 import { Button } from "@/components/ui/button";
-import { Input, NativeSelect } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/overlay";
 import { Checkbox } from "@/components/ui/misc";
 import { useCurrentUser } from "@/components/app-shell";
@@ -166,7 +166,7 @@ export function FilterBar({ query, onChange, total, totalCapped, found, hideSpac
             </span>
           ) : null}
           {total !== undefined && <span className="text-[13px] tabular-nums text-subtle">{total.toLocaleString()}{totalCapped ? "+" : ""} document{total === 1 && !totalCapped ? "" : "s"}</span>}
-          <NativeSelect value={query.sort ?? ""} onChange={(e) => set({ sort: e.target.value || undefined })} className="h-8 w-auto text-[13px]" aria-label="Sort">
+          <Select value={query.sort ?? ""} onChange={(e) => set({ sort: e.target.value || undefined })} className="h-8 w-auto text-[13px]" aria-label="Sort">
             <option value="">{query.q ? "Best match" : "Newest added"}</option>
             {query.q && <option value="-added">Newest added</option>}
             <option value="added">Oldest added</option>
@@ -180,7 +180,7 @@ export function FilterBar({ query, onChange, total, totalCapped, found, hideSpac
                 <option value={`cf:${f.id}`}>{f.name} (low to high)</option>
               </React.Fragment>
             ))}
-          </NativeSelect>
+          </Select>
         </div>
       </div>
     </div>
@@ -458,37 +458,37 @@ function FieldFilter({ fields, query, onChange }: { fields: CustomField[]; query
   return (
     <FilterButton label="Fields" count={active} open={open} onOpenChange={setOpen}>
       <div className="space-y-2.5 p-3">
-        <NativeSelect aria-label="Field" value={field?.id} onChange={(e) => setFid(e.target.value)}>
+        <Select aria-label="Field" value={field?.id} onChange={(e) => setFid(e.target.value)}>
           {fields.map((f) => (
             <option key={f.id} value={f.id}>
               {f.name}
             </option>
           ))}
-        </NativeSelect>
-        <NativeSelect aria-label="Condition" value={op} onChange={(e) => setOp(e.target.value)}>
+        </Select>
+        <Select aria-label="Condition" value={op} onChange={(e) => setOp(e.target.value)}>
           {choices.map(([o, l]) => (
             <option key={l} value={o}>
               {l}
             </option>
           ))}
-        </NativeSelect>
+        </Select>
         {op !== "" &&
           (family === "date" ? (
             <DateInput value={value} onChange={(v) => setValue(v ?? "")} />
           ) : family === "boolean" ? (
-            <NativeSelect aria-label="Value" value={value || "yes"} onChange={(e) => setValue(e.target.value)}>
+            <Select aria-label="Value" value={value || "yes"} onChange={(e) => setValue(e.target.value)}>
               <option value="yes">Yes</option>
               <option value="no">No</option>
-            </NativeSelect>
+            </Select>
           ) : field?.options.choices?.length ? (
-            <NativeSelect aria-label="Value" value={value} onChange={(e) => setValue(e.target.value)}>
+            <Select aria-label="Value" value={value} onChange={(e) => setValue(e.target.value)}>
               <option value="">Choose…</option>
               {field.options.choices.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
               ))}
-            </NativeSelect>
+            </Select>
           ) : (
             <Input aria-label="Value" inputMode={family === "number" ? "decimal" : undefined} value={value} onChange={(e) => setValue(e.target.value)} placeholder="Value" onKeyDown={(e) => e.key === "Enter" && apply()} />
           ))}

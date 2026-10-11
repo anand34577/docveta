@@ -4,6 +4,7 @@ import { api } from "./api";
 import type {
   AIProvider,
   AISuggestion,
+  Collection,
   Channel,
   CustomField,
   Invite,
@@ -27,6 +28,7 @@ import type {
   Status,
   TaxonomyItem,
   TaxonomyKind,
+  Upcoming,
 } from "./types";
 
 export const queryClient = new QueryClient({
@@ -113,6 +115,7 @@ export function docParams(q: DocQuery, cursor?: string | null) {
     trash: q.trash,
     sort: q.sort,
     mode: q.mode,
+    collection_id: q.collection_id,
     cursor: cursor ?? undefined,
     limit: 60,
   };
@@ -260,6 +263,24 @@ export function useCreateTaxonomy(kind: TaxonomyKind) {
 }
 
 /* ---------------------------------------------------------------- Newer features */
+
+/** Collections you can see; with docId, the ones holding that document. */
+export function useCollections(docId?: string) {
+  return useQuery({
+    queryKey: ["collections", docId ?? "all"],
+    queryFn: () => api.get<{ items: Collection[] }>("/collections", { document_id: docId }).then((r) => r.items),
+    staleTime: 30_000,
+  });
+}
+
+/** Dates set to remind (expiry, renewal…) in the next 90 days and the last 30. */
+export function useUpcoming() {
+  return useQuery({
+    queryKey: ["reminders"],
+    queryFn: () => api.get<{ items: Upcoming[] }>("/reminders").then((r) => r.items),
+    staleTime: 5 * 60_000,
+  });
+}
 
 export function useCustomFields(spaceId?: string) {
   return useQuery({

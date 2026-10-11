@@ -10,7 +10,7 @@ import { formatDateTime, setDateFormat, timeAgo } from "@/lib/utils";
 import { ThemePicker, useCurrentUser } from "@/components/app-shell";
 import { SecretReveal, SettingsCard, SettingsLayout } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
-import { Field, Input, NativeSelect } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/input";
 import { Badge, Checkbox, EmptyState, Switch } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { confirm } from "@/components/ui/confirm";
@@ -81,22 +81,22 @@ function Profile() {
           </div>
         </Field>
         <Field label="Date format" htmlFor="p-df" hint="Also decides how dates like 03/04 are read from documents.">
-          <NativeSelect id="p-df" value={me.date_format} onChange={(e) => save({ date_format: e.target.value })}>
+          <Select id="p-df" value={me.date_format} onChange={(e) => save({ date_format: e.target.value })}>
             <option value="DD/MM/YYYY">31/12/2026 (DD/MM/YYYY)</option>
             <option value="MM/DD/YYYY">12/31/2026 (MM/DD/YYYY)</option>
             <option value="YYYY-MM-DD">2026-12-31 (ISO)</option>
             <option value="DD.MM.YYYY">31.12.2026</option>
             <option value="D MMM YYYY">31 Dec 2026</option>
-          </NativeSelect>
+          </Select>
         </Field>
         <Field label="Time zone" htmlFor="p-tz">
-          <NativeSelect id="p-tz" value={me.timezone} onChange={(e) => save({ timezone: e.target.value })}>
+          <Select id="p-tz" value={me.timezone} onChange={(e) => save({ timezone: e.target.value })}>
             {zones.map((z) => (
               <option key={z} value={z}>
                 {z.replace(/_/g, " ")}
               </option>
             ))}
-          </NativeSelect>
+          </Select>
         </Field>
       </div>
     </SettingsCard>
@@ -281,6 +281,7 @@ const eventLabels: Record<string, string> = {
   "document.failed": "Document couldn't be processed",
   "note.mention": "Someone mentions me",
   "reminder.due": "Reminders",
+  "digest.weekly": "Weekly summary",
   "security.new_login": "New sign-in to my account",
   "security.token_created": "New API token",
   "worker.offline": "Processing worker offline (admins)",
@@ -568,12 +569,12 @@ function Tokens() {
                 </div>
               </div>
               <Field label="Expires" htmlFor="t-exp">
-                <NativeSelect id="t-exp" value={days} onChange={(e) => setDays(e.target.value)}>
+                <Select id="t-exp" value={days} onChange={(e) => setDays(e.target.value)}>
                   <option value="30">In 30 days</option>
                   <option value="90">In 90 days</option>
                   <option value="365">In 1 year</option>
                   <option value="">Never</option>
-                </NativeSelect>
+                </Select>
               </Field>
               <DialogFooter>
                 <Button onClick={() => setOpen(false)}>Cancel</Button>

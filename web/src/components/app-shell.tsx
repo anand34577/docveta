@@ -7,6 +7,7 @@ import {
   MessageSquareText,
   FileText,
   Home,
+  Library,
   Inbox,
   LogOut,
   Menu,
@@ -298,6 +299,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
         <NavItem to="/" exact icon={<Home />} label="Home" onClick={onNavigate} />
         <NavItem to="/inbox" icon={<Inbox />} label="Inbox" count={stats.data?.inbox} onClick={onNavigate} />
         <NavItem to="/documents" icon={<FileText />} label="All documents" active={allDocs} onClick={onNavigate} />
+        <NavItem to="/collections" icon={<Library />} label="Collections" onClick={onNavigate} />
         {ai?.chat && <NavItem to="/ask" icon={<MessageSquareText />} label="Ask your documents" onClick={onNavigate} />}
       </div>
 

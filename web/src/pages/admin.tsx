@@ -9,7 +9,7 @@ import { cn, formatBytes, formatDateTime, timeAgo } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { SecretReveal, SettingsCard, SettingsLayout } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
-import { Field, Input, NativeSelect } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/input";
 import { Avatar, Badge, EmptyState, LoadMore, Skeleton, SwitchRow } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { confirm } from "@/components/ui/confirm";
@@ -364,14 +364,14 @@ function ProcessingAdmin() {
               <RotateCw /> Retry all failed
             </Button>
           )}
-          <NativeSelect value={status} onChange={(e) => setStatus(e.target.value)} className="h-8 w-auto text-[13px]">
+          <Select value={status} onChange={(e) => setStatus(e.target.value)} className="h-8 w-auto text-[13px]">
             <option value="">All</option>
             <option value="queued">Waiting</option>
             <option value="leased">In progress</option>
             <option value="failed">Failed</option>
             <option value="done">Done</option>
             <option value="cancelled">Cancelled</option>
-          </NativeSelect>
+          </Select>
           </>
         }
       >
@@ -715,11 +715,11 @@ function SMTPAdmin() {
           <Input id="m-port" type="number" value={c.port} onChange={(e) => setC({ ...c, port: Number(e.target.value) })} />
         </Field>
         <Field label="Security" htmlFor="m-sec">
-          <NativeSelect id="m-sec" value={c.security} onChange={(e) => setC({ ...c, security: e.target.value as SMTPConfig["security"] })}>
+          <Select id="m-sec" value={c.security} onChange={(e) => setC({ ...c, security: e.target.value as SMTPConfig["security"] })}>
             <option value="starttls">STARTTLS (587)</option>
             <option value="tls">TLS (465)</option>
             <option value="none">None (not recommended)</option>
-          </NativeSelect>
+          </Select>
         </Field>
         <Field label="Username" htmlFor="m-user">
           <Input id="m-user" value={c.username} onChange={(e) => setC({ ...c, username: e.target.value })} />
@@ -850,7 +850,7 @@ function AuditAdmin() {
       title="Audit log"
       description="Sign-ins, account and security changes, and admin actions."
       actions={
-        <NativeSelect value={action} onChange={(e) => setAction(e.target.value)} className="h-8 w-auto text-[13px]">
+        <Select value={action} onChange={(e) => setAction(e.target.value)} className="h-8 w-auto text-[13px]">
           <option value="">All</option>
           <option value="auth.">Sign-ins</option>
           <option value="user.">Users</option>
@@ -858,7 +858,7 @@ function AuditAdmin() {
           <option value="worker.">Workers</option>
           <option value="settings.">Settings</option>
           <option value="space.">Spaces</option>
-        </NativeSelect>
+        </Select>
       }
     >
       {q.isLoading ? (

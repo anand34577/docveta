@@ -1,7 +1,8 @@
+import * as React from "react";
 import { Link } from "@tanstack/react-router";
-import { AlertCircle, ArrowRight, Bookmark, CalendarPlus, Files, History, Inbox, Loader2, Settings, Shapes, Tags, Upload, User } from "lucide-react";
+import { AlertCircle, ArrowRight, BellRing, Bookmark, CalendarPlus, Files, History, Inbox, Loader2, Settings, Shapes, Tags, Upload, User } from "lucide-react";
 import { recentDocs } from "@/lib/recent";
-import { nameSearch, useDocumentTypes, useDocuments, useSavedViews, useStats, useTaxonomy } from "@/lib/queries";
+import { nameSearch, useDocumentTypes, useDocuments, useSavedViews, useStats, useTaxonomy, useUpcoming } from "@/lib/queries";
 import { cn, formatBytes, formatDocDate, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
 import { useCurrentUser, useFilePicker } from "@/components/app-shell";
 import { Thumbnail, StatusBadge } from "@/components/documents/doc-items";
@@ -50,13 +51,15 @@ export function HomePage() {
       )}
 
       <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard to="/documents" icon={<Files />} label="Documents" value={s?.total} hint={s ? formatBytes(s.bytes) : undefined} />
+        <StatCard to="/documents" icon={<Files />} label={s ? `Documents · ${formatBytes(s.bytes)}` : "Documents"} value={s?.total} />
         <StatCard to="/documents" search={{ status: "processing" }} icon={<Loader2 className={s?.processing ? "animate-spin" : ""} />} label="Processing" value={s?.processing} />
         <StatCard to="/documents" search={{ status: "failed,needs_password" }} icon={<AlertCircle />} label="Need attention" value={s?.failed} tone={s?.failed ? "warning" : undefined} />
         <StatCard to="/documents" search={{ q: "added:7d", sort: "-added" }} icon={<CalendarPlus />} label="Added this week" value={s?.added_this_week} />
       </div>
 
       <div className="mt-10 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="min-w-0 space-y-8">
+        <ComingUp />
         <section aria-labelledby="recent-h">
           <SectionHeader id="recent-h" title="Recently added" link={{ to: "/documents", label: "View all" }} />
           {recent.isLoading ? (
@@ -110,6 +113,7 @@ export function HomePage() {
             </Card>
           )}
         </section>
+        </div>
 
         <aside className="space-y-8">
           <section aria-labelledby="spaces-h">
@@ -160,6 +164,43 @@ function SectionHeader({ id, title, link }: { id: string; title: string; link?: 
         </Link>
       )}
     </div>
+  );
+}
+
+/** Expiry and renewal dates coming up: the reason many people keep their documents here. */
+function ComingUp() {
+  const up = useUpcoming();
+  const [all, setAll] = React.useState(false);
+  if (!up.data?.length) return null;
+  return (
+    <section aria-labelledby="due-h">
+      <SectionHeader id="due-h" title="Coming up" />
+      <Card className="divide-y divide-border overflow-hidden">
+        {up.data.slice(0, all ? undefined : 6).map((u) => {
+          const tone = u.days_left < 0 ? "bg-danger-soft text-danger" : u.days_left <= 7 ? "bg-warning-soft text-warning" : "bg-surface-2 text-muted";
+          const when = u.days_left < 0 ? `${-u.days_left}d ago` : u.days_left === 0 ? "Today" : u.days_left === 1 ? "Tomorrow" : `in ${u.days_left}d`;
+          return (
+            <Link key={u.document_id + u.field_id} to="/documents/$id" params={{ id: u.document_id }} className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-surface-2 sm:px-4">
+              <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", tone)}>
+                <BellRing className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{u.title}</span>
+                <span className="block truncate text-xs text-muted">
+                  {u.field_name} · {formatDocDate(u.due)}
+                </span>
+              </span>
+              <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums", tone)}>{when}</span>
+            </Link>
+          );
+        })}
+        {up.data.length > 6 && (
+          <button type="button" onClick={() => setAll(!all)} className="w-full px-4 py-2.5 text-center text-sm font-medium text-accent hover:bg-surface-2">
+            {all ? "Show fewer" : `Show all ${up.data.length}`}
+          </button>
+        )}
+      </Card>
+    </section>
   );
 }
 
@@ -249,7 +290,7 @@ function TopTags() {
   );
 }
 
-function StatCard({ to, search, icon, label, value, hint, tone }: { to: string; search?: Record<string, string>; icon: React.ReactNode; label: string; value?: number; hint?: string; tone?: "accent" | "warning" }) {
+function StatCard({ to, search, icon, label, value, tone }: { to: string; search?: Record<string, string>; icon: React.ReactNode; label: string; value?: number; tone?: "accent" | "warning" }) {
   return (
     <Link to={to} search={search} className="group flex items-center gap-3 rounded-xl border border-border bg-surface p-3.5 shadow-sm transition-colors hover:border-border-strong sm:p-4">
       <div
@@ -263,7 +304,6 @@ function StatCard({ to, search, icon, label, value, hint, tone }: { to: string; 
       <div className="min-w-0">
         <div className="text-xl font-semibold leading-tight tabular-nums">
           {value?.toLocaleString() ?? "–"}
-          {hint && <span className="ml-1.5 hidden text-xs font-normal text-subtle sm:inline">{hint}</span>}
         </div>
         <div className="text-[13px] leading-snug text-muted">{label}</div>
       </div>
