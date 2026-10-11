@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -44,6 +45,15 @@ func (a *API) registerCustomFields(mux router) {
 			return nil, err
 		}
 		return a.CustomFields.Update(r.Context(), p, id, in)
+	}))
+	// Dates set to remind (expiry, renewal…) coming up in the next `days` days (90 by default).
+	mux.HandleFunc("GET /api/v1/reminders", handle(func(r *http.Request, p *auth.Principal) (list[customfields.Upcoming], error) {
+		days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+		if days <= 0 || days > 366 {
+			days = 90
+		}
+		u, err := a.CustomFields.Upcoming(r.Context(), p, days)
+		return items(u), err
 	}))
 	mux.HandleFunc("DELETE /api/v1/custom-fields/{id}", handleNoContent(func(r *http.Request, p *auth.Principal) error {
 		id, err := httpx.PathUUID(r, "id")

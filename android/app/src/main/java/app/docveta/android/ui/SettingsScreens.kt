@@ -473,6 +473,7 @@ val eventLabels = mapOf(
     "document.failed" to "Document couldn't be processed",
     "note.mention" to "Someone mentions me",
     "reminder.due" to "Reminders",
+    "digest.weekly" to "Weekly summary",
     "security.new_login" to "New sign-in to my account",
     "security.token_created" to "New API token",
     "worker.offline" to "Processing worker offline (admins)",

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.Bookmark
+import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -81,6 +82,7 @@ fun MoreScreen(onNavigate: (String) -> Unit, uploadsActive: Int) {
         Item(Icons.Outlined.UploadFile, "Upload files", "PDFs, photos and Office files from this phone") { pickFiles() }
         Item(Icons.Outlined.CloudUpload, "Uploads", if (uploadsActive > 0) "$uploadsActive in progress" else "Waiting and finished uploads") { onNavigate("uploads") }
         Item(Icons.Outlined.Notifications, "Notifications", null) { onNavigate("notifications") }
+        Item(Icons.Outlined.CollectionsBookmark, "Collections", "Related documents kept together: the car, the house, a trip") { onNavigate("collections") }
         Item(Icons.Outlined.Bookmark, "Saved views", "Your saved searches and filters") { onNavigate("settings/views") }
         Item(Icons.Outlined.DeleteOutline, "Trash", stats?.trash?.takeIf { it > 0 }?.let { "$it document${if (it == 1) "" else "s"}" }) { onNavigate("trash") }
         HorizontalDivider(Modifier.padding(vertical = 8.dp))

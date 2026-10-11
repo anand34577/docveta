@@ -1,18 +1,20 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCheck, Combine, Download, FolderInput, MoreHorizontal, RotateCcw, RotateCw, Sparkles, Tag, Trash2, X } from "lucide-react";
+import { CheckCheck, Combine, Download, FolderInput, FolderMinus, Library, MoreHorizontal, RotateCcw, RotateCw, Sparkles, Tag, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, downloadZip, errorMessage, ZIP_MAX } from "@/lib/api";
 import { invalidateDocuments, useAIEnabled, useTaxonomy } from "@/lib/queries";
 import { useSelection } from "@/stores/ui";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/overlay";
-import { Field, Input, NativeSelect } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/input";
+import { SuggestInput } from "@/components/ui/suggest-input";
 import { Checkbox, TagChip, useScrollEdges } from "@/components/ui/misc";
 import { confirm } from "@/components/ui/confirm";
 import { useCurrentUser } from "@/components/app-shell";
 import { spaceLabel } from "@/lib/utils";
-import type { Document } from "@/lib/types";
+import type { Collection, Document } from "@/lib/types";
+import { AddToCollectionDialog } from "@/components/collections";
 
 interface BulkResult {
   succeeded: number;
@@ -20,10 +22,10 @@ interface BulkResult {
 }
 
 /** Floating action bar for selected documents. */
-export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }) {
+export function BulkBar({ items, trash, collection }: { items: Document[]; trash?: boolean; collection?: Collection }) {
   const { ids, clear, set } = useSelection();
   const qc = useQueryClient();
-  const [dialog, setDialog] = React.useState<null | "tags" | "move" | "merge">(null);
+  const [dialog, setDialog] = React.useState<null | "tags" | "move" | "merge" | "collect">(null);
   const [busy, setBusy] = React.useState(false);
   const bar = useScrollEdges<HTMLDivElement>();
   const selected = items.filter((d) => ids.has(d.id));
@@ -144,6 +146,26 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent>
+                <DropdownMenuItem onSelect={() => setDialog("collect")}>
+                  <Library /> Add to collection
+                </DropdownMenuItem>
+                {collection?.can_edit && (
+                  <DropdownMenuItem
+                    onSelect={async () => {
+                      try {
+                        const r = await api.post<{ count: number }>(`/collections/${collection.id}/documents/remove`, { ids: [...ids] });
+                        invalidateDocuments(qc);
+                        qc.invalidateQueries({ queryKey: ["collections"] });
+                        toast.success(`Took ${r.count} out of ${collection.name}`, { description: "The documents themselves are still in your library." });
+                        clear();
+                      } catch (e) {
+                        toast.error(errorMessage(e));
+                      }
+                    }}
+                  >
+                    <FolderMinus /> Remove from {collection.name}
+                  </DropdownMenuItem>
+                )}
                 {ai?.chat && (
                   <DropdownMenuItem onSelect={() => run("suggest", undefined, `Asked AI to suggest tags, type and sender for ${n} document${n === 1 ? "" : "s"}. Suggestions appear on each document.`)}>
                     <Sparkles /> Suggest tags & type with AI
@@ -167,6 +189,7 @@ export function BulkBar({ items, trash }: { items: Document[]; trash?: boolean }
       </div>
       {dialog === "tags" && <TagsDialog busy={busy} onClose={() => setDialog(null)} onApply={(add, remove) => run("update", { add_tag_names: add, remove_tag_names: remove })} />}
       {dialog === "merge" && <MergeDialog ids={[...ids]} titleHint={selected[0]?.title ?? ""} onClose={() => setDialog(null)} onDone={() => { invalidateDocuments(qc); clear(); setDialog(null); }} />}
+      {dialog === "collect" && <AddToCollectionDialog ids={[...ids]} onClose={() => setDialog(null)} onDone={() => { clear(); setDialog(null); }} />}
       {dialog === "move" && <MoveDialog busy={busy} onClose={() => setDialog(null)} onApply={(space) => run("update", { space_id: space }, "Moved")} />}
     </>
   );
@@ -197,10 +220,9 @@ function TagsDialog({ busy, onClose, onApply }: { busy: boolean; onClose: () => 
 function TagNames({ label, value, onChange, placeholder }: { label: string; value: string[]; onChange: (v: string[]) => void; placeholder: string }) {
   const [text, setText] = React.useState("");
   const all = useTaxonomy("tags");
-  const listId = React.useId();
   const names = [...new Set((all.data ?? []).map((t) => t.name))].sort((x, y) => x.localeCompare(y));
-  const commit = () => {
-    const n = text.trim().replace(/,$/, "").trim();
+  const commit = (picked?: string) => {
+    const n = (picked ?? text).trim().replace(/,$/, "").trim();
     if (n && !value.some((v) => v.toLowerCase() === n.toLowerCase())) onChange([...value, n]);
     setText("");
   };
@@ -214,24 +236,20 @@ function TagNames({ label, value, onChange, placeholder }: { label: string; valu
           ))}
         </div>
       )}
-      <Input
-        list={listId}
+      <SuggestInput
+        suggestions={names.filter((n) => !value.some((v) => v.toLowerCase() === n.toLowerCase()))}
+        onPick={commit}
         value={text}
         placeholder={placeholder}
-        onChange={(e) => (e.target.value.endsWith(",") ? (setText(e.target.value), setTimeout(commit)) : setText(e.target.value))}
+        onChange={(e) => (e.target.value.endsWith(",") ? commit(e.target.value) : setText(e.target.value))}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
             commit();
           }
         }}
-        onBlur={commit}
+        onBlur={() => commit()}
       />
-      <datalist id={listId}>
-        {names.map((n) => (
-          <option key={n} value={n} />
-        ))}
-      </datalist>
     </div>
   );
 }
@@ -282,13 +300,13 @@ function MoveDialog({ busy, onClose, onApply }: { busy: boolean; onClose: () => 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent title="Move to another space" description="Tags, correspondent and type are matched by name in the new space (created if missing)." size="sm">
-        <NativeSelect value={space} onChange={(e) => setSpace(e.target.value)}>
+        <Select value={space} onChange={(e) => setSpace(e.target.value)}>
           {writable.map((s) => (
             <option key={s.id} value={s.id}>
               {spaceLabel(s)}
             </option>
           ))}
-        </NativeSelect>
+        </Select>
         <DialogFooter>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={busy} onClick={() => onApply(space)}>

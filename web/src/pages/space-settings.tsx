@@ -10,7 +10,7 @@ import { cn, colorNames, tagDot } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { SettingsCard, SettingsLayout } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
-import { Field, Input, NativeSelect, Textarea } from "@/components/ui/input";
+import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Avatar, Badge, Checkbox, EmptyState, TagChip } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { confirm } from "@/components/ui/confirm";
@@ -111,7 +111,7 @@ function General({ space }: { space: Space }) {
             <Textarea id="sp-desc" rows={2} value={desc} onChange={(e) => setDesc(e.target.value)} disabled={!owner} />
           </Field>
           <Field label="Default document language" htmlFor="sp-lang" hint="The first guess for new documents. Text recognition also spots Hindi, Tamil, Telugu, Kannada and English pages by itself, and corrects the language when the text is in another script.">
-            <NativeSelect id="sp-lang" value={lang} onChange={(e) => setLang(e.target.value)} disabled={!owner}>
+            <Select id="sp-lang" value={lang} onChange={(e) => setLang(e.target.value)} disabled={!owner}>
               <option value="en">English</option>
               <option value="hi">Hindi</option>
               <option value="mr">Marathi</option>
@@ -124,7 +124,7 @@ function General({ space }: { space: Space }) {
               <option value="de">German</option>
               <option value="fr">French</option>
               <option value="es">Spanish</option>
-            </NativeSelect>
+            </Select>
           </Field>
           {owner && (
             <div>
@@ -195,19 +195,19 @@ function Members({ space }: { space: Space }) {
     <SettingsCard title="Members" description="People in this space can see all of its documents.">
       {owner && (
         <div className="mb-4 flex flex-wrap gap-2">
-          <NativeSelect value={adding} onChange={(e) => setAdding(e.target.value)} className="min-w-48 flex-1" aria-label="Person to add">
+          <Select value={adding} onChange={(e) => setAdding(e.target.value)} className="min-w-48 flex-1" aria-label="Person to add">
             <option value="">Add a person…</option>
             {candidates.map((u) => (
               <option key={u.id} value={u.id}>
                 {u.display_name} ({u.email})
               </option>
             ))}
-          </NativeSelect>
-          <NativeSelect value={role} onChange={(e) => setRole(e.target.value as SpaceRole)} className="w-auto" aria-label="Role">
+          </Select>
+          <Select value={role} onChange={(e) => setRole(e.target.value as SpaceRole)} className="w-auto" aria-label="Role">
             <option value="viewer">Viewer</option>
             <option value="editor">Editor</option>
             <option value="owner">Owner</option>
-          </NativeSelect>
+          </Select>
           <Button variant="primary" disabled={!adding} onClick={() => setMember(adding, role)}>
             <Plus /> Add
           </Button>
@@ -227,11 +227,11 @@ function Members({ space }: { space: Space }) {
               <div className="text-xs text-subtle">{m.email}</div>
             </div>
             {owner ? (
-              <NativeSelect value={m.role} onChange={(e) => setMember(m.user_id, e.target.value as SpaceRole)} className="ml-auto h-8 w-auto text-[13px]" title={roleInfo[m.role]}>
+              <Select value={m.role} onChange={(e) => setMember(m.user_id, e.target.value as SpaceRole)} className="ml-auto h-8 w-auto text-[13px]" title={roleInfo[m.role]}>
                 <option value="viewer">Viewer</option>
                 <option value="editor">Editor</option>
                 <option value="owner">Owner</option>
-              </NativeSelect>
+              </Select>
             ) : (
               <Badge>{m.role}</Badge>
             )}
@@ -417,13 +417,13 @@ function ItemDialog({ kind, spaceId, item, onClose }: { kind: TaxonomyKind; spac
             </div>
             <p className="mt-0.5 text-xs text-muted">When new documents contain matching text, Docveta adds this {L.one} for you.</p>
             <div className="mt-3 grid gap-3">
-              <NativeSelect value={algo} onChange={(e) => setAlgo(e.target.value as MatchAlgorithm)} aria-label="Matching method">
+              <Select value={algo} onChange={(e) => setAlgo(e.target.value as MatchAlgorithm)} aria-label="Matching method">
                 {(Object.keys(matchHelp) as MatchAlgorithm[]).map((a) => (
                   <option key={a} value={a}>
                     {matchHelp[a]}
                   </option>
                 ))}
-              </NativeSelect>
+              </Select>
               {algo !== "none" && (
                 <>
                   <Field

@@ -29,7 +29,7 @@ import (
 
 // EventTypes users can subscribe channels to (shown in Settings → Notifications).
 var EventTypes = []string{
-	"document.processed", "document.failed", "note.mention", "reminder.due",
+	"document.processed", "document.failed", "note.mention", "reminder.due", "digest.weekly",
 	"security.new_login", "security.token_created", "security.2fa_changed", "worker.offline", "worker.online", "storage.low", "import.failed", "workflow.notice",
 }
 

@@ -425,7 +425,7 @@ fun DocumentScreen(id: String, startPage: Int = 0, onBack: () -> Unit, onOpenDoc
                     }
                     when (current) {
                         "preview" -> Preview(vm, doc, ctx, scope, startPage, find)
-                        "details" -> Details(vm, doc, canEdit)
+                        "details" -> Details(vm, doc, canEdit) { cid -> onNavigate("collection/$cid") }
                         "notes" -> NotesTab(vm, canEdit)
                         "text" -> TextTab(doc)
                         "versions" -> VersionsTab(vm, doc, canEdit)
@@ -479,7 +479,7 @@ private fun ImagePreview(f: File) {
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-private fun Details(vm: DocViewModel, doc: Document, canEdit: Boolean) {
+private fun Details(vm: DocViewModel, doc: Document, canEdit: Boolean, onOpenCollection: (String) -> Unit) {
     val me = LocalMe.current
     var title by remember(doc.id, doc.title) { mutableStateOf(doc.title) }
     var location by remember(doc.id, doc.physicalLocation) { mutableStateOf(doc.physicalLocation) }
@@ -522,9 +522,10 @@ private fun Details(vm: DocViewModel, doc: Document, canEdit: Boolean) {
                 if (canEdit) Box(Modifier.clip(RoundedCornerShape(8.dp)).clickable { picker = "tags" }.background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 10.dp, vertical = 4.dp)) { Text(if (doc.tags.isEmpty()) "Add tags" else "Edit", style = MaterialTheme.typography.labelMedium) }
             }
         }
+        DocumentCollections(doc.id, canAdd = true, onOpen = onOpenCollection)
         if (vm.fields.isNotEmpty()) {
             HorizontalDivider()
-            vm.fields.forEach { f -> CustomFieldEditor(f, doc.customFields.firstOrNull { it.fieldId == f.id }?.value ?: JsonNull, canEdit, me.dateFormat) { v -> vm.setField(f.id, v) } }
+            vm.fields.forEach { f -> CustomFieldEditor(f, doc.customFields.firstOrNull { it.fieldId == f.id }?.value ?: JsonNull, canEdit, me.dateFormat, doc.title) { v -> vm.setField(f.id, v) } }
         } else if (doc.customFields.any { it.value !is JsonNull }) {
             HorizontalDivider()
             doc.customFields.forEach { f ->
@@ -587,9 +588,30 @@ private fun JsonElement.display(): String = when (this) {
 }
 
 /** A typed editor for one custom field of the document's space (Amount, Due date, …). Saves on change. */
+/** Under a date: whether it reminds, and a way to put it in the phone's calendar. */
+@Composable
+private fun DateExtras(f: CustomField, day: LocalDate, docTitle: String) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(if (f.remind) "Reminds ${remindText(f.remindDays)} before" else "", Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // The phone's own calendar app: an all-day event the person saves with its own alerts.
+        TextButton({
+            val start = day.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+            val intent = android.content.Intent(android.content.Intent.ACTION_INSERT, android.provider.CalendarContract.Events.CONTENT_URI)
+                .putExtra(android.provider.CalendarContract.Events.TITLE, "$docTitle: ${f.name}")
+                .putExtra(android.provider.CalendarContract.Events.DESCRIPTION, "${f.name} of “$docTitle”, from Docveta.")
+                .putExtra(android.provider.CalendarContract.EXTRA_EVENT_ALL_DAY, true)
+                .putExtra(android.provider.CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
+                .putExtra(android.provider.CalendarContract.EXTRA_EVENT_END_TIME, start + 86_400_000L)
+            runCatching { ctx.startActivity(intent) }.onFailure { android.widget.Toast.makeText(ctx, "No calendar app found", android.widget.Toast.LENGTH_SHORT).show() }
+        }) { Text("Add to calendar") }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-private fun CustomFieldEditor(f: CustomField, value: JsonElement, canEdit: Boolean, dateFormat: String, onSave: (JsonElement) -> Unit) {
+private fun CustomFieldEditor(f: CustomField, value: JsonElement, canEdit: Boolean, dateFormat: String, docTitle: String, onSave: (JsonElement) -> Unit) {
     val label = if (f.dataType == "monetary" && f.options.currency != null) "${f.name} (${f.options.currency})" else f.name
     val text0 = (value as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content.orEmpty()
     when (f.dataType) {
@@ -600,6 +622,7 @@ private fun CustomFieldEditor(f: CustomField, value: JsonElement, canEdit: Boole
         "date" -> {
             var picking by remember { mutableStateOf(false) }
             FieldButton(label, formatDate(text0, dateFormat).ifBlank { "Not set" }, Icons.Outlined.CalendarMonth, canEdit, onClear = if (text0.isNotBlank() && canEdit) ({ onSave(JsonNull) }) else null) { picking = true }
+            runCatching { LocalDate.parse(text0.take(10)) }.getOrNull()?.let { day -> DateExtras(f, day, docTitle) }
             if (picking) {
                 val st = rememberDatePickerState(initialSelectedDateMillis = runCatching { LocalDate.parse(text0.take(10)).atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli() }.getOrNull())
                 DatePickerDialog(onDismissRequest = { picking = false }, confirmButton = {

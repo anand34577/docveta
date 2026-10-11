@@ -136,3 +136,28 @@ export function fileKind(mime: string): "pdf" | "image" | "text" | "other" {
 export function browserImage(mime: string): boolean {
   return ["image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/avif"].includes(mime);
 }
+
+/**
+ * Saves an all-day calendar event (.ics) that Google Calendar, Outlook and phones import, with
+ * an alert `alarmDays` days before (e.g. a policy's renewal date).
+ */
+export function downloadIcs(o: { title: string; date: string; description?: string; url?: string; alarmDays?: number[] }) {
+  const esc = (s: string) => s.replace(/[\;,]/g, (c) => "\\" + c).replace(/\r?\n/g, "\n");
+  const day = o.date.replaceAll("-", "");
+  const next = format(new Date(new Date(o.date + "T00:00:00").getTime() + 864e5), "yyyyMMdd");
+  const stamp = new Date().toISOString().replace(/[-:]|\.\d{3}/g, "");
+  const lines = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Docveta//EN", "BEGIN:VEVENT",
+    `UID:${crypto.randomUUID()}@docveta`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${day}`, `DTEND;VALUE=DATE:${next}`,
+    `SUMMARY:${esc(o.title)}`,
+    ...(o.description ? [`DESCRIPTION:${esc(o.description)}`] : []),
+    ...(o.url ? [`URL:${o.url}`] : []),
+    ...(o.alarmDays ?? []).flatMap((d) => ["BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${esc(o.title)}`, `TRIGGER:-P${d}D`, "END:VALARM"]),
+    "END:VEVENT", "END:VCALENDAR",
+  ];
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\r\n")], { type: "text/calendar" }));
+  a.download = `${o.title.replace(/[^\w\- ]+/g, "").trim() || "reminder"}.ics`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}

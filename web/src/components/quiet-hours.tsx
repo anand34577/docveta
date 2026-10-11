@@ -4,7 +4,7 @@ import { api, errorMessage } from "@/lib/api";
 import { useNotificationPrefs } from "@/lib/queries";
 import type { NotificationPrefs } from "@/lib/types";
 import { SettingsCard } from "@/components/settings-layout";
-import { Input } from "@/components/ui/input";
+import { TimeInput } from "@/components/ui/time-input";
 import { SwitchRow } from "@/components/ui/misc";
 
 /** Quiet hours: in-app notifications still arrive, but phone/email/webhook pushes wait until the end. */
@@ -28,9 +28,9 @@ export function QuietHours() {
       {p.quiet_enabled && (
         <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
           From
-          <Input type="time" className="w-32" defaultValue={p.quiet_start} onBlur={(e) => e.target.value && e.target.value !== p.quiet_start && set({ quiet_start: e.target.value })} />
+          <TimeInput aria-label="Quiet hours start" value={p.quiet_start} onChange={(v) => v !== p.quiet_start && set({ quiet_start: v })} />
           until
-          <Input type="time" className="w-32" defaultValue={p.quiet_end} onBlur={(e) => e.target.value && e.target.value !== p.quiet_end && set({ quiet_end: e.target.value })} />
+          <TimeInput aria-label="Quiet hours end" value={p.quiet_end} onChange={(v) => v !== p.quiet_end && set({ quiet_end: v })} />
           <span className="text-xs text-subtle">in your time zone</span>
         </div>
       )}

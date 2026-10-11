@@ -4,6 +4,7 @@ package api
 
 import (
 	_ "embed"
+	"github.com/anand34577/docveta/internal/collections"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -52,6 +53,7 @@ type Deps struct {
 	Pipeline     *pipeline.Service
 	Notify       *notify.Service
 	Views        *views.Service
+	Collections  *collections.Service
 	Shares       *shares.Service
 	AI           *ai.Service
 	Office       *office.Converter
@@ -100,6 +102,7 @@ func (a *API) Register(mux router) {
 	a.registerSpaces(mux)
 	a.registerTaxonomy(mux)
 	a.registerCustomFields(mux)
+	a.registerCollections(mux)
 	a.registerDocuments(mux)
 	a.registerDocEdit(mux)
 	a.registerArchive(mux)

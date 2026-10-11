@@ -301,9 +301,9 @@ fun Field(value: String, onChange: (String) -> Unit, label: String, modifier: Mo
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ColorPicker(selected: String?, enabled: Boolean = true, onPick: (String) -> Unit) {
+fun ColorPicker(selected: String?, enabled: Boolean = true, names: List<String> = colorNames, onPick: (String) -> Unit) {
     FlowRow(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        colorNames.forEach { c ->
+        names.forEach { c ->
             Box(
                 Modifier.size(32.dp).clip(CircleShape).background(colorFor(c)).clickable(enabled = enabled) { onPick(c) }
                     .let { if (selected == c) it.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else it },

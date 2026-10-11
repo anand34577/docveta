@@ -30,6 +30,7 @@ import (
 
 	"github.com/gen2brain/avif"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/anand34577/docveta/internal/barcode"
 	"github.com/anand34577/docveta/internal/exchange"
@@ -1979,5 +1980,73 @@ func TestFacetCounts(t *testing.T) {
 	c.do("GET", "/api/v1/documents?facets=true&q=holiday", nil, 200, &res)
 	if res.Total != 1 || len(res.Facets.Tags) != 0 || res.Facets.Statuses["ready"] != 1 {
 		t.Fatalf("filtered facets: %+v", res)
+	}
+}
+
+// TestDateReminders: a date field set to remind notifies the space once per lead time and
+// lists the date as coming up.
+func TestDateReminders(t *testing.T) {
+	e := newEnv(t)
+	c := e.c
+	var f struct {
+		ID         string  `json:"id"`
+		Remind     bool    `json:"remind"`
+		RemindDays []int32 `json:"remind_days"`
+	}
+	c.do("POST", "/api/v1/custom-fields", map[string]any{"space_id": e.family, "name": "Notes", "data_type": "text", "remind": true}, 422, nil)
+	c.do("POST", "/api/v1/custom-fields", map[string]any{"space_id": e.family, "name": "Expiry", "data_type": "date", "remind": true, "remind_days": []int{400}}, 422, nil)
+	c.do("POST", "/api/v1/custom-fields", map[string]any{"space_id": e.family, "name": "Expiry", "data_type": "date", "remind": true}, 201, &f)
+	if !f.Remind || len(f.RemindDays) != 3 || f.RemindDays[0] != 30 {
+		t.Fatalf("defaults: %+v", f)
+	}
+	c.do("PATCH", "/api/v1/custom-fields/"+f.ID, map[string]any{"remind_days": []int{7, 30, 7, 0}}, 200, &f)
+	if fmt.Sprint(f.RemindDays) != "[30 7 0]" {
+		t.Fatalf("days not cleaned: %v", f.RemindDays)
+	}
+
+	d := c.upload(e.family, "passport.pdf", minimalPDF("Passport of Asha Kumar"))
+	soon := time.Now().AddDate(0, 0, 5).Format("2006-01-02")
+	c.do("PATCH", "/api/v1/documents/"+d.ID, map[string]any{"custom_fields": map[string]any{f.ID: soon}}, 200, nil)
+
+	var up jsonList[struct {
+		DocumentID string `json:"document_id"`
+		DaysLeft   int    `json:"days_left"`
+	}]
+	c.do("GET", "/api/v1/reminders", nil, 200, &up)
+	if len(up.Items) != 1 || up.Items[0].DocumentID != d.ID || up.Items[0].DaysLeft < 4 || up.Items[0].DaysLeft > 6 {
+		t.Fatalf("upcoming: %+v", up.Items)
+	}
+
+	// 5 days left: the 7-day reminder goes out (the 30-day one is skipped), once.
+	for range 2 {
+		if _, err := e.a.CustomFields.SendDue(e.ctx, e.a.Queue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var leads []int32
+	rows, _ := e.a.Pool.Query(e.ctx, `SELECT lead_days FROM reminders_sent`)
+	leads, _ = pgx.CollectRows(rows, pgx.RowTo[int32])
+	if fmt.Sprint(leads) != "[7]" {
+		t.Fatalf("reminders sent: %v", leads)
+	}
+	e.waitFor("reminder notification", func() bool {
+		var n int
+		_ = e.a.Pool.QueryRow(e.ctx, `SELECT count(*) FROM notifications WHERE user_id=$1 AND event_type='reminder.due'`, e.me).Scan(&n)
+		return n == 1
+	})
+	// The weekly summary goes out once a week (from Monday 9:00 in the person's time zone).
+	first, err := e.a.sendDigests(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := e.a.sendDigests(e.ctx); err != nil || again != 0 {
+		t.Fatalf("second summary in the same week: %d %v", again, err)
+	}
+	if first > 0 {
+		e.waitFor("weekly summary", func() bool {
+			var body string
+			_ = e.a.Pool.QueryRow(e.ctx, `SELECT body FROM notifications WHERE user_id=$1 AND event_type='digest.weekly'`, e.me).Scan(&body)
+			return strings.Contains(body, "1 date coming up")
+		})
 	}
 }

@@ -42,6 +42,7 @@ type Query struct {
 	IDs              []uuid.UUID    `json:"-"`                // restrict to these documents (used by meaning-based search)
 	NoCorrespondent  bool           `json:"no_correspondent,omitempty"`
 	NoType           bool           `json:"no_type,omitempty"`
+	CollectionID     *uuid.UUID     `json:"collection_id,omitempty"` // in this collection (the caller checks they can see it)
 	Trash            bool           `json:"trash,omitempty"`
 	Sort             string         `json:"sort,omitempty"` // relevance|added|-added|date|-date|title|-title|updated|cf:<field id> (prefix - for descending)
 	Cursor           string         `json:"cursor,omitempty"`
@@ -295,6 +296,9 @@ func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Resul
 	}
 	if inbox := firstNonNil(q.Inbox, parsed.Inbox); inbox != nil {
 		b.where("d.inbox = " + b.arg(*inbox))
+	}
+	if q.CollectionID != nil {
+		b.where("EXISTS (SELECT 1 FROM collection_items ci WHERE ci.document_id=d.id AND ci.collection_id=" + b.arg(*q.CollectionID) + ")")
 	}
 	statuses := append(append([]string{}, q.Statuses...), parsed.Statuses...)
 	if len(statuses) > 0 {

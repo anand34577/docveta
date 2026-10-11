@@ -88,7 +88,7 @@ export function InboxPage() {
       } else if (e.key === "e" && selected && canReview(selected)) {
         e.preventDefault();
         await review(selected);
-      } else if (e.key === "a" && selected && items.find((d) => d.id === selected)?.suggestion_count) {
+      } else if (e.key === "a" && selected && canReview(selected) && items.find((d) => d.id === selected)?.suggestion_count) {
         e.preventDefault();
         try {
           await api.post(`/documents/${selected}/suggestions/accept`, {});

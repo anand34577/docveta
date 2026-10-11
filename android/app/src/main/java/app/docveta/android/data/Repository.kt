@@ -37,19 +37,22 @@ data class DocQuery(
     val trash: Boolean = false,
     val sort: String? = null,
     val semantic: Boolean = false,
+    /** Only documents in this collection. Fixed by the screen, so it isn't counted as a filter. */
+    val collectionId: String? = null,
 ) {
     /** How many filters (not the search text or sort) are on. */
     val filterCount: Int
         get() = tagIds.size + correspondentIds.size + typeIds.size + (if (spaceId != null) 1 else 0) + (if (status != null) 1 else 0) +
             (if (dateFrom != null || dateTo != null) 1 else 0) + (if (untagged) 1 else 0)
 
-    fun clearedFilters() = DocQuery(q = q, sort = sort, semantic = semantic, inbox = inbox, trash = trash)
+    fun clearedFilters() = DocQuery(q = q, sort = sort, semantic = semantic, inbox = inbox, trash = trash, collectionId = collectionId)
 
     /** The web app's saved-view query (arrays for ids, strings for dates). */
     fun toJson(): JsonObject = buildJsonObject {
         if (q.isNotBlank()) put("q", q.trim())
         fun ids(k: String, l: List<String>) { if (l.isNotEmpty()) put(k, JsonArray(l.map { JsonPrimitive(it) })) }
         ids("space_id", listOfNotNull(spaceId))
+        collectionId?.let { put("collection_id", it) }
         ids("tag_id", tagIds)
         ids("correspondent_id", correspondentIds)
         ids("document_type_id", typeIds)
@@ -76,6 +79,7 @@ data class DocQuery(
                 q = str("q").orEmpty(), spaceId = ids("space_id").firstOrNull(), tagIds = ids("tag_id"), correspondentIds = ids("correspondent_id"),
                 typeIds = ids("document_type_id"), dateFrom = str("date_from"), dateTo = str("date_to"), untagged = bool("untagged") == true,
                 inbox = bool("inbox"), status = str("status"), trash = bool("trash") == true, sort = str("sort"), semantic = str("mode") == "hybrid" || str("mode") == "semantic",
+                collectionId = ids("collection_id").firstOrNull(),
             )
         }
     }
@@ -355,6 +359,7 @@ class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: Fi
         val query = mapOf(
             "q" to q.q.trim(),
             "space_id" to q.spaceId,
+            "collection_id" to q.collectionId,
             "date_from" to q.dateFrom,
             "date_to" to q.dateTo,
             "untagged" to if (q.untagged) "true" else null,
@@ -439,6 +444,9 @@ class Repository(val api: ApiClient, val session: SessionStore, val cacheDir: Fi
     suspend fun revokeShare(id: String) = api.delete("/shares/$id")
 
     /* ------------------------------------------------------------ files */
+
+    /** The thumbnail of a document known only by its id (a collection's cover). */
+    fun coverUrl(documentId: String): String = api.url("/documents/$documentId/thumbnail").toString()
 
     fun thumbnailUrl(d: Document): String = api.url("/documents/${d.id}/thumbnail", mapOf("v" to fileSignature(d))).toString()
 

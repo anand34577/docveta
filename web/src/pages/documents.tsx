@@ -7,7 +7,7 @@ import { invalidateDocuments, useStats } from "@/lib/queries";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { keys } from "@/lib/queries";
-import type { DocQuery, Document, Facets, SavedView } from "@/lib/types";
+import type { Collection, DocQuery, Document, Facets, SavedView } from "@/lib/types";
 import { useUI } from "@/stores/ui";
 import { spaceLabel } from "@/lib/utils";
 import { PageHeader, useCurrentUser, useFilePicker } from "@/components/app-shell";
@@ -39,11 +39,17 @@ interface BrowserProps {
   onChange: (q: DocQuery) => void;
   trash?: boolean;
   title?: React.ReactNode;
+  eyebrow?: React.ReactNode;
+  description?: React.ReactNode;
   headerActions?: React.ReactNode;
+  /** Shown instead of the usual "No documents yet" when nothing matches and no filter is set. */
+  empty?: React.ReactNode;
+  /** The collection being shown: the selection bar can take documents out of it. */
+  collection?: Collection;
 }
 
 /** Shared by All documents, Trash, Saved views and space pages. */
-export function DocumentBrowser({ query, onChange, trash, title, headerActions }: BrowserProps) {
+export function DocumentBrowser({ query, onChange, trash, title, eyebrow, description, headerActions, empty, collection }: BrowserProps) {
   const me = useCurrentUser();
   const layout = useUI((s) => s.layout);
   const pick = useFilePicker();
@@ -92,8 +98,8 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
     <div>
       <PageHeader
         title={heading}
-        eyebrow={title ? "Saved view" : !trash && spaceName ? "Space" : undefined}
-        description={trash ? `Documents here are deleted for good after ${days ?? 30} days. Restore anything you still need.` : undefined}
+        eyebrow={eyebrow ?? (title ? "Saved view" : !trash && spaceName ? "Space" : undefined)}
+        description={description ?? (trash ? `Documents here are deleted for good after ${days ?? 30} days. Restore anything you still need.` : undefined)}
         actions={
           headerActions ??
           (trash ? (
@@ -137,6 +143,8 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
             <EmptyState icon={<FileSearch />} title="No matching documents">
               Try different words or remove some filters. Search also matches text inside scanned documents.
             </EmptyState>
+          ) : empty ? (
+            empty
           ) : (
             <EmptyState
               icon={<FileText />}
@@ -152,7 +160,7 @@ export function DocumentBrowser({ query, onChange, trash, title, headerActions }
           )
         }
       />
-      <BulkBar items={info.items} trash={trash} />
+      <BulkBar items={info.items} trash={trash} collection={collection} />
       {saveOpen && <SaveViewDialog query={query} onClose={() => setSaveOpen(false)} />}
     </div>
   );

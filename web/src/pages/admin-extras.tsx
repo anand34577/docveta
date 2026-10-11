@@ -9,7 +9,8 @@ import { formatDateTime, spaceLabel, timeAgo } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { SecretReveal, SettingsCard } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
-import { Field, Input, NativeSelect, Textarea } from "@/components/ui/input";
+import { Field, Input, Select, Textarea } from "@/components/ui/input";
+import { SuggestInput } from "@/components/ui/suggest-input";
 import { Badge, Checkbox, EmptyState, Skeleton, Switch, SwitchRow } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/overlay";
 import { EntityPicker } from "@/components/ui/entity-picker";
@@ -294,12 +295,8 @@ function ProviderDialog({ provider, first, onClose, onSaved }: { provider: AIPro
               className="sm:col-span-2"
               hint="How much text the chat model can take at once. Docveta shortens long documents to fit. Local models often run with 4096 (Ollama: num_ctx); set the same number here."
             >
-              <Input id="ai-ctx" type="number" min={1024} step={1024} list="ai-ctx-sizes" value={f.context_tokens} onChange={(e) => set("context_tokens", Number(e.target.value))} />
-              <datalist id="ai-ctx-sizes">
-                {[2048, 4096, 8192, 16384, 32768, 131072].map((n) => (
-                  <option key={n} value={n} />
-                ))}
-              </datalist>
+              <SuggestInput id="ai-ctx" inputMode="numeric" suggestions={["2048", "4096", "8192", "16384", "32768", "131072"]}
+                value={f.context_tokens} onChange={(e) => set("context_tokens", Number(e.target.value.replace(/\D/g, "")))} />
             </Field>
           </div>
           <div className="divide-y divide-border">
@@ -441,29 +438,29 @@ function FolderDialog({ folder, onClose, onSaved }: { folder: WatchedFolder | nu
           </Field>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Import into" htmlFor="wf-space">
-              <NativeSelect id="wf-space" value={f.space_id} onChange={(e) => set("space_id", e.target.value)}>
+              <Select id="wf-space" value={f.space_id} onChange={(e) => set("space_id", e.target.value)}>
                 {shared.map((s) => (
                   <option key={s.id} value={s.id}>
                     {spaceLabel(s)}
                   </option>
                 ))}
-              </NativeSelect>
+              </Select>
             </Field>
             <Field label="Tags for everything imported" htmlFor="wf-tags">
               <EntityPicker id="wf-tags" kind="tags" multiple spaceId={f.space_id} value={f.tag_ids} onChange={(v) => set("tag_ids", v)} placeholder="None" />
             </Field>
             <Field label="Subfolders" htmlFor="wf-sub">
-              <NativeSelect id="wf-sub" value={f.subfolders} onChange={(e) => set("subfolders", e.target.value as typeof f.subfolders)}>
+              <Select id="wf-sub" value={f.subfolders} onChange={(e) => set("subfolders", e.target.value as typeof f.subfolders)}>
                 <option value="none">Ignore folder names</option>
                 <option value="tag">Use the subfolder name as a tag</option>
                 <option value="space">Use the subfolder name as the space</option>
-              </NativeSelect>
+              </Select>
             </Field>
             <Field label="After importing" htmlFor="wf-after">
-              <NativeSelect id="wf-after" value={f.after_import} onChange={(e) => set("after_import", e.target.value as typeof f.after_import)}>
+              <Select id="wf-after" value={f.after_import} onChange={(e) => set("after_import", e.target.value as typeof f.after_import)}>
                 <option value="move">Move the file to an “imported” folder</option>
                 <option value="delete">Delete the file</option>
-              </NativeSelect>
+              </Select>
             </Field>
             <Field label="Wait until a file stops changing (seconds)" htmlFor="wf-stable" hint="Avoids importing a file the scanner is still writing.">
               <Input id="wf-stable" type="number" min={1} max={600} value={f.stable_seconds} onChange={(e) => set("stable_seconds", Number(e.target.value))} />
@@ -649,11 +646,11 @@ function InviteDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () =
                       <Checkbox checked={!!picked[s.id]} onCheckedChange={(v) => setPicked((p) => { const n = { ...p }; if (v) n[s.id] = "editor"; else delete n[s.id]; return n; })} />
                       <span className="flex-1">{s.name}</span>
                       {picked[s.id] && (
-                        <NativeSelect aria-label={`Role in ${s.name}`} className="w-32" value={picked[s.id]} onChange={(e) => setPicked({ ...picked, [s.id]: e.target.value as "editor" })}>
+                        <Select aria-label={`Role in ${s.name}`} className="w-32" value={picked[s.id]} onChange={(e) => setPicked({ ...picked, [s.id]: e.target.value as "editor" })}>
                           <option value="viewer">Can view</option>
                           <option value="editor">Can edit</option>
                           <option value="owner">Owner</option>
-                        </NativeSelect>
+                        </Select>
                       )}
                     </li>
                   ))}
@@ -662,11 +659,11 @@ function InviteDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () =
             )}
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Link works for" htmlFor="inv-days">
-                <NativeSelect id="inv-days" value={f.expires_in_days} onChange={(e) => setF({ ...f, expires_in_days: Number(e.target.value) })}>
+                <Select id="inv-days" value={f.expires_in_days} onChange={(e) => setF({ ...f, expires_in_days: Number(e.target.value) })}>
                   <option value={1}>1 day</option>
                   <option value={7}>7 days</option>
                   <option value={30}>30 days</option>
-                </NativeSelect>
+                </Select>
               </Field>
               <Field label="Note to them (optional)" htmlFor="inv-note">
                 <Input id="inv-note" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />

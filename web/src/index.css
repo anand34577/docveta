@@ -149,15 +149,16 @@
   input, textarea, select, button {
     font: inherit;
   }
-  /* The open list of a native dropdown is drawn from the option colours, not the select's. */
-  select option, select optgroup {
-    background-color: var(--surface);
-    color: var(--fg);
+  /* Number fields without the browser's tiny spin arrows: type, or use the arrow keys. */
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
   }
-}
-
-.select-arrow {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

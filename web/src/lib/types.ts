@@ -174,6 +174,22 @@ export interface Stats {
   trash_retention_days?: number;
 }
 
+/** Related documents grouped by hand ("Car papers"), personal or shared with a space. */
+export interface Collection {
+  id: UUID;
+  space_id: UUID | null;
+  owner_id: UUID;
+  name: string;
+  description: string;
+  color: string;
+  /** Documents in it that you can see. */
+  document_count: number;
+  /** Up to four of them, last added first. */
+  covers: UUID[];
+  can_edit: boolean;
+  updated_at: string;
+}
+
 export interface SavedView {
   id: UUID;
   space_id: UUID | null;
@@ -190,6 +206,7 @@ export interface SavedView {
 /** Filters used by the documents page; serialized into URL search params. */
 export interface DocQuery {
   q?: string;
+  collection_id?: UUID;
   space_id?: UUID[];
   tag_id?: UUID[];
   correspondent_id?: UUID[];
@@ -401,6 +418,20 @@ export interface CustomField {
   data_type: FieldType;
   options: { choices?: string[]; currency?: string } & Record<string, unknown>;
   document_count: number;
+  /** Date fields: notify the space's members remind_days days before the date. */
+  remind: boolean;
+  remind_days: number[];
+}
+
+/** A date set to remind, coming up (or passed in the last 30 days). */
+export interface Upcoming {
+  document_id: UUID;
+  title: string;
+  space_id: UUID;
+  field_id: UUID;
+  field_name: string;
+  due: string;
+  days_left: number;
 }
 
 export interface CustomValue {

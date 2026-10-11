@@ -7,6 +7,7 @@ import { queryClient } from "@/lib/queries";
 import { router } from "@/router";
 import { TooltipProvider } from "@/components/ui/overlay";
 import { ConfirmHost } from "@/components/ui/confirm";
+import { TitleTooltips } from "@/components/ui/title-tooltips";
 import { applyTheme, useUI } from "@/stores/ui";
 import "./index.css";
 
@@ -23,6 +24,7 @@ createRoot(document.getElementById("root")!).render(
       <TooltipProvider>
         <RouterProvider router={router} />
         <ConfirmHost />
+        <TitleTooltips />
         <ThemedToaster />
       </TooltipProvider>
     </QueryClientProvider>

@@ -21,6 +21,8 @@ const SettingsPage = lazyRouteComponent(() => import("@/pages/settings"), "Setti
 const SpaceSettingsPage = lazyRouteComponent(() => import("@/pages/space-settings"), "SpaceSettingsPage");
 const AdminPage = lazyRouteComponent(() => import("@/pages/admin"), "AdminPage");
 const AskPage = lazyRouteComponent(() => import("@/pages/ask"), "AskPage");
+const CollectionsPage = lazyRouteComponent(() => import("@/pages/collections"), "CollectionsPage");
+const CollectionPage = lazyRouteComponent(() => import("@/pages/collections"), "CollectionPage");
 
 const rootRoute = createRootRoute({ component: Outlet, notFoundComponent: NotFound });
 
@@ -83,6 +85,8 @@ export const documentRoute = createRoute({
 });
 
 export const viewRoute = createRoute({ getParentRoute: () => appRoute, path: "/views/$id", component: SavedViewPage });
+const collectionsRoute = createRoute({ getParentRoute: () => appRoute, path: "/collections", component: CollectionsPage });
+export const collectionRoute = createRoute({ getParentRoute: () => appRoute, path: "/collections/$id", component: CollectionPage });
 
 export const trashRoute = createRoute({
   getParentRoute: () => appRoute,
@@ -136,6 +140,8 @@ const routeTree = rootRoute.addChildren([
     documentsRoute,
     documentRoute,
     viewRoute,
+    collectionsRoute,
+    collectionRoute,
     trashRoute,
     settingsIndex,
     settingsRoute,

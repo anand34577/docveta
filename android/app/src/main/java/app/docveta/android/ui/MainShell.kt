@@ -112,6 +112,8 @@ private object Route {
     const val Settings = "settings"
     const val SettingsSection = "settings/{section}"
     const val Trash = "trash"
+    const val Collections = "collections"
+    const val Collection = "collection/{id}"
     const val View = "view/{id}"
     const val Spaces = "spaces"
     const val Space = "space/{id}"
@@ -295,6 +297,8 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
                 composable(Route.Uploads) { Box(Modifier.fillMaxSize().navigationBarsPadding()) { UploadsScreen(onBack = back, onOpen = openDoc) } }
                 composable(Route.Notifications) { Box(Modifier.fillMaxSize().navigationBarsPadding()) { NotificationsScreen(onBack = back, onOpenDoc = openDoc) } }
                 composable(Route.Trash) { Box(Modifier.fillMaxSize().navigationBarsPadding()) { TrashScreen(onBack = back, onOpen = openDoc) } }
+                composable(Route.Collections) { CollectionsScreen(onBack = back, onOpen = { nav.navigate("collection/$it") }) }
+                composable(Route.Collection, arguments = listOf(navArgument("id") { type = NavType.StringType })) { CollectionScreen(it.arguments!!.getString("id")!!, onBack = back, onOpen = openDoc) }
                 composable(Route.View, arguments = listOf(navArgument("id") { type = NavType.StringType })) { SavedViewScreen(it.arguments!!.getString("id")!!, onBack = back, onOpen = openDoc) }
                 composable(Route.Settings) { SettingsScreen(onBack = back, onNavigate = open, onSignedOut = onSignedOut) }
                 composable(Route.SettingsSection, arguments = listOf(navArgument("section") { type = NavType.StringType })) {

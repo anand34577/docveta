@@ -5,6 +5,40 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-11
+
+### Added
+- **Collections.** Keep related documents together, whatever their type or space: all the car
+  papers (registration, insurance, pollution certificate, service bills), everything for the
+  house, a trip. Web: **Collections** in the sidebar shows them as cards with a cover of what is
+  inside; each collection has its own page with search, filters and **Add documents**. Add from
+  a document (**Collections → Add**) or from a selection (**⋯ → Add to collection**), and take
+  documents out the same way. A collection is yours alone or shared with a space: its editors add
+  and remove, everyone in it sees the documents they can open. The Android app has **Collections**
+  under More, with the same adding, removing and sharing, and shows a document's collections in
+  its details.
+- **Reminders before a date.** A date field (Expiry date, Renewal date…) can remind: turn on
+  **Remind before this date** in Space settings → Custom fields and pick when (90, 60, 30, 14, 7,
+  3, 1 days before, or on the day). Everyone in the space gets a notification, by every channel
+  they have set up, and Home shows what is **Coming up** (and what expired in the last 30 days).
+  The Android app shows **Coming up** above the documents list and has the same reminder settings.
+- **Add to calendar.** Every date field on a document has **Add to calendar**: the web app saves
+  an all-day event (with alerts at the reminder days) for Google Calendar, Outlook or Apple
+  Calendar; the Android app opens the phone's calendar app. Date fields set to remind say so.
+- **Weekly summary.** Once a week (Monday morning in your time zone) Docveta tells you what was
+  added, what waits in the Inbox, what needs attention and which dates are coming up. Weeks with
+  nothing to report are skipped; choose which channels get it in Settings → Notifications.
+
+### Changed
+- Web: dropdowns, date and time pickers, suggestion lists and tooltips are drawn in Docveta's own
+  style instead of the browser's, in light and dark mode. The calendar opens on today, jumps by
+  month or year, starts the week as your region does and works from the keyboard.
+- Web: the "No text-reading worker" banner can be hidden for a week.
+
+### Fixed
+- Web: in the Inbox, **A** (accept AI suggestions) no longer tries, and fails, on documents you can
+  only view.
+
 ## [0.15.0] - 2026-10-10
 
 ### Added

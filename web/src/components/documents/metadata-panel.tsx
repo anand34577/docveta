@@ -5,7 +5,7 @@ import { ApiError, errorMessage } from "@/lib/api";
 import { useUpdateDocument, type DocPatch } from "@/lib/queries";
 import type { Document } from "@/lib/types";
 import { formatBytes, formatDateTime, spaceLabel } from "@/lib/utils";
-import { Field, Input, NativeSelect } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/input";
 import { EntityPicker } from "@/components/ui/entity-picker";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
@@ -16,6 +16,7 @@ import { keys } from "@/lib/queries";
 import { processingLabel } from "./doc-items";
 import { Suggestions } from "./suggestions";
 import { CustomFieldsEditor } from "./custom-fields";
+import { DocumentCollections } from "@/components/collections";
 import { UnlockDialog } from "./unlock-dialog";
 
 const languages: [string, string][] = [
@@ -157,7 +158,8 @@ export function MetadataPanel({ doc }: { doc: Document }) {
         />
       </Field>
 
-      <CustomFieldsEditor spaceId={doc.space.id} values={doc.custom_fields} canEdit={canEdit} onSave={(id, v) => save({ custom_fields: { [id]: v } })} />
+      <CustomFieldsEditor docTitle={doc.title} spaceId={doc.space.id} values={doc.custom_fields} canEdit={canEdit} onSave={(id, v) => save({ custom_fields: { [id]: v } })} />
+      <DocumentCollections docId={doc.id} />
 
       <details className="group rounded-lg border border-border">
         <summary className="flex cursor-pointer select-none list-none items-center justify-between px-3 py-2.5 text-sm font-medium text-muted hover:text-fg [&::-webkit-details-marker]:hidden">
@@ -166,7 +168,7 @@ export function MetadataPanel({ doc }: { doc: Document }) {
         </summary>
         <div className="space-y-4 border-t border-border p-3">
           <Field label="Space" htmlFor="m-space" hint="Moving keeps tags and correspondent by matching names in the new space.">
-            <NativeSelect
+            <Select
               id="m-space"
               value={doc.space.id}
               disabled={!canEdit}
@@ -179,17 +181,17 @@ export function MetadataPanel({ doc }: { doc: Document }) {
                     {spaceLabel(s)}
                   </option>
                 ))}
-            </NativeSelect>
+            </Select>
           </Field>
           <Field label="Language" htmlFor="m-lang" hint="Used for text recognition and search.">
-            <NativeSelect id="m-lang" value={doc.language} disabled={!canEdit} onChange={(e) => save({ language: e.target.value })}>
+            <Select id="m-lang" value={doc.language} disabled={!canEdit} onChange={(e) => save({ language: e.target.value })}>
               {!languages.some(([c]) => c === doc.language) && <option value={doc.language}>{doc.language}</option>}
               {languages.map(([c, n]) => (
                 <option key={c} value={c}>
                   {n}
                 </option>
               ))}
-            </NativeSelect>
+            </Select>
           </Field>
           <Field label="Where is the paper original?" htmlFor="m-loc">
             <div className="relative">
