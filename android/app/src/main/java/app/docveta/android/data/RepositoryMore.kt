@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -108,6 +109,35 @@ suspend fun Repository.createView(name: String, query: DocQuery, shareInSpace: S
 suspend fun Repository.updateView(id: String, patch: JsonObject): SavedView = api.patch("/saved-views/$id", patch.toString())
 suspend fun Repository.deleteView(id: String) = api.delete("/saved-views/$id")
 
+/* ------------------------------------------------------------ collections */
+
+/** The collections the person can see; with [documentId], only those holding it. */
+suspend fun Repository.collections(documentId: String? = null): List<DocCollection> =
+    api.get<Items<DocCollection>>("/collections", mapOf("document_id" to documentId)).items.sortedBy { it.name.lowercase() }
+
+/** [spaceId] shares it with a space; the zero id makes it personal again (the server's convention). */
+suspend fun Repository.saveCollection(existing: DocCollection?, name: String, description: String, color: String, spaceId: String?): DocCollection {
+    val body = buildJsonObject {
+        put("name", name.trim())
+        put("description", description.trim())
+        put("color", color)
+        put("space_id", spaceId ?: "00000000-0000-0000-0000-000000000000")
+    }.toString()
+    return if (existing == null) api.post("/collections", body) else api.patch("/collections/${existing.id}", body)
+}
+
+suspend fun Repository.deleteCollection(id: String) = api.delete("/collections/$id")
+
+/** Returns how many were added (those already in it don't count). */
+suspend fun Repository.addToCollection(id: String, documentIds: List<String>): Int =
+    api.post<CountResult>("/collections/$id/documents", buildJsonObject { put("ids", strings(documentIds)) }.toString()).count
+
+suspend fun Repository.removeFromCollection(id: String, documentIds: List<String>): Int =
+    api.post<CountResult>("/collections/$id/documents/remove", buildJsonObject { put("ids", strings(documentIds)) }.toString()).count
+
+@kotlinx.serialization.Serializable
+private data class CountResult(val count: Int = 0)
+
 /* ------------------------------------------------------------ spaces */
 
 suspend fun Repository.createSpace(name: String, description: String, color: String): Space =
@@ -142,14 +172,23 @@ suspend fun Repository.deleteTaxonomy(kind: String, id: String) = api.delete("/$
 suspend fun Repository.mergeTaxonomy(kind: String, target: String, sources: List<String>): Taxonomy =
     api.post("/$kind/$target/merge", buildJsonObject { put("source_ids", strings(sources)) }.toString())
 
-suspend fun Repository.saveField(existing: CustomField?, spaceId: String, name: String, type: String, choices: List<String>, currency: String?): CustomField {
+suspend fun Repository.saveField(existing: CustomField?, spaceId: String, name: String, type: String, choices: List<String>, currency: String?, remind: Boolean = false, remindDays: List<Int> = emptyList()): CustomField {
     val options = buildJsonObject {
         if (type == "select" || type == "multiselect") put("choices", strings(choices))
         if (type == "monetary" && currency != null) put("currency", currency.trim().uppercase())
     }
-    return if (existing == null) api.post("/custom-fields", buildJsonObject { put("space_id", spaceId); put("name", name.trim()); put("data_type", type); put("options", options) }.toString())
-    else api.patch("/custom-fields/${existing.id}", buildJsonObject { put("name", name.trim()); put("options", options) }.toString())
+    val reminder: JsonObjectBuilder.() -> Unit = {
+        if (type == "date") {
+            put("remind", remind)
+            put("remind_days", JsonArray(remindDays.map { JsonPrimitive(it) }))
+        }
+    }
+    return if (existing == null) api.post("/custom-fields", buildJsonObject { put("space_id", spaceId); put("name", name.trim()); put("data_type", type); put("options", options); reminder() }.toString())
+    else api.patch("/custom-fields/${existing.id}", buildJsonObject { put("name", name.trim()); put("options", options); reminder() }.toString())
 }
+
+/** Dates set to remind in the next 90 days and the last 30, soonest first. */
+suspend fun Repository.upcoming(): List<Upcoming> = api.get<Items<Upcoming>>("/reminders").items
 
 suspend fun Repository.deleteField(id: String) = api.delete("/custom-fields/$id")
 

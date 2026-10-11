@@ -399,7 +399,7 @@ fun FieldsScreen(id: String, onBack: () -> Unit) = WithSpace(id, "Custom fields"
         Loaded(fields) { list ->
             if (list.isEmpty()) EmptyState(Icons.AutoMirrored.Outlined.ListAlt, "No custom fields", "Add “Amount”, “Due date” or “Policy number” and fill them in on each document.", Modifier.fillMaxWidth())
             list.forEach { f ->
-                ItemRow(f.name, listOfNotNull(fieldTypes.firstOrNull { it.first == f.dataType }?.second ?: f.dataType, "used on ${plural(f.documentCount, "document")}", f.options.choices.takeIf { it.isNotEmpty() }?.joinToString(", ")).joinToString(" · "), onClick = if (owner) ({ editing = f }) else null) {
+                ItemRow(f.name, listOfNotNull(fieldTypes.firstOrNull { it.first == f.dataType }?.second ?: f.dataType, "used on ${plural(f.documentCount, "document")}", f.options.choices.takeIf { it.isNotEmpty() }?.joinToString(", "), if (f.remind) "reminds ${remindText(f.remindDays)} before" else null).joinToString(" · "), onClick = if (owner) ({ editing = f }) else null) {
                     if (owner) IconButton({ confirm.ask("Delete “${f.name}”?", "Its value is removed from ${plural(f.documentCount, "document")}.", "Delete field", true) { run.run { c.repo.deleteField(f.id); fields.reload() } } }) { Icon(Icons.Outlined.DeleteOutline, "Delete") }
                 }
             }
@@ -411,6 +411,8 @@ fun FieldsScreen(id: String, onBack: () -> Unit) = WithSpace(id, "Custom fields"
         var type by remember { mutableStateOf(f?.dataType ?: "text") }
         var choices by remember { mutableStateOf(f?.options?.choices?.joinToString("\n") ?: "") }
         var currency by remember { mutableStateOf(f?.options?.currency ?: "INR") }
+        var remind by remember { mutableStateOf(f?.remind ?: false) }
+        var remindDays by remember { mutableStateOf(f?.remindDays ?: listOf(30, 7, 1)) }
         AlertDialog(
             onDismissRequest = { creating = false; editing = null }, title = { Text(if (f != null) "Edit field" else "New custom field") },
             text = {
@@ -419,12 +421,13 @@ fun FieldsScreen(id: String, onBack: () -> Unit) = WithSpace(id, "Custom fields"
                     SelectField("Type", fieldTypes, type, Modifier.fillMaxWidth(), enabled = f == null, supporting = if (f != null) "The type can't change after creation." else null) { type = it }
                     if (type == "monetary") OutlinedTextField(currency, { if (it.length <= 3) currency = it.uppercase() }, label = { Text("Currency code") }, supportingText = { Text("For example INR, USD, EUR.") }, singleLine = true)
                     if (type == "select" || type == "multiselect") OutlinedTextField(choices, { choices = it }, label = { Text("Choices") }, supportingText = { Text("One per line.") }, minLines = 4, modifier = Modifier.fillMaxWidth())
+                    if (type == "date") ReminderSettings(remind, remindDays, { remind = it }, { remindDays = it })
                 }
             },
             confirmButton = {
                 TextButton({
                     run.run {
-                        c.repo.saveField(f, s.id, name, type, choices.lines().map { it.trim() }.filter { it.isNotEmpty() }, currency)
+                        c.repo.saveField(f, s.id, name, type, choices.lines().map { it.trim() }.filter { it.isNotEmpty() }, currency, remind, remindDays)
                         creating = false; editing = null
                         fields.reload()
                     }
@@ -432,6 +435,27 @@ fun FieldsScreen(id: String, onBack: () -> Unit) = WithSpace(id, "Custom fields"
             },
             dismissButton = { TextButton({ creating = false; editing = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/** "30d, 7d, on the day" */
+fun remindText(days: List<Int>) = days.joinToString(", ") { if (it == 0) "on the day" else "${it}d" }
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun ReminderSettings(remind: Boolean, days: List<Int>, onRemind: (Boolean) -> Unit, onDays: (List<Int>) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Remind before this date", style = MaterialTheme.typography.bodyLarge)
+            Text("Everyone in the space gets a notification, for example before a policy or passport expires.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        androidx.compose.material3.Switch(remind, onRemind)
+    }
+    if (remind) androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(90, 60, 30, 14, 7, 3, 1, 0).forEach { d ->
+            val on = d in days
+            androidx.compose.material3.FilterChip(on, { onDays(if (on) days - d else (days + d).sortedDescending()) }, label = { Text(if (d == 0) "On the day" else plural(d, "day")) })
+        }
     }
 }
 

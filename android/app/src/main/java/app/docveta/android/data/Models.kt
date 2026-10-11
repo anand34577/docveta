@@ -257,6 +257,19 @@ data class CustomField(
     @SerialName("data_type") val dataType: String = "text",
     val options: FieldOptions = FieldOptions(),
     @SerialName("document_count") val documentCount: Int = 0,
+    /** Date fields: notify the space's members [remindDays] days before the date. */
+    val remind: Boolean = false,
+    @SerialName("remind_days") val remindDays: List<Int> = listOf(30, 7, 1),
+)
+
+/** A date set to remind, coming up (or passed in the last 30 days). */
+@Serializable
+data class Upcoming(
+    @SerialName("document_id") val documentId: String,
+    val title: String,
+    @SerialName("field_name") val fieldName: String,
+    val due: String,
+    @SerialName("days_left") val daysLeft: Int,
 )
 
 @Serializable
@@ -277,6 +290,21 @@ data class SavedView(
     val pinned: Boolean = false,
     @SerialName("sort_order") val sortOrder: Int = 0,
     @SerialName("can_edit") val canEdit: Boolean = true,
+)
+
+/** Documents kept together by hand, across spaces; personal or shared with a space. */
+@Serializable
+data class DocCollection(
+    val id: String,
+    @SerialName("space_id") val spaceId: String? = null,
+    val name: String,
+    val description: String = "",
+    val color: String = "blue",
+    @SerialName("document_count") val documentCount: Int = 0,
+    /** Up to four document ids, last added first, for the card's thumbnails. */
+    val covers: List<String> = emptyList(),
+    @SerialName("can_edit") val canEdit: Boolean = false,
+    @SerialName("updated_at") val updatedAt: String = "",
 )
 
 /* ---------------------------------------------------------------- spaces */

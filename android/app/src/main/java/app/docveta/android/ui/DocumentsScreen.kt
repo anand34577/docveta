@@ -40,7 +40,10 @@ import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.automirrored.outlined.CallMerge
 import androidx.compose.material.icons.outlined.Clear
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.RemoveCircleOutline
 import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
@@ -112,10 +115,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewModelScope
 import app.docveta.android.AppContainer
+import app.docveta.android.data.upcoming
 import app.docveta.android.data.BulkResult
 import app.docveta.android.data.DocQuery
 import app.docveta.android.data.Document
 import app.docveta.android.data.SavedView
+import app.docveta.android.data.DocCollection
+import app.docveta.android.data.collections
+import app.docveta.android.data.deleteCollection
+import app.docveta.android.data.removeFromCollection
 import app.docveta.android.data.Space
 import app.docveta.android.data.Taxonomy
 import app.docveta.android.data.bulk
@@ -459,6 +467,51 @@ fun SavedViewScreen(id: String, onBack: () -> Unit, onOpen: (String) -> Unit) {
     if (renaming) TextInputDialog("Rename view", "Name", v.name, onDismiss = { renaming = false }) { n -> run.run { view.data = c.repo.updateView(v.id, buildJsonObject { put("name", n) }) } }
 }
 
+/** A collection: the documents in it, searchable and filterable like the library; add, remove, edit, delete. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CollectionScreen(id: String, onBack: () -> Unit, onOpen: (String) -> Unit) {
+    val c = LocalContainer.current
+    val run = rememberRunner()
+    val confirm = rememberConfirmation()
+    val loader = rememberLoader(id) { c.repo.collections().firstOrNull { it.id == id } }
+    val col = loader.data
+    if (col == null) {
+        Page("Collection", onBack) {
+            when {
+                loader.error != null -> ErrorState(loader.error!!) { loader.reload() }
+                loader.loading -> LoadingBox(Modifier.fillMaxWidth().padding(48.dp))
+                else -> EmptyState(Icons.Outlined.CollectionsBookmark, "This collection is gone", modifier = Modifier.fillMaxWidth())
+            }
+        }
+        return
+    }
+    val vm = container("collection-$id") { DocsViewModel(it, DocQuery(collectionId = id)) }
+    var editing by remember { mutableStateOf(false) }
+    var adding by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { loader.reload() }
+    Box(Modifier.fillMaxSize().navigationBarsPadding()) {
+        DocumentBrowser(vm, onOpen, onScan = {}, title = col.name, onBack = onBack, collection = col, onCollectionChanged = { loader.reload() }, titleActions = {
+            if (col.canEdit) {
+                IconButton({ adding = true }) { Icon(Icons.Outlined.Add, "Add documents") }
+                Box {
+                    IconButton({ menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
+                    DropdownMenu(menu, { menu = false }) {
+                        DropdownMenuItem(text = { Text("Edit name, colour, sharing") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) }, onClick = { menu = false; editing = true })
+                        DropdownMenuItem(text = { Text("Delete collection") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = {
+                            menu = false
+                            confirm.ask("Delete “${col.name}”?", "Only the collection goes. Its documents stay in your library.", "Delete collection", true) { run.run { c.repo.deleteCollection(col.id); onBack() } }
+                        })
+                    }
+                }
+            }
+        })
+    }
+    if (editing) CollectionDialog(col, onDismiss = { editing = false }) { editing = false; loader.data = it }
+    if (adding) AddDocumentsDialog(col, onDismiss = { adding = false }, onAdded = { vm.reload(); loader.reload() })
+}
+
 @Composable
 private fun SaveViewDialog(q: DocQuery, onDismiss: () -> Unit, onSaved: (SavedView) -> Unit) {
     val c = LocalContainer.current
@@ -496,6 +549,8 @@ private fun DocumentBrowser(
     titleActions: @Composable () -> Unit = {},
     chipsStart: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {},
     chipsEnd: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {},
+    collection: DocCollection? = null,
+    onCollectionChanged: () -> Unit = {},
 ) {
     val me = LocalMe.current
     val pickFiles = LocalPickFiles.current
@@ -531,7 +586,7 @@ private fun DocumentBrowser(
     val undo = remember { SnackbarHostState() }
     val undoScope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize()) {
-        if (vm.selecting) SelectionBar(vm, onTrashed = { ids, msg -> undoScope.launch { offerUndoTrash(undo, container, vm, ids, msg) } })
+        if (vm.selecting) SelectionBar(vm, collection = collection, onCollectionChanged = onCollectionChanged, onTrashed = { ids, msg -> undoScope.launch { offerUndoTrash(undo, container, vm, ids, msg) } })
         else {
             if (title != null) TopAppBar(title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, navigationIcon = { if (onBack != null) BackButton(onBack) }, actions = { titleActions() })
             SearchBar(vm.query.q, vm::typing, "Search documents", onSearch = { vm.searchNow(); recent = session.recentSearches }, trailing = {
@@ -585,6 +640,7 @@ private fun DocumentBrowser(
         }
         Spacer(Modifier.height(4.dp))
         StatsBanner()
+        if (title == null && vm.query.q.isBlank() && vm.query.filterCount == 0) ComingUp(openDoc, me.dateFormat)
         DocumentList(vm, me.spaces, me.dateFormat, listState, openDoc, selectable = true, empty = {
             if (vm.query.q.isNotBlank() || vm.query.filterCount > 0) EmptyState(
                 Icons.Outlined.SearchOff, "No matching documents",
@@ -654,7 +710,7 @@ private suspend fun offerUndoTrash(snack: SnackbarHostState, c: AppContainer, vm
 /** Replaces the search bar while documents are selected: what can be done with all of them. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SelectionBar(vm: DocsViewModel, trash: Boolean = false, onTrashed: ((ids: List<String>, message: String) -> Unit)? = null) {
+private fun SelectionBar(vm: DocsViewModel, trash: Boolean = false, collection: DocCollection? = null, onCollectionChanged: () -> Unit = {}, onTrashed: ((ids: List<String>, message: String) -> Unit)? = null) {
     val c = LocalContainer.current
     val ctx = LocalContext.current
     val run = rememberRunner()
@@ -688,6 +744,18 @@ private fun SelectionBar(vm: DocsViewModel, trash: Boolean = false, onTrashed: (
                 Box {
                     IconButton({ menu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                     DropdownMenu(menu, { menu = false }) {
+                        DropdownMenuItem(text = { Text("Add to a collection") }, leadingIcon = { Icon(Icons.Outlined.CollectionsBookmark, null) }, onClick = { menu = false; dialog = "collect" })
+                        if (collection?.canEdit == true) DropdownMenuItem(text = { Text("Remove from ${collection.name}") }, leadingIcon = { Icon(Icons.Outlined.RemoveCircleOutline, null) }, onClick = {
+                            menu = false
+                            val ids = vm.selected
+                            run.run {
+                                val n = c.repo.removeFromCollection(collection.id, ids)
+                                vm.selected = emptyList()
+                                vm.reload()
+                                onCollectionChanged()
+                                toast(ctx, "Took ${plural(n, "document")} out of ${collection.name}")
+                            }
+                        })
                         DropdownMenuItem(text = { Text("Move to another space") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, null) }, onClick = { menu = false; dialog = "move" })
                         if (n > 1 && docs.size == n && docs.all { it.isPdf || it.isImage }) DropdownMenuItem(text = { Text("Merge into one PDF") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.CallMerge, null) }, onClick = { menu = false; dialog = "merge" })
                         DropdownMenuItem(text = { Text("Share the files") }, leadingIcon = { Icon(Icons.Outlined.Share, null) }, onClick = {
@@ -711,6 +779,7 @@ private fun SelectionBar(vm: DocsViewModel, trash: Boolean = false, onTrashed: (
         "tags" -> BulkTagsDialog(onDismiss = { dialog = null }) { add, remove ->
             run.run { toast(ctx, vm.bulk("update", buildJsonObject { put("add_tag_names", JsonArray(add.map { JsonPrimitive(it) })); put("remove_tag_names", JsonArray(remove.map { JsonPrimitive(it) })) }).describe("Tags changed")) }
         }
+        "collect" -> AddToCollectionDialog(vm.selected, onDismiss = { dialog = null }, onDone = { vm.selected = emptyList(); onCollectionChanged() })
         "move" -> MoveDialog(onDismiss = { dialog = null }) { space -> run.run { toast(ctx, vm.bulk("update", buildJsonObject { put("space_id", space) }).describe("Moved")) } }
         "merge" -> {
             var title by remember { mutableStateOf("${docs.firstOrNull()?.title.orEmpty()} (merged)") }
@@ -824,6 +893,34 @@ fun SearchBar(text: String, onChange: (String) -> Unit, hint: String, onSearch: 
 }
 
 /** Warns that scans won't be read until a text-reading worker is connected. */
+/** Expiry and renewal dates coming up (dates set to remind): the next few, tap to open. */
+@Composable
+fun ComingUp(onOpen: (String) -> Unit, dateFormat: String) {
+    val c = LocalContainer.current
+    var items by remember { mutableStateOf<List<app.docveta.android.data.Upcoming>>(emptyList()) }
+    var all by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { items = runCatching { c.repo.upcoming() }.getOrDefault(emptyList()) }
+    if (items.isEmpty()) return
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp)).padding(vertical = 6.dp)) {
+        Text("Coming up", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+        items.take(if (all) items.size else 3).forEach { u ->
+            val urgent = u.daysLeft <= 7
+            Row(Modifier.fillMaxWidth().clickable { onOpen(u.documentId) }.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(u.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${u.fieldName} · ${formatDate(u.due, dateFormat)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text(
+                    when { u.daysLeft < 0 -> "${-u.daysLeft}d ago"; u.daysLeft == 0 -> "Today"; u.daysLeft == 1 -> "Tomorrow"; else -> "in ${u.daysLeft}d" },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (u.daysLeft < 0) MaterialTheme.colorScheme.error else if (urgent) androidx.compose.ui.graphics.Color(0xFFB77900) else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (items.size > 3) TextButton({ all = !all }, Modifier.padding(horizontal = 4.dp)) { Text(if (all) "Show fewer" else "Show all ${items.size}") }
+    }
+}
+
 @Composable
 fun StatsBanner() {
     val stats = LocalStats.current ?: return
