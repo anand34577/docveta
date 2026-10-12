@@ -7,14 +7,17 @@
 #
 # Program: /opt/docveta (docveta, ocr/ if present)   Data: /var/lib/docveta   Settings: /opt/docveta/docveta.conf
 # Upgrades keep the data and settings. Remove with: sudo ./install.sh --uninstall
+# --no-start: install and enable the service without starting it (get-docveta.sh starts it last).
 set -eu
 
 PORT=8080
 UNINSTALL=0
+START=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
+    --no-start) START=0; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -27,9 +30,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 
 svc() { # svc start|stop|restart|enable|disable
   if [ "$INIT" = systemd ]; then
-    case $1 in enable) systemctl enable --now docveta ;; disable) systemctl disable --now docveta ;; *) systemctl "$1" docveta ;; esac
+    case $1 in enable) systemctl enable docveta ;; disable) systemctl disable --now docveta ;; *) systemctl "$1" docveta ;; esac
   else
-    case $1 in enable) rc-update add docveta default >/dev/null; rc-service docveta start ;;
+    case $1 in enable) rc-update add docveta default >/dev/null ;;
                disable) rc-service docveta stop; rc-update del docveta default ;; *) rc-service docveta "$1" ;; esac
   fi
 }
@@ -38,7 +41,8 @@ if [ "$UNINSTALL" -eq 1 ]; then
   svc disable 2>/dev/null || true
   rm -f /etc/systemd/system/docveta.service /etc/init.d/docveta
   if [ "$INIT" = systemd ]; then systemctl daemon-reload; fi
-  rm -rf /opt/docveta
+  pkill -x docveta-worker-allwinner 2>/dev/null || true
+  rm -rf /opt/docveta /opt/docveta-worker-allwinner /opt/docveta-worker-allwinner.old
   echo "Docveta removed. Your data is still in /var/lib/docveta (and in PostgreSQL, if you used your own)."
   exit 0
 fi
@@ -92,6 +96,8 @@ INIT
   touch /var/log/docveta.log && chown docveta:docveta /var/log/docveta.log
 fi
 svc enable
+if [ "$START" -eq 0 ]; then exit 0; fi
+svc start
 
 PORT_NOW=$(sed -n 's/^DOCVETA_LISTEN=.*:\([0-9]*\)$/\1/p' /opt/docveta/docveta.conf)
 echo
