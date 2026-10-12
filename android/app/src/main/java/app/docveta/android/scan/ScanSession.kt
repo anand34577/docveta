@@ -29,11 +29,13 @@ data class ScanPage(
     val detected: Boolean,
     val filter: PageFilters.Kind = PageFilters.Kind.ENHANCED,
     val turns: Int = 0,
+    val doc: Int = 0, // which document of the scan it belongs to
 )
 
 /**
  * A scan in progress: pages from the camera or gallery, each with its own crop, filter and
- * turn, and finally one PDF (or several pictures) handed to the upload queue.
+ * turn, grouped into one or more documents (a pile scanned in one go), each handed to the
+ * upload queue as its own PDF (or pictures).
  */
 class ScanSession(private val c: AppContainer) : ViewModel() {
     var pages by mutableStateOf<List<ScanPage>>(emptyList())
@@ -47,6 +49,27 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
     var working by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
+    /** Pages per document when scanning a pile (0: everything is one document); see [SessionStore.scanSides]. */
+    var sides by mutableStateOf(c.session.scanSides)
+        private set
+    /** The document new pages go into. */
+    var doc by mutableStateOf(0)
+        private set
+
+    /** The pages grouped by document, in order. */
+    val docs: List<List<ScanPage>> get() = pages.groupBy { it.doc }.values.toList()
+    val pagesInDoc: Int get() = pages.count { it.doc == doc }
+
+    fun chooseSides(n: Int) {
+        sides = n
+        c.session.scanSides = n
+        if (pagesInDoc >= n && n > 0) nextDocument()
+    }
+
+    /** Starts the next document; the pages so far stay together. */
+    fun nextDocument() {
+        if (pagesInDoc > 0) doc++
+    }
 
     private val dir = File(cacheDirOf(c), "scans").apply { mkdirs() }
 
@@ -81,8 +104,9 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
                     val p = ScanPage(id, f, bmp.width, bmp.height, found ?: fallback, found != null, filterForNew)
                     bmp.recycle()
                     p
-                }
+                }.copy(doc = doc)
                 pages = pages + page
+                if (sides > 0 && pagesInDoc >= sides) doc++
                 onAdded(page)
             } catch (e: Exception) {
                 error = "Couldn't use that picture"
@@ -129,13 +153,24 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
         }
     }
 
+    /**
+     * The page in a photo. Looked for on a copy at most [FIND_SIDE] across: the model sees 256 px and
+     * the edges 640 px anyway, and a full-size copy (30 MB a shot) starved the live camera of memory
+     * on long scanning runs.
+     */
     private fun findPage(bmp: Bitmap): Quad? {
-        return PageFinder.page(PageFinder.get(c.context), ImageIO.toRaster(bmp), DocumentDetector.PHOTO_EDGE_SIDE)
+        val k = minOf(1f, FIND_SIDE.toFloat() / maxOf(bmp.width, bmp.height))
+        val small = if (k < 1f) Bitmap.createScaledBitmap(bmp, (bmp.width * k).toInt().coerceAtLeast(1), (bmp.height * k).toInt().coerceAtLeast(1), true) else bmp
+        val raster = ImageIO.toRaster(small)
+        if (small !== bmp) small.recycle()
+        return PageFinder.page(PageFinder.get(c.context), raster, DocumentDetector.PHOTO_EDGE_SIDE)
+            ?.scaled(bmp.width.toFloat() / raster.w, bmp.height.toFloat() / raster.h)
     }
 
     /** The page as it will come out, at preview size. */
-    suspend fun preview(p: ScanPage, maxSide: Int = 900): Bitmap = withContext(Dispatchers.Default) {
-        val bmp = ImageIO.decodeUpright(p.file, maxSide)
+    suspend fun preview(p: ScanPage, maxSide: Int = 1600): Bitmap = withContext(Dispatchers.Default) {
+        // The page is only part of the photo: read the photo larger, or the page comes out smaller than asked (and blurry).
+        val bmp = ImageIO.decodeUpright(p.file, minOf(MAX_SOURCE, maxSide * 2))
         val k = bmp.width.toFloat() / p.width
         val raster = ImageIO.toRaster(bmp)
         bmp.recycle()
@@ -150,12 +185,11 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
     /** A file to upload, with its pages kept aside when the phone will read its text (see [PhoneOcr]). */
     class Rendered(val file: File, val name: String, val ocrPages: File? = null)
 
-    /** Builds the file(s) to upload from every page. Returns the PDF, or one JPEG per page. */
-    suspend fun render(onProgress: (Int, Int) -> Unit = { _, _ -> }): List<Rendered> = withContext(Dispatchers.Default) {
+    /** Builds the file(s) to upload from [pages]. Returns the PDF, or one JPEG per page. */
+    suspend fun render(pages: List<ScanPage>, base: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): List<Rendered> = withContext(Dispatchers.Default) {
         val out = ArrayList<Rendered>()
         val images = ArrayList<PdfPageImage>()
         val pdf = asPdf || pages.size == 1
-        val base = title.trim().ifBlank { defaultTitle() }
         val ocrPages = if (pdf && PhoneOcr.wanted(c.session.phoneOcr, c.session.serverReadsText)) File(dir, "ocr-${UUID.randomUUID()}").apply { mkdirs() } else null
         val ocrList = ArrayList<OcrPageFile>()
         pages.forEachIndexed { i, p ->
@@ -198,7 +232,9 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             working = true
             try {
-                val files = render()
+                val base = title.trim().ifBlank { defaultTitle() }
+                val groups = docs
+                val files = groups.flatMapIndexed { i, d -> render(d, if (groups.size == 1) base else "$base ${i + 1}") }
                 val script = PhoneOcr.script(c.repo.cachedMe()?.spaces?.firstOrNull { it.id == spaceId }?.defaultLanguage)
                 for (r in files) {
                     val mime = when (r.name.substringAfterLast('.')) { "pdf" -> "application/pdf"; "png" -> "image/png"; else -> "image/jpeg" }
@@ -207,6 +243,7 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
                 if (files.any { it.ocrPages != null }) PhoneOcr.prepare(c.context, script)
                 pages.forEach { it.file.delete() }
                 pages = emptyList()
+                doc = 0
                 title = defaultTitle()
                 onDone()
             } catch (e: Exception) {
@@ -220,6 +257,7 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
     fun discard() {
         pages.forEach { it.file.delete() }
         pages = emptyList()
+        doc = 0
     }
 
     override fun onCleared() {
@@ -229,6 +267,7 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
 
     companion object {
         const val MAX_SOURCE = 3200
+        private const val FIND_SIDE = 1280
         fun defaultTitle(): String = "Scan " + SimpleDateFormat("yyyy-MM-dd HH.mm", Locale.US).format(Date())
         private fun cacheDirOf(c: AppContainer): File = c.cacheDir
     }

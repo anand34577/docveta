@@ -75,6 +75,10 @@ import coil.compose.AsyncImage
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
+import android.util.Log
+import androidx.lifecycle.Lifecycle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** What the camera currently sees: the page outline in the (upright) analysis picture's coordinates. */
@@ -110,7 +114,6 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
     val ctx = LocalContext.current
     val container = LocalContainer.current
     val lifecycle = LocalLifecycleOwner.current
-    val executor = remember { Executors.newSingleThreadExecutor() }
     val main = remember { Handler(Looper.getMainLooper()) }
     val seen = remember { MutableStateFlow(Seen(null, 0, 0, false)) }
     val seenNow by seen.collectAsState()
@@ -154,7 +157,11 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
         })
     }
 
-    DisposableEffect(lifecycle) {
+    // When a frame was last looked at; the watchdog below starts the camera again if frames stop coming.
+    val lastFrame = remember { AtomicLong(0L) }
+    var rebinds by remember { mutableStateOf(0) }
+    DisposableEffect(lifecycle, rebinds) {
+        val executor = Executors.newSingleThreadExecutor()
         val future = ProcessCameraProvider.getInstance(ctx)
         future.addListener({
             val provider = future.get()
@@ -164,6 +171,7 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
             analysis.setAnalyzer(executor) { image ->
                 try {
                     val now = System.currentTimeMillis()
+                    lastFrame.set(now)
                     if (now - lastRun >= 120) {
                         lastRun = now
                         // In colour, for the model; turned the way the person holds the phone.
@@ -173,16 +181,35 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
                         val q = tracker.update(PageFinder.page(PageFinder.get(ctx), up))
                         seen.value = Seen(q, up.w, up.h, tracker.isSteady)
                     }
+                } catch (e: Throwable) {
+                    // One bad frame (e.g. short of memory) mustn't end page finding: skip it.
+                    Log.w("Scanner", "Couldn't look for the page in a frame", e)
                 } finally {
                     image.close()
                 }
             }
+            lastFrame.set(System.currentTimeMillis())
             provider.unbindAll()
             camera = provider.bindToLifecycle(lifecycle, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture, analysis)
         }, ContextCompat.getMainExecutor(ctx))
         onDispose {
             runCatching { future.get().unbindAll() }
-            executor.shutdown()
+            executor.shutdownNow()
+        }
+    }
+    // Watchdog: on some phones frames stop reaching the page finder after many shots, with no
+    // error; the outline then froze until the app was restarted. Start the camera again instead.
+    LaunchedEffect(lifecycle) {
+        while (true) {
+            delay(1000)
+            val resumed = lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            if (resumed && !capturing && camera != null && System.currentTimeMillis() - lastFrame.get() > 4000) {
+                Log.w("Scanner", "No camera frames for 4 s; starting the camera again")
+                lastFrame.set(System.currentTimeMillis())
+                tracker.reset()
+                seen.value = Seen(null, 0, 0, false)
+                rebinds++
+            }
         }
     }
     LaunchedEffect(torch, camera) { camera?.cameraControl?.enableTorch(torch) }
@@ -219,13 +246,26 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             RoundIcon(Icons.Outlined.Close, "Close") { session.discard(); onClose() }
             Spacer(Modifier.weight(1f))
+            // One document, or a pile: every page (or every front and back) its own document.
+            Text(
+                when (session.sides) { 1 -> "Pile: 1 page each"; 2 -> "Pile: front + back"; else -> "One document" },
+                Modifier.clip(RoundedCornerShape(50)).background(if (session.sides > 0) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.45f))
+                    .clickable { session.chooseSides((session.sides + 1) % 3) }.padding(horizontal = 14.dp, vertical = 10.dp),
+                color = if (session.sides > 0) MaterialTheme.colorScheme.onPrimary else Color.White, style = MaterialTheme.typography.labelLarge,
+            )
+            Spacer(Modifier.width(8.dp))
             RoundIcon(Icons.Outlined.AutoMode, if (auto) "Automatic capture is on" else "Automatic capture is off", active = auto) { auto = !auto; container.session.autoCapture = auto }
             Spacer(Modifier.width(8.dp))
             RoundIcon(if (torch) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff, "Flashlight", active = torch) { torch = !torch }
         }
         // Hint
+        val which = when {
+            session.sides == 2 -> "Document ${session.doc + 1} · ${if (session.pagesInDoc == 0) "front" else "back"} · "
+            session.sides == 1 || session.doc > 0 -> "Document ${session.doc + 1} · "
+            else -> ""
+        }
         Text(
-            when {
+            which + when {
                 capturing -> "Saving…"
                 seenNow.quad == null -> "Fit the whole page in view"
                 seenNow.steady -> if (auto) "Got it" else "Tap the button"
@@ -235,6 +275,13 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
             color = Color.White, style = MaterialTheme.typography.labelLarge,
         )
         // Bottom bar
+        if (session.sides != 1 && session.pagesInDoc > 0 && !capturing) Text(
+            "Next document",
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 112.dp).clip(RoundedCornerShape(50))
+                .background(Color.Black.copy(alpha = 0.55f)).border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(50))
+                .clickable { session.nextDocument() }.padding(horizontal = 16.dp, vertical = 8.dp),
+            color = Color.White, style = MaterialTheme.typography.labelLarge,
+        )
         Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                 val last = session.pages.lastOrNull()
@@ -246,7 +293,7 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
             }
             Box(Modifier.size(76.dp).clip(CircleShape).border(4.dp, Color.White, CircleShape).padding(6.dp).clip(CircleShape).background(if (capturing || session.working) Color.Gray else Color.White).clickable(enabled = !capturing) { shoot() })
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                if (session.pages.isNotEmpty()) Button({ leave(onDone) }, shape = RoundedCornerShape(50)) { Text("Done") }
+                if (session.pages.isNotEmpty()) Button({ leave(onDone) }, shape = RoundedCornerShape(50)) { Text(session.docs.size.let { if (it > 1) "Done ($it)" else "Done" }) }
                 else Spacer(Modifier.size(1.dp))
             }
         }

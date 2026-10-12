@@ -288,7 +288,10 @@ fun MainShell(shared: ShareInbox, onSignedOut: () -> Unit) {
                     DocumentScreen(id, startPage = (it.arguments!!.getInt("page") - 1).coerceAtLeast(0), onBack = back, onOpenDoc = openDoc, onNavigate = open)
                 }
                 composable(Route.Pages, arguments = listOf(navArgument("id") { type = NavType.StringType })) { PageManagerScreen(it.arguments!!.getString("id")!!, onBack = back) }
-                composable(Route.Scan) { CameraScreen(scan, onDone = { nav.navigate(Route.Review) { popUpTo(Route.Scan) { inclusive = true } } }, onEdit = { id -> nav.navigate("scan/crop/$id") }, onClose = back) }
+                composable(Route.Scan) { CameraScreen(scan, onDone = {
+                    // Back to the review the camera was opened from ("add another page"), else a new one.
+                    if (!nav.popBackStack(Route.Review, false)) nav.navigate(Route.Review) { popUpTo(Route.Scan) { inclusive = true } }
+                }, onEdit = { id -> nav.navigate("scan/crop/$id") }, onClose = back) }
                 composable(Route.Review) {
                     ReviewScreen(scan, onAddMore = { nav.navigate(Route.Scan) }, onEdit = { id -> nav.navigate("scan/crop/$id") },
                         onUploaded = { nav.popBackStack(Route.Docs, false); nav.navigate(Route.Uploads) }, onBack = back)
