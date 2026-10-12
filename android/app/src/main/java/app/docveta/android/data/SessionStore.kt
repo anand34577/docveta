@@ -97,6 +97,11 @@ class SessionStore(private val kv: KeyValueStore) {
         get() = kv.get("theme") ?: "system"
         set(v) = kv.put("theme", v)
 
+    /** Pages per document when scanning a pile: 0 = one document, 1 = single-sided, 2 = front and back. */
+    var scanSides: Int
+        get() = kv.get("scan_sides")?.toIntOrNull() ?: 0
+        set(v) = kv.put("scan_sides", if (v == 0) null else v.toString())
+
     var autoCapture: Boolean
         get() = kv.get("auto_capture") != "0"
         set(v) = kv.put("auto_capture", if (v) null else "0")

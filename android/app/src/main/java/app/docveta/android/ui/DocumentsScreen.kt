@@ -316,6 +316,17 @@ class DocsViewModel(private val c: AppContainer, initial: DocQuery) : ViewModel(
         return done
     }
 
+    /** Processes every failed document again, not only the loaded page; the server works through them in batches. */
+    suspend fun processAllFailed(): Int {
+        var done = 0
+        do {
+            val r = c.repo.bulk(emptyList(), "reprocess", select = "failed")
+            done += r.succeeded
+        } while (r.remaining > 0 && r.succeeded > 0)
+        reload()
+        return done
+    }
+
     /** Runs a bulk action on the selection, then clears it and reloads. */
     suspend fun bulk(action: String, update: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap())): BulkResult {
         val r = c.repo.bulk(selected, action, update)
@@ -640,6 +651,7 @@ private fun DocumentBrowser(
         }
         Spacer(Modifier.height(4.dp))
         StatsBanner()
+        if (!vm.selecting) AttentionBanner(vm)
         if (title == null && vm.query.q.isBlank() && vm.query.filterCount == 0) ComingUp(openDoc, me.dateFormat)
         DocumentList(vm, me.spaces, me.dateFormat, listState, openDoc, selectable = true, empty = {
             if (vm.query.q.isNotBlank() || vm.query.filterCount > 0) EmptyState(
@@ -918,6 +930,39 @@ fun ComingUp(onOpen: (String) -> Unit, dateFormat: String) {
             }
         }
         if (items.size > 3) TextButton({ all = !all }, Modifier.padding(horizontal = 4.dp)) { Text(if (all) "Show fewer" else "Show all ${items.size}") }
+    }
+}
+
+/**
+ * Failed documents shouldn't wait to be found one by one: say how many there are, and with
+ * "Needs attention" on, process them all again in one go (after fixing what made them fail).
+ */
+@Composable
+private fun AttentionBanner(vm: DocsViewModel) {
+    val stats = LocalStats.current
+    val ctx = LocalContext.current
+    val run = rememberRunner()
+    val confirm = rememberConfirmation()
+    val showing = vm.query.status == "failed,needs_password"
+    val failed = stats?.failed ?: 0
+    if (failed == 0 && !(showing && vm.items.any { it.status == "failed" })) return
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f), RoundedCornerShape(12.dp)).padding(start = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Warning, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            if (showing) "Fixed what went wrong (e.g. a worker that was offline)? Process them all again."
+            else "${plural(failed, "document")} couldn't be processed",
+            Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+        )
+        if (showing) TextButton({
+            confirm.ask("Process all failed documents again?", "Each one is read again from its original file. Documents that need a password are left out.", "Process again") {
+                run.run { val n = vm.processAllFailed(); toast(ctx, if (n > 0) "Processing ${plural(n, "document")} again" else "Nothing to process again") }
+            }
+        }) { Text("Process all again") }
+        else TextButton({ vm.setQuery(vm.query.copy(status = "failed,needs_password")) }) { Text("Show") }
     }
 }
 

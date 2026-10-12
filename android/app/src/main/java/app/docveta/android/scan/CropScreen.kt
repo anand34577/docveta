@@ -93,13 +93,13 @@ fun CropScreen(session: ScanSession, pageId: String, onBack: () -> Unit) {
     var filter by remember(pageId) { mutableStateOf(page.filter) }
 
     LaunchedEffect(pageId) {
-        val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { ImageIO.decodeUpright(page.file, 1600) }
+        val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { ImageIO.decodeUpright(page.file, 2400) } // sharp enough for the magnifier
         scale = bmp.width.toFloat() / page.width
         image = bmp.asImageBitmap()
     }
     // The result preview follows the current corners, filter and turn.
     LaunchedEffect(showing, quad, filter, turns) {
-        if (showing) preview = session.preview(page.copy(quad = quad, filter = filter, turns = turns), 900)
+        if (showing) preview = session.preview(page.copy(quad = quad, filter = filter, turns = turns), 1800)
     }
 
     fun commit() {

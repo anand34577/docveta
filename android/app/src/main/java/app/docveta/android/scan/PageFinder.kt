@@ -34,7 +34,11 @@ class PageFinder(
     }
     private val session = env.createSession(model, options)
 
-    /** The page's corners in the picture's pixels, or null when there's no page in view. */
+    /**
+     * The page's corners in the picture's pixels, or null when there's no page in view. One at a
+     * time: the live camera and a just-taken photo share this finder.
+     */
+    @Synchronized
     fun find(img: Raster): Quad? {
         val small = resize(img, SIZE, SIZE)
         val n = SIZE * SIZE

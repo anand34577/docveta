@@ -11,7 +11,10 @@
 #   sudo sh get-docveta.sh --proxmox <CTID>
 #
 # Options: --port N (default 8080) --version X.Y.Z (default: latest) --no-ocr
-# Every download is checked against the release's SHA256SUMS.
+#          --uninstall (removes the program; your documents and settings are kept)
+# Every download is checked against the release's SHA256SUMS. Running it again upgrades:
+# everything is downloaded first, Docveta is stopped only while its files are swapped, and
+# it is started again however the script ends.
 set -eu
 
 REPO=anand34577/docveta
@@ -19,6 +22,8 @@ PORT=8080
 VERSION=
 OCR=1
 PROXMOX=
+UNINSTALL=0
+STOPPED=0
 # Allwinner's VIPLite 2.0 libraries (not redistributable): fetched from Radxa's ai-sdk,
 # pinned to a commit and checked against these SHA-256 sums.
 VIPLITE_URL=https://raw.githubusercontent.com/ZIFENG278/ai-sdk/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0
@@ -34,7 +39,8 @@ while [ $# -gt 0 ]; do
     --version) VERSION="${2#v}"; shift 2 ;;
     --no-ocr) OCR=0; shift ;;
     --proxmox) PROXMOX="$2"; shift 2 ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    --uninstall) UNINSTALL=1; shift ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
@@ -74,9 +80,29 @@ if [ -n "$PROXMOX" ]; then
 fi
 
 # ------------------------------------------------------------------ install
-if command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then restart() { systemctl restart docveta; }
-elif command -v rc-service >/dev/null; then restart() { rc-service docveta restart >/dev/null; } # Alpine (OpenRC)
+if command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then
+  start() { systemctl start docveta; }
+  stop() { systemctl stop docveta 2>/dev/null || true; }
+  remove_service() { systemctl disable --now docveta 2>/dev/null || true; rm -f /etc/systemd/system/docveta.service; systemctl daemon-reload; }
+  logs() { journalctl -u docveta -n 40 --no-pager; }
+elif command -v rc-service >/dev/null; then # Alpine (OpenRC)
+  start() { rc-service docveta start >/dev/null; }
+  stop() { rc-service docveta stop >/dev/null 2>&1 || true; }
+  remove_service() { stop; rc-update del docveta default >/dev/null 2>&1 || true; rm -f /etc/init.d/docveta; }
+  logs() { tail -n 40 /var/log/docveta.log; }
 else die "no systemd or OpenRC: download the release yourself and run ./docveta serve (see the README)"; fi
+W=/opt/docveta-worker-allwinner
+
+if [ "$UNINSTALL" = 1 ]; then
+  say "Removing Docveta"
+  remove_service
+  pkill -x docveta-worker-allwinner 2>/dev/null || true
+  rm -rf /opt/docveta "$W" "$W.old"
+  echo "Docveta removed. Your documents and settings are still in /var/lib/docveta (and in your own PostgreSQL, if you used one)."
+  echo "Installing again picks them up. To delete them too: sudo rm -rf /var/lib/docveta"
+  exit 0
+fi
+
 command -v curl >/dev/null || die "curl is required (apt install curl / apk add curl)"
 command -v sha256sum >/dev/null || die "sha256sum is required (coreutils)"
 MUSL=0; ls /lib/ld-musl-*.so.1 >/dev/null 2>&1 && MUSL=1
@@ -90,7 +116,9 @@ if [ -z "$VERSION" ]; then
 fi
 BASE="https://github.com/$REPO/releases/download/v$VERSION"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+# However the script ends (an error, Ctrl-C), Docveta isn't left stopped.
+trap 'if [ "$STOPPED" = 1 ]; then echo "Starting Docveta again"; start || true; fi; rm -rf "$TMP"' EXIT
+trap 'exit 1' INT TERM HUP
 curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS" || die "can't download version $VERSION"
 
 # fetch FILE: downloads a release file into $TMP and checks it against SHA256SUMS.
@@ -109,6 +137,8 @@ unzip_tool() {
 }
 
 say "Docveta $VERSION for linux-$ARCH"
+# Everything is downloaded and checked before anything here changes: a failed download leaves
+# the running Docveta as it was.
 fetch "docveta-$VERSION-linux-$ARCH.tar.gz"
 tar -C "$TMP" -xzf "$TMP/docveta-$VERSION-linux-$ARCH.tar.gz"
 SRC="$TMP/docveta-$VERSION-linux-$ARCH"
@@ -122,14 +152,28 @@ if [ "$OCR" = 1 ]; then
 fi
 
 if [ "$ENGINE" = cpu ]; then
-  say "Text recognition on the processor"
   unzip_tool
   fetch "docveta-ocr-$VERSION-linux-$ARCH.zip"
   unzip -q "$TMP/docveta-ocr-$VERSION-linux-$ARCH.zip" -d "$SRC" # -> $SRC/ocr, installed next to docveta
+elif [ "$ENGINE" = allwinner ]; then
+  fetch "docveta-worker-allwinner-$VERSION-linux-arm64.tar.gz"
+  tar -C "$TMP" -xzf "$TMP/docveta-worker-allwinner-$VERSION-linux-arm64.tar.gz" # -> $TMP/docveta-worker-allwinner
+  for lib in libNBGlinker.so libVIPhal.so; do
+    curl -fsSL --retry 3 -o "$TMP/$lib" "$VIPLITE_URL/$lib" || die "download failed: $lib"
+  done
+  (cd "$TMP" && echo "$VIPLITE_SUMS" | sha256sum -c --status) || die "checksum mismatch: VIPLite libraries"
+  install -d "$TMP/docveta-worker-allwinner/viplite"
+  install -m 644 "$TMP/libNBGlinker.so" "$TMP/libVIPhal.so" "$TMP/docveta-worker-allwinner/viplite/"
 fi
 
-say "Installing the server"
-"$SRC/install.sh" --port "$PORT" >/dev/null
+# Stopped from here to the end: a running engine reads its own files while it works (they
+# mustn't change under it), and the NPU check needs the NPU to itself.
+say "Installing"
+STOPPED=1
+stop
+pkill -x docveta-worker-allwinner 2>/dev/null || true
+if grep -q -- --no-start "$SRC/install.sh"; then "$SRC/install.sh" --port "$PORT" --no-start >/dev/null
+else "$SRC/install.sh" --port "$PORT" >/dev/null; stop; fi # releases before 0.17.0 start it themselves
 CONF=/opt/docveta/docveta.conf
 setconf() { # setconf KEY VALUE
   if grep -q "^$1=" "$CONF"; then sed -i "s|^$1=.*|$1=$2|" "$CONF"; else echo "$1=$2" >> "$CONF"; fi
@@ -137,16 +181,24 @@ setconf() { # setconf KEY VALUE
 
 if [ "$ENGINE" = allwinner ]; then
   say "Text recognition on the Allwinner NPU"
-  W=/opt/docveta-worker-allwinner
-  fetch "docveta-worker-allwinner-$VERSION-linux-arm64.tar.gz"
-  tar -C /opt -xzf "$TMP/docveta-worker-allwinner-$VERSION-linux-arm64.tar.gz" # keeps viplite/ and models/det.nb
-  for lib in libNBGlinker.so libVIPhal.so; do
-    curl -fsSL --retry 3 -o "$TMP/$lib" "$VIPLITE_URL/$lib" || die "download failed: $lib"
-  done
-  (cd "$TMP" && echo "$VIPLITE_SUMS" | sha256sum -c --status) || die "checksum mismatch: VIPLite libraries"
-  install -m 644 "$TMP/libNBGlinker.so" "$TMP/libVIPhal.so" "$W/viplite/"
-  "$W/docveta-worker-allwinner" --probe >"$TMP/probe.log" 2>&1 || { cat "$TMP/probe.log"; die "the NPU check failed (see above)"; }
-  grep -E "Detection|Test image|^  " "$TMP/probe.log" | sed 's/^/  /'
+  # Swapped as a whole, so nothing of an older version is left; the previous one is kept until
+  # the new one passes its check.
+  rm -rf "$W.old"
+  if [ -d "$W" ]; then mv "$W" "$W.old"; fi
+  mv "$TMP/docveta-worker-allwinner" "$W"
+  if timeout -s KILL 180 "$W/docveta-worker-allwinner" --probe >"$TMP/probe.log" 2>&1; then
+    grep -E "Detection|Test image|^  " "$TMP/probe.log" | sed 's/^/  /' || true
+    rm -rf "$W.old"
+  else
+    sed 's/^/  /' "$TMP/probe.log"
+    if [ -d "$W.old" ]; then
+      rm -rf "$W"
+      mv "$W.old" "$W"
+      echo "  The new NPU engine failed its check (above), so the previous one is kept."
+    else
+      echo "  The NPU engine failed its check (above): scans won't be read until it's fixed (see the OCR engines wiki page)."
+    fi
+  fi
   # Docveta starts the engine itself and gives it a token: no worker service or token needed.
   setconf DOCVETA_LOCAL_OCR "$W/docveta-worker-allwinner"
   # Older manual setups ran it as a separate service.
@@ -156,10 +208,22 @@ if [ "$ENGINE" = allwinner ]; then
 elif [ "$ENGINE" = cpu ]; then
   setconf DOCVETA_LOCAL_OCR auto
 fi
-restart
+
+say "Starting Docveta"
+start
+STOPPED=0
+# A new version updates its database on its first start: wait until it answers.
+LISTEN_PORT=$(sed -n 's/^DOCVETA_LISTEN=.*:\([0-9]*\)$/\1/p' "$CONF")
+LISTEN_PORT=${LISTEN_PORT:-$PORT}
+i=0
+until curl -fs -o /dev/null "http://127.0.0.1:$LISTEN_PORT/healthz"; do
+  i=$((i + 1))
+  [ "$i" -lt 180 ] || { logs; die "Docveta didn't answer within 3 minutes (its log is above)"; }
+  sleep 1
+done
 
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-say "Docveta is running: http://${IP:-localhost}:$PORT"
+say "Docveta $VERSION is running: http://${IP:-localhost}:$LISTEN_PORT"
 if grep -q '^DOCVETA_DATABASE_URL=' "$CONF" /var/lib/docveta/docveta.conf 2>/dev/null; then
   echo "Upgrade complete; your settings and data are unchanged."
 else
@@ -167,3 +231,4 @@ else
   echo "From another computer the page asks for a setup code: sudo cat /var/lib/docveta/setup-code.txt"
 fi
 if command -v journalctl >/dev/null; then echo "Logs: journalctl -u docveta -f"; else echo "Logs: tail -f /var/log/docveta.log"; fi
+echo "Upgrade: run this script again. Remove: sudo sh get-docveta.sh --uninstall (your data is kept)."

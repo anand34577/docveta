@@ -26,13 +26,21 @@ create your account. From another computer the page asks for a setup code:
 sudo cat /var/lib/docveta/setup-code.txt
 ```
 
-Running the script again upgrades Docveta and keeps your data and settings.
+**Upgrade:** run the same two lines again. Your data and settings are kept. The script downloads
+and checks everything first, stops Docveta only while it swaps the files, updates the database on
+the first start, and waits until Docveta answers. If anything fails, Docveta is started again; if
+the new NPU engine fails its check, the previous one stays.
+
+**Remove:** `sudo sh get-docveta.sh --uninstall`. The program and the NPU engine are removed;
+your documents and settings stay in `/var/lib/docveta` (installing again picks them up). To
+delete them too: `sudo rm -rf /var/lib/docveta`.
 
 | Option | |
 |---|---|
 | `--port 9000` | Use another port (default 8080) |
 | `--version 0.4.0` | Install a specific version |
 | `--no-ocr` | Skip text recognition (born-digital PDFs are still searchable) |
+| `--uninstall` | Remove Docveta (data is kept) |
 
 Everyday commands:
 

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items as rowItems
@@ -76,15 +77,23 @@ fun ReviewScreen(session: ScanSession, onAddMore: () -> Unit, onEdit: (String) -
     var spaceMenu by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().imePadding()) {
         TopAppBar(
-            title = { Text("${session.pages.size} page${if (session.pages.size == 1) "" else "s"}") },
+            title = {
+                val n = session.docs.size
+                Text((if (n > 1) "$n documents · " else "") + "${session.pages.size} page${if (session.pages.size == 1) "" else "s"}")
+            },
             navigationIcon = { IconButton(onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back to the camera") } },
             actions = { IconButton(onAddMore) { Icon(Icons.Outlined.AddAPhoto, "Add another page") } },
         )
         LazyVerticalGrid(GridCells.Adaptive(150.dp), Modifier.weight(1f), contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(session.pages, key = { it.id }) { p ->
-                val idx = session.pages.indexOf(p)
+            val docs = session.docs
+            docs.forEachIndexed { d, docPages ->
+            if (docs.size > 1) item(key = "doc-${docPages.first().doc}", span = { GridItemSpan(maxLineSpan) }) {
+                Text("Document ${d + 1} · ${docPages.size} page${if (docPages.size == 1) "" else "s"}", Modifier.padding(top = if (d > 0) 8.dp else 0.dp), style = MaterialTheme.typography.titleSmall)
+            }
+            items(docPages, key = { it.id }) { p ->
+                val idx = docPages.indexOf(p)
                 Column(Modifier.clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(8.dp)) {
-                    val bmp by produceState<Bitmap?>(null, p.id, p.quad, p.filter, p.turns) { value = runCatching { session.preview(p, 420) }.getOrNull() }
+                    val bmp by produceState<Bitmap?>(null, p.id, p.quad, p.filter, p.turns) { value = runCatching { session.preview(p, 720) }.getOrNull() }
                     Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant).clickable { onEdit(p.id) }, contentAlignment = Alignment.Center) {
                         bmp?.let { Image(it.asImageBitmap(), "Page ${idx + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) } ?: CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                         Text("${idx + 1}", Modifier.align(Alignment.TopStart).padding(6.dp).background(Color0, RoundedCornerShape(6.dp)).padding(horizontal = 6.dp), color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelSmall)
@@ -94,9 +103,10 @@ fun ReviewScreen(session: ScanSession, onAddMore: () -> Unit, onEdit: (String) -
                         IconButton({ session.move(p.id, -1) }, enabled = idx > 0, modifier = Modifier.size(36.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Move earlier", Modifier.size(18.dp)) }
                         IconButton({ onEdit(p.id) }, Modifier.size(36.dp)) { Icon(Icons.Outlined.Crop, "Crop and filter", Modifier.size(18.dp)) }
                         IconButton({ session.remove(p.id); if (session.pages.isEmpty()) onBack() }, Modifier.size(36.dp)) { Icon(Icons.Outlined.Delete, "Delete page", Modifier.size(18.dp)) }
-                        IconButton({ session.move(p.id, 1) }, enabled = idx < session.pages.lastIndex, modifier = Modifier.size(36.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowForward, "Move later", Modifier.size(18.dp)) }
+                        IconButton({ session.move(p.id, 1) }, enabled = idx < docPages.lastIndex, modifier = Modifier.size(36.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowForward, "Move later", Modifier.size(18.dp)) }
                     }
                 }
+            }
             }
         }
         Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerLow).navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -123,7 +133,7 @@ fun ReviewScreen(session: ScanSession, onAddMore: () -> Unit, onEdit: (String) -
                     }
                 }
             }
-            if (session.pages.size > 1) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            if (session.docs.any { it.size > 1 }) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 SegmentedButton(session.asPdf, { session.asPdf = true }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("One PDF") }
                 SegmentedButton(!session.asPdf, { session.asPdf = false }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Separate pages") }
             }
@@ -140,7 +150,14 @@ fun ReviewScreen(session: ScanSession, onAddMore: () -> Unit, onEdit: (String) -
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                     Spacer(Modifier.width(10.dp))
                     Text("Preparing…")
-                } else Text(if (session.asPdf || session.pages.size == 1) "Upload as PDF" else "Upload ${session.pages.size} pictures")
+                } else {
+                    val n = session.docs.size
+                    Text(when {
+                        !session.asPdf && session.pages.size > 1 -> "Upload ${session.pages.size} pictures"
+                        n > 1 -> "Upload $n PDFs"
+                        else -> "Upload as PDF"
+                    })
+                }
             }
             session.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
