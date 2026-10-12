@@ -5,6 +5,30 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-12
+
+### Added
+- **Scanning a pile (Android).** The camera's mode button switches between **One document**,
+  **Pile: 1 page each** and **Pile: front + back**: every page (or every front and back) becomes
+  its own document, and the camera says which document and side comes next. **Next document**
+  closes one early. The review groups pages by document, and each uploads as its own PDF.
+- **Process all failed documents again (Android).** Documents says how many couldn't be
+  processed (**Show**); with **Needs attention** on, **Process all again** retries every failed
+  document in one go, like the web app's **Process failed again**.
+- `get-docveta.sh --uninstall` removes Docveta, NPU engine included (your data is kept).
+
+### Fixed
+- Upgrading on Linux could leave text recognition broken ("worker stopped responding (lease
+  expired)"): Docveta was started again before the new NPU engine was unpacked, so the old engine
+  ran on top of the new files. The installer now downloads everything first, stops Docveta only
+  while it swaps files, swaps the NPU engine as a whole (keeping the old one if the new one fails
+  its check), starts Docveta once at the end however the script ends, and waits until it answers.
+- A failed OCR task that wasn't retryable couldn't be recorded (a database error), so it waited
+  for its lease to run out instead of moving on.
+- Android scanner: page outlines no longer stop after many shots in a row (the camera restarts
+  itself if frames stop coming, and each shot uses far less memory to find the page); the
+  preview, crop and review pictures are sharp instead of blurry.
+
 ## [0.16.0] - 2026-10-11
 
 ### Added
