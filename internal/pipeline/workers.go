@@ -765,7 +765,7 @@ func (s *Service) Fail(ctx context.Context, p *auth.Principal, taskID uuid.UUID,
 			var other bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workers w, jsonb_array_elements(w.capabilities) c
 				WHERE w.enabled AND w.last_seen_at > now() - interval '1 day' AND c->>'task_type'=$1 AND c->>'engine' <> $2
-				  AND NOT (c->>'engine' = ANY((SELECT excluded_engines FROM processing_tasks WHERE id=$3))))`,
+				  AND NOT (c->>'engine' = ANY(coalesce((SELECT excluded_engines FROM processing_tasks WHERE id=$3), '{}'::text[]))))`,
 				t.Type, engine, t.ID).Scan(&other); err != nil {
 				return err
 			}
