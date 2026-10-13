@@ -5,6 +5,11 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-13
+
+### Fixed
+- Android scanner: the screen no longer turns off while you line up a page.
+
 ## [0.17.0] - 2026-10-12
 
 ### Added
