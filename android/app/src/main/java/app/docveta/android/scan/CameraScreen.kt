@@ -123,7 +123,7 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
     var capturing by remember { mutableStateOf(false) }
     var flash by remember { mutableStateOf(false) }
     val capture = remember { ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).setTargetAspectRatio(AspectRatio.RATIO_4_3).build() }
-    val previewView = remember { PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT) } }
+    val previewView = remember { PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; keepScreenOn = true; layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT) } }
     val tracker = remember { QuadTracker(stillFrames = 7) }
     var lastShot by remember { mutableStateOf(0L) }
     // Leaving the screen closes the camera, and CameraX drops a picture still being taken: Done,
