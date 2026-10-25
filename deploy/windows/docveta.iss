@@ -84,6 +84,12 @@ Source: "{#SourceDir}\ocr\*"; DestDir: "{app}\ocr"; Flags: ignoreversion recurse
 Source: "{#SourceDir}\postgres\*"; DestDir: "{app}\postgres"; Flags: ignoreversion; Components: server
 #endif
 
+[InstallDelete]
+; Upgrades replace the OCR engine as a whole, like the Linux and macOS installers: libraries
+; and models of an older version must not mix with the new ones (and it goes away when the
+; OCR component is no longer selected).
+Type: filesandordirs; Name: "{app}\ocr"
+
 [Dirs]
 Name: "{commonappdata}\Docveta"; Flags: uninsneveruninstall
 
@@ -225,11 +231,15 @@ begin
   end;
 end;
 
-{ Stop the running service before files are replaced (upgrades). }
+{ Stop the running service before files are replaced (upgrades). sc.exe only asks it to stop;
+  the installed docveta.exe also waits (up to a minute) until Docveta has shut down its
+  database and OCR engine, whose files would otherwise still be in use. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
 begin
+  if FileExists(ExpandConstant('{app}\docveta.exe')) then
+    Exec(ExpandConstant('{app}\docveta.exe'), 'service stop', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Exec(ExpandConstant('{sys}\sc.exe'), 'stop Docveta', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Sleep(3000);
   Result := '';
