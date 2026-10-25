@@ -339,6 +339,10 @@ func TestIntegration(t *testing.T) {
 	ro.do("GET", "/api/v1/documents/"+doc.ID, nil, 200, nil)
 	ro.uploadStatus(family, "ro.pdf", minimalPDF("read only token upload"), 403)
 	ro.do("PATCH", "/api/v1/documents/"+doc.ID, map[string]any{"title": "nope"}, 403, nil)
+	// Owning the space doesn't let a read-only token change who is in it, or delete it.
+	ro.do("PUT", "/api/v1/spaces/"+family+"/members/"+kidID, map[string]any{"role": "owner"}, 403, nil)
+	ro.do("DELETE", "/api/v1/spaces/"+family+"/members/"+kidID, nil, 403, nil)
+	ro.do("DELETE", "/api/v1/spaces/"+family, nil, 403, nil)
 	up := tokenFor("upload")
 	up.upload(family, "up.pdf", minimalPDF("upload only token"))
 	up.do("PATCH", "/api/v1/documents/"+doc.ID, map[string]any{"title": "nope"}, 403, nil)

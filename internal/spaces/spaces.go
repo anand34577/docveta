@@ -316,12 +316,12 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id uuid.UUID, i
 // Delete removes an empty shared space. Spaces with documents must be emptied first
 // (documents moved or deleted) so nothing is lost by accident.
 func (s *Service) Delete(ctx context.Context, p *auth.Principal, id uuid.UUID) error {
+	if _, err := s.Require(ctx, p, id, ActManage); err != nil {
+		return err
+	}
 	sp, err := s.Get(ctx, p, id)
 	if err != nil {
 		return err
-	}
-	if sp.Role != RoleOwner {
-		return apperr.Forbidden("Only space owners can do this")
 	}
 	if sp.Kind == "personal" {
 		return apperr.Conflict("personal_space", "Personal spaces can't be deleted")
@@ -360,12 +360,15 @@ func (s *Service) Members(ctx context.Context, p *auth.Principal, id uuid.UUID) 
 
 // SetMember adds a member or changes their role.
 func (s *Service) SetMember(ctx context.Context, p *auth.Principal, spaceID, userID uuid.UUID, role Role) error {
+	if r, err := s.Require(ctx, p, spaceID, ActManage); err != nil {
+		if r != "" && p.Has(auth.ScopeWrite) {
+			return apperr.Forbidden("Only space owners can manage members")
+		}
+		return err
+	}
 	sp, err := s.Get(ctx, p, spaceID)
 	if err != nil {
 		return err
-	}
-	if sp.Role != RoleOwner {
-		return apperr.Forbidden("Only space owners can manage members")
 	}
 	if !role.Valid() {
 		return apperr.Invalid("role", "Must be owner, editor or viewer")
@@ -374,6 +377,9 @@ func (s *Service) SetMember(ctx context.Context, p *auth.Principal, spaceID, use
 		return apperr.Conflict("personal_space", "Personal spaces can't be shared. Create a shared space instead, or share individual documents.")
 	}
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockSpace(ctx, tx, spaceID); err != nil {
+			return err
+		}
 		var exists bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND status='active')`, userID).Scan(&exists); err != nil {
 			return err
@@ -390,6 +396,10 @@ func (s *Service) SetMember(ctx context.Context, p *auth.Principal, spaceID, use
 }
 
 func (s *Service) RemoveMember(ctx context.Context, p *auth.Principal, spaceID, userID uuid.UUID) error {
+	// Changing who is in a space needs a token that may change things, even to leave it.
+	if !p.Has(auth.ScopeWrite) {
+		return apperr.Forbidden("This token doesn't have the required scope")
+	}
 	sp, err := s.Get(ctx, p, spaceID)
 	if err != nil {
 		return err
@@ -402,11 +412,22 @@ func (s *Service) RemoveMember(ctx context.Context, p *auth.Principal, spaceID, 
 		return apperr.Conflict("personal_space", "You can't leave your personal space")
 	}
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockSpace(ctx, tx, spaceID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM space_members WHERE space_id=$1 AND user_id=$2`, spaceID, userID); err != nil {
 			return err
 		}
 		return ensureOwner(ctx, tx, spaceID)
 	})
+}
+
+// lockSpace makes membership changes to one space take turns, so the owner check after a
+// change sees the others: two owners demoting each other at the same moment would otherwise
+// both pass it and leave the space without an owner.
+func lockSpace(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `SELECT 1 FROM spaces WHERE id=$1 FOR UPDATE`, spaceID)
+	return err
 }
 
 func ensureOwner(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID) error {
