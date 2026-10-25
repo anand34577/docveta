@@ -151,10 +151,14 @@ fun ReviewScreen(session: ScanSession, onAddMore: () -> Unit, onEdit: (String) -
                     Spacer(Modifier.width(10.dp))
                     Text("Preparing…")
                 } else {
-                    val n = session.docs.size
+                    // What is sent: a document of one page is always a PDF (see [ScanSession.render]).
+                    val docs = session.docs
+                    val pictures = if (session.asPdf) 0 else docs.filter { it.size > 1 }.sumOf { it.size }
+                    val pdfs = docs.count { session.asPdf || it.size == 1 }
                     Text(when {
-                        !session.asPdf && session.pages.size > 1 -> "Upload ${session.pages.size} pictures"
-                        n > 1 -> "Upload $n PDFs"
+                        pictures > 0 && pdfs == 0 -> "Upload $pictures pictures"
+                        pictures > 0 -> "Upload ${pictures + pdfs} files"
+                        pdfs > 1 -> "Upload $pdfs PDFs"
                         else -> "Upload as PDF"
                     })
                 }

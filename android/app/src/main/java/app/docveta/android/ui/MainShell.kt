@@ -389,8 +389,9 @@ private fun ShareTargetDialog(uris: List<Uri>, onDone: () -> Unit, onCancel: () 
     var space by remember { mutableStateOf(writable.firstOrNull { it.id == c.session.defaultSpaceId } ?: writable.firstOrNull { it.isPersonal } ?: writable.firstOrNull()) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     AlertDialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = { if (!busy) onCancel() },
         title = { Text("Add ${uris.size} file${if (uris.size == 1) "" else "s"} to Docveta") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -410,11 +411,22 @@ private fun ShareTargetDialog(uris: List<Uri>, onDone: () -> Unit, onCancel: () 
                 busy = true
                 scope.launch {
                     c.session.defaultSpaceId = space?.id
-                    uris.forEach { runCatching { c.uploads.enqueue(it, space?.id, "share") } }
+                    // A file the other app no longer lets us read is skipped, but not silently.
+                    val failed = uris.count { u ->
+                        try {
+                            c.uploads.enqueue(u, space?.id, "share")
+                            false
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            true
+                        }
+                    }
+                    if (failed > 0) toast(ctx, if (uris.size == 1) "Couldn't read that file" else "Couldn't read ${plural(failed, "file")}")
                     onDone()
                 }
             }, enabled = space != null && !busy) { Text("Upload") }
         },
-        dismissButton = { TextButton(onCancel) { Text("Cancel") } },
+        dismissButton = { TextButton(onCancel, enabled = !busy) { Text("Cancel") } },
     )
 }
