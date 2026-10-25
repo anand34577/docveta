@@ -860,6 +860,20 @@ func TestShareLinks(t *testing.T) {
 	// Documents outside the view stay out of reach.
 	other2 := c.upload(e.family, "private.pdf", minimalPDF("this one is not part of the shared view at all"))
 	anon.do("GET", "/api/v1/public/shares/"+token(vs.Link)+"/documents/"+other2.ID+"/file", nil, 404, nil)
+
+	// A read-only token can't turn links off.
+	var ro struct{ Secret string }
+	c.do("POST", "/api/v1/me/tokens", map[string]any{"name": "ro", "scopes": []string{"documents:read"}}, 201, &ro)
+	roc := newClient(t, e.srv.URL)
+	roc.token = ro.Secret
+	roc.do("DELETE", "/api/v1/shares/"+vs.Share.ID, nil, 403, nil)
+
+	// A document in the trash can't be opened through its link any more.
+	var trashed created
+	c.do("POST", "/api/v1/shares", map[string]any{"document_id": doc.ID}, 201, &trashed)
+	anon.raw("GET", "/api/v1/public/shares/"+token(trashed.Link)+"/documents/"+doc.ID+"/file", nil, nil, 200)
+	c.do("DELETE", "/api/v1/documents/"+doc.ID, nil, 204, nil)
+	anon.do("GET", "/api/v1/public/shares/"+token(trashed.Link)+"/documents/"+doc.ID+"/file", nil, 404, nil)
 }
 
 // TestMCP talks to the MCP endpoint like an AI assistant would.
