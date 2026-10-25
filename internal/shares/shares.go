@@ -181,6 +181,9 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, documentID, viewI
 }
 
 func (s *Service) Revoke(ctx context.Context, p *auth.Principal, id uuid.UUID) error {
+	if !p.Has(auth.ScopeWrite) {
+		return apperr.Forbidden("This token doesn't have the required scope")
+	}
 	tag, err := s.pool.Exec(ctx, `UPDATE shares SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL AND (created_by=$2
 		OR EXISTS (SELECT 1 FROM space_members m WHERE m.space_id=shares.space_id AND m.user_id=$2 AND m.role='owner'))`, id, p.UserID)
 	if err != nil {
@@ -378,15 +381,15 @@ func (s *Service) File(ctx context.Context, token, cookie string, docID uuid.UUI
 	if kind == "original" && !r.AllowDownload {
 		kind = "best"
 	}
-	allowed := r.DocumentID != nil && *r.DocumentID == docID
-	if !allowed {
-		list, err := s.docs_(ctx, r)
-		if err != nil {
-			return nil, err
-		}
-		for _, d := range list {
-			allowed = allowed || d.ID == docID
-		}
+	// Always through docs_, also for a single document: the link stops working when the
+	// document is in the trash or its creator can no longer see it, as Meta does.
+	list, err := s.docs_(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	allowed := false
+	for _, d := range list {
+		allowed = allowed || d.ID == docID
 	}
 	if !allowed {
 		return nil, apperr.NotFound("Document")

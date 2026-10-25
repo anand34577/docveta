@@ -46,6 +46,14 @@ func TestRequestChecks(t *testing.T) {
 	if isLocal(r) {
 		t.Error("proxied request treated as local")
 	}
+	for host, want := range map[string]bool{"127.0.0.1:8080": true, "[::1]:8080": true, "localhost": true, "docveta.localhost:8080": true,
+		"evil.example:8080": false, "127.0.0.1.evil.example": false, "192.168.1.5:8080": false} {
+		r := httptest.NewRequest("POST", "http://"+host+"/", nil)
+		r.RemoteAddr = "127.0.0.1:5555"
+		if got := isLocal(r); got != want {
+			t.Errorf("Host %s: local=%v, want %v", host, got, want) // a rebound name must still need the code
+		}
+	}
 	r2 := httptest.NewRequest("POST", "http://192.168.1.5:8080/", nil)
 	r2.RemoteAddr = "192.168.1.20:5555"
 	if isLocal(r2) {

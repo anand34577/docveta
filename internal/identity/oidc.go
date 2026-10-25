@@ -259,10 +259,14 @@ func randomString() string {
 }
 
 // safeReturnTo only allows same-origin relative paths to prevent open redirects.
-// Sign-in pages are never a place to return to: older web apps sent "/login?redirect=…" here,
-// which put people back on the login page after signing in.
+// Control characters and backslashes are refused anywhere: browsers drop tabs and line
+// breaks from a Location header and read "\" as "/", so "/\t/evil.com" would become
+// "//evil.com". Sign-in pages are never a place to return to: older web apps sent
+// "/login?redirect=…" here, which put people back on the login page after signing in.
 func safeReturnTo(p string) string {
-	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.HasPrefix(p, "/\\") {
+	if p == "" || p[0] != '/' || strings.HasPrefix(p, "//") || strings.ContainsFunc(p, func(r rune) bool {
+		return r < 0x20 || r == 0x7f || r == '\\'
+	}) {
 		return "/"
 	}
 	path, _, _ := strings.Cut(p, "?")

@@ -60,3 +60,32 @@ func TestSameOrigin(t *testing.T) {
 		}
 	}
 }
+
+// Signed-out requests from other sites are refused too, so a site can't sign a visitor in to
+// an account of its own (login CSRF). Apps and scripts send no browser headers and pass.
+func TestAuthenticateBlocksCrossSiteWithoutSession(t *testing.T) {
+	u, _ := url.Parse("https://docs.example.com")
+	a := New(Deps{Cfg: &config.Config{BaseURL: u}})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, c := range []struct {
+		method string
+		hdr    map[string]string
+		want   int
+	}{
+		{"POST", map[string]string{"Sec-Fetch-Site": "cross-site"}, 403},
+		{"POST", map[string]string{"Origin": "https://evil.example"}, 403},
+		{"POST", map[string]string{"Sec-Fetch-Site": "same-origin"}, 204},
+		{"POST", nil, 204},
+		{"GET", map[string]string{"Sec-Fetch-Site": "cross-site"}, 204},
+	} {
+		r := httptest.NewRequest(c.method, "/api/v1/auth/login", nil)
+		for k, v := range c.hdr {
+			r.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		a.Authenticate(next).ServeHTTP(rec, r)
+		if rec.Code != c.want {
+			t.Errorf("%s %v: %d, want %d", c.method, c.hdr, rec.Code, c.want)
+		}
+	}
+}
