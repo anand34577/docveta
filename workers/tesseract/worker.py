@@ -82,10 +82,10 @@ class TesseractEngine(Engine):
         work = image.rotate(-rotate, expand=True) if rotate else image
         try:
             data = pytesseract.image_to_data(work, lang=lang, config=f"--psm {self.psm}", output_type=Output.DICT, timeout=600)
-        except RuntimeError as e:  # timeout
-            raise EngineError("timeout", str(e), retryable=True) from e
-        except pytesseract.TesseractError as e:
+        except pytesseract.TesseractError as e:  # a RuntimeError too: must come first
             raise EngineError("engine_error", str(e)) from e
+        except RuntimeError as e:  # pytesseract's timeout
+            raise EngineError("timeout", str(e), retryable=True) from e
 
         W, H = work.size
         lines: dict[tuple[int, int, int], Line] = {}
