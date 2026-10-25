@@ -66,6 +66,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -94,15 +97,34 @@ fun CameraScreen(session: ScanSession, onDone: () -> Unit, onEdit: (String) -> U
     val ctx = LocalContext.current
     val c = LocalContainer.current
     var granted by remember { mutableStateOf(ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
+    // Refused for good ("Don't ask again", or twice): Android no longer shows the question, so the
+    // button opens the app's settings instead of doing nothing.
+    var blocked by remember { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        granted = ok
+        blocked = !ok && (ctx as? android.app.Activity)?.let { !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.CAMERA) } == true
+    }
     val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris -> uris.forEach { session.addUri(it, ctx.contentResolver) } }
     LaunchedEffect(Unit) { if (!granted) ask.launch(Manifest.permission.CAMERA) }
+    // Back from the settings: the camera may be allowed now.
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && !granted) granted = ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (granted) LiveCamera(session, c.session.autoCapture, onDone, onEdit, onClose, onPickGallery = { gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
         else Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Docveta needs the camera to scan documents.", color = Color.White, style = MaterialTheme.typography.bodyLarge)
-            Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") }
+            if (blocked) Button({
+                runCatching { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", ctx.packageName, null))) }
+            }) { Text("Open settings") }
+            else Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") }
+            if (blocked) Text("Allow the camera under Permissions, then come back.", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodyMedium)
             androidx.compose.material3.OutlinedButton({ gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) { Text("Choose photos instead") }
             androidx.compose.material3.TextButton(onClose) { Text("Close", color = Color.White) }
         }
@@ -163,7 +185,11 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
     DisposableEffect(lifecycle, rebinds) {
         val executor = Executors.newSingleThreadExecutor()
         val future = ProcessCameraProvider.getInstance(ctx)
+        var disposed = false
         future.addListener({
+            // Left (or restarted) before the camera was ready: binding now would keep it running
+            // behind other screens, feeding frames to a finder that has been shut down.
+            if (disposed) return@addListener
             val provider = future.get()
             val preview = Preview.Builder().setTargetAspectRatio(AspectRatio.RATIO_4_3).build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
             val analysis = ImageAnalysis.Builder().setTargetAspectRatio(AspectRatio.RATIO_4_3).setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
@@ -190,10 +216,19 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
             }
             lastFrame.set(System.currentTimeMillis())
             provider.unbindAll()
-            camera = provider.bindToLifecycle(lifecycle, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture, analysis)
+            // A phone or tablet without a back camera (the app installs without one), or a camera
+            // another app holds: say so rather than crash. Photos can still be chosen.
+            camera = try {
+                provider.bindToLifecycle(lifecycle, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture, analysis)
+            } catch (e: Exception) {
+                Log.w("Scanner", "Couldn't start the camera", e)
+                session.error = "The camera couldn't be started. You can choose photos instead."
+                null
+            }
         }, ContextCompat.getMainExecutor(ctx))
         onDispose {
-            runCatching { future.get().unbindAll() }
+            disposed = true
+            if (future.isDone) runCatching { future.get().unbindAll() }
             executor.shutdownNow()
         }
     }
@@ -286,12 +321,14 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                 val last = session.pages.lastOrNull()
                 if (last == null) RoundIcon(Icons.Outlined.PhotoLibrary, "Choose photos", onClick = onPickGallery)
-                else Box(Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)).border(2.dp, Color.White, RoundedCornerShape(12.dp)).clickable { leave(onDone) }) {
+                else Box(Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)).border(2.dp, Color.White, RoundedCornerShape(12.dp)).clickable(onClickLabel = "Review the pages", role = Role.Button) { leave(onDone) }
+                    .semantics(mergeDescendants = true) { contentDescription = "${session.pages.size} page${if (session.pages.size == 1) "" else "s"} scanned" }) {
                     AsyncImage(last.file, null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
                     Text(session.pages.size.toString(), Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.primary, CircleShape).padding(horizontal = 6.dp), color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.labelSmall)
                 }
             }
-            Box(Modifier.size(76.dp).clip(CircleShape).border(4.dp, Color.White, CircleShape).padding(6.dp).clip(CircleShape).background(if (capturing || session.working) Color.Gray else Color.White).clickable(enabled = !capturing) { shoot() })
+            Box(Modifier.size(76.dp).clip(CircleShape).border(4.dp, Color.White, CircleShape).padding(6.dp).clip(CircleShape).background(if (capturing || session.working) Color.Gray else Color.White).clickable(enabled = !capturing, role = Role.Button) { shoot() }
+                .semantics { contentDescription = "Take picture" })
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                 if (session.pages.isNotEmpty()) Button({ leave(onDone) }, shape = RoundedCornerShape(50)) { Text(session.docs.size.let { if (it > 1) "Done ($it)" else "Done" }) }
                 else Spacer(Modifier.size(1.dp))
