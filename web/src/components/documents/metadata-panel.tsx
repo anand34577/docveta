@@ -65,12 +65,24 @@ export function MetadataPanel({ doc }: { doc: Document }) {
     [update, doc.version, doc.id, qc],
   );
 
-  // Title autosave after a short pause.
+  // Title autosave after a short pause. Leaving the field saves at once and cancels the pending
+  // save: both sending the same title made the second one look like someone else's edit.
+  const titleTimer = React.useRef<ReturnType<typeof setTimeout>>(undefined);
+  const sendingTitle = React.useRef<string | null>(null);
+  const saveTitle = (t: string) => {
+    if (!t || t === doc.title || t === sendingTitle.current) return;
+    sendingTitle.current = t;
+    void save({ title: t }).finally(() => (sendingTitle.current = null));
+  };
   React.useEffect(() => {
     if (title.trim() === doc.title || !title.trim()) return;
-    const t = setTimeout(() => save({ title: title.trim() }), 800);
-    return () => clearTimeout(t);
+    titleTimer.current = setTimeout(() => saveTitle(title.trim()), 800);
+    return () => clearTimeout(titleTimer.current);
   }, [title]);
+  const saveTitleNow = () => {
+    clearTimeout(titleTimer.current);
+    saveTitle(title.trim());
+  };
 
   const assignASN = async () => {
     try {
@@ -113,7 +125,7 @@ export function MetadataPanel({ doc }: { doc: Document }) {
           value={title}
           disabled={!canEdit}
           onChange={(e) => setTitle(e.target.value)}
-          onBlur={() => title.trim() && title.trim() !== doc.title && save({ title: title.trim() })}
+          onBlur={saveTitleNow}
         />
       </Field>
 
