@@ -12,7 +12,7 @@ import { SuggestInput } from "@/components/ui/suggest-input";
 import { Checkbox, TagChip, useScrollEdges } from "@/components/ui/misc";
 import { confirm } from "@/components/ui/confirm";
 import { useCurrentUser } from "@/components/app-shell";
-import { spaceLabel } from "@/lib/utils";
+import { overlayOpen, spaceLabel } from "@/lib/utils";
 import type { Collection, Document } from "@/lib/types";
 import { AddToCollectionDialog } from "@/components/collections";
 
@@ -35,7 +35,7 @@ export function BulkBar({ items, trash, collection }: { items: Document[]; trash
   React.useEffect(() => () => clear(), [clear]);
   React.useEffect(() => {
     // Esc clears the selection, unless it's closing one of the bar's dialogs or a menu.
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && n > 0 && !dialog && !document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]') && clear();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && n > 0 && !dialog && !overlayOpen() && clear();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [n, clear, dialog]);
@@ -300,7 +300,7 @@ function MoveDialog({ busy, onClose, onApply }: { busy: boolean; onClose: () => 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent title="Move to another space" description="Tags, correspondent and type are matched by name in the new space (created if missing)." size="sm">
-        <Select value={space} onChange={(e) => setSpace(e.target.value)}>
+        <Select value={space} onChange={(e) => setSpace(e.target.value)} aria-label="Space to move to">
           {writable.map((s) => (
             <option key={s.id} value={s.id}>
               {spaceLabel(s)}

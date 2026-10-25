@@ -163,7 +163,7 @@ export function DocumentCard({ doc, selected, selecting, onToggle, query }: Item
       </Link>
       <div className="absolute left-2 right-2 top-2 flex items-start justify-between gap-2">
         <div
-          className={cn("rounded-md bg-surface/90 p-1 shadow-sm transition-opacity", selecting || selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100")}
+          className={cn("rounded-md bg-surface/90 p-1 shadow-sm transition-opacity", selecting || selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100")}
         >
           <Checkbox checked={selected} onClick={(e) => onToggle(e)} aria-label={`Select ${doc.title}`} />
         </div>
@@ -177,7 +177,7 @@ export function DocumentCard({ doc, selected, selecting, onToggle, query }: Item
 export function DocumentRow({ doc, selected, selecting, onToggle, query }: ItemProps) {
   return (
     <div className={cn("group flex items-center gap-3 border-b border-border page-x py-2.5 hover:bg-surface-2", selected && "bg-accent-soft/50")}>
-      <div className={cn("transition-opacity", selecting || selected ? "opacity-100" : "sm:opacity-0 sm:group-hover:opacity-100")}>
+      <div className={cn("transition-opacity", selecting || selected ? "opacity-100" : "sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100 [@media(hover:none)]:opacity-100")}>
         <Checkbox checked={selected} onClick={(e) => onToggle(e)} aria-label={`Select ${doc.title}`} />
       </div>
       <Link

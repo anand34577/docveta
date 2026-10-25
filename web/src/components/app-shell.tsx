@@ -27,7 +27,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api, setUnauthorizedHandler } from "@/lib/api";
 import { nameSearch, useAIEnabled, useDocumentTypes, useMe, useSavedViews, useStats, useStatus } from "@/lib/queries";
 import { isAuthPage, safeRedirect } from "@/lib/redirect";
-import { cn, modKey, setDateFormat, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
+import { cn, modKey, overlayOpen, setDateFormat, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
 import { applyTheme, useUI } from "@/stores/ui";
 import { useUploads } from "@/stores/uploads";
 import { Button } from "@/components/ui/button";
@@ -155,7 +155,7 @@ function Shell() {
     let g = 0;
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable || e.metaKey || e.ctrlKey || e.altKey || overlayOpen()) return;
       if (e.key === "?") {
         e.preventDefault();
         setHelp(true);

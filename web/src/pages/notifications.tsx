@@ -19,16 +19,15 @@ export function NotificationsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const list = useInfiniteQuery({
-    queryKey: ["notifications-all", unreadOnly],
+    // Under keys.notifications, so whatever refreshes the bell (a new one arriving, Mark all
+    // read there) refreshes this list too.
+    queryKey: [...keys.notifications, "all", unreadOnly],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.get<{ items: Notification[]; unread: number }>("/notifications", { limit: 50, unread: unreadOnly, before: pageParam || undefined }),
     getNextPageParam: (last) => (last.items.length === 50 ? last.items[last.items.length - 1].id : undefined),
   });
   const unread = list.data?.pages[0]?.unread ?? 0;
-  const refresh = () => {
-    qc.invalidateQueries({ queryKey: keys.notifications });
-    qc.invalidateQueries({ queryKey: ["notifications-all"] });
-  };
+  const refresh = () => qc.invalidateQueries({ queryKey: keys.notifications });
   const markAll = async () => {
     await api.post("/notifications/read", { all: true }).then(refresh, (e) => toast.error(errorMessage(e)));
   };

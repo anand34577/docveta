@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link } from "@tanstack/react-router";
-import { AlertCircle, ArrowRight, BellRing, Bookmark, CalendarPlus, Files, History, Inbox, Loader2, Settings, Shapes, Tags, Upload, User } from "lucide-react";
+import { AlertCircle, ArrowRight, BellRing, Bookmark, CalendarPlus, CloudOff, Files, History, Inbox, Loader2, Settings, Shapes, Tags, Upload, User } from "lucide-react";
+import { errorMessage } from "@/lib/api";
 import { recentDocs } from "@/lib/recent";
 import { nameSearch, useDocumentTypes, useDocuments, useSavedViews, useStats, useTaxonomy, useUpcoming } from "@/lib/queries";
 import { cn, formatBytes, formatDocDate, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
@@ -73,6 +74,20 @@ export function HomePage() {
                   </div>
                 </div>
               ))}
+            </Card>
+          ) : recent.isError && docs.length === 0 ? (
+            <Card>
+              <EmptyState
+                icon={<CloudOff />}
+                title="Couldn't load your documents"
+                action={
+                  <Button onClick={() => recent.refetch()} loading={recent.isFetching}>
+                    Try again
+                  </Button>
+                }
+              >
+                {errorMessage(recent.error)}
+              </EmptyState>
             </Card>
           ) : docs.length === 0 ? (
             <Card>

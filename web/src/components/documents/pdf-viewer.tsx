@@ -61,7 +61,9 @@ export default function PdfViewer({ url, initialPage, highlight, locate, onPageC
     task.promise.then(
       async (d) => {
         if (cancelled) return;
-        const p1 = await d.getPage(1);
+        // Moving on to another document destroys this one, and the page request fails then.
+        const p1 = await d.getPage(1).catch(() => null);
+        if (cancelled || !p1) return;
         const vp = p1.getViewport({ scale: 1 });
         setBaseSize({ w: vp.width, h: vp.height });
         setDoc(d);
@@ -178,7 +180,7 @@ function Thumb({ doc, n, active, onPick, rotation }: { doc: PDFDocumentProxy; n:
       c.width = vp.width;
       c.height = vp.height;
       void p.render({ canvas: c, viewport: vp }).promise.catch(() => undefined);
-    });
+    }, () => undefined);
     return () => {
       dead = true;
     };
@@ -239,7 +241,7 @@ function PdfPage({ doc, pageNumber, scale, rotation, estimate, highlight, find, 
   React.useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    doc.getPage(pageNumber).then((p) => !cancelled && setPage(p));
+    doc.getPage(pageNumber).then((p) => !cancelled && setPage(p), () => undefined);
     return () => {
       cancelled = true;
     };
@@ -326,9 +328,14 @@ function useFind(doc: PDFDocumentProxy | null) {
       for (let p = 1; p <= doc.numPages; p++) {
         let text = texts.current.get(p);
         if (text === undefined) {
-          const page = await doc.getPage(p);
-          const content = await page.getTextContent();
-          text = squash(content.items.map((i) => ("str" in i ? i.str : ""))).text;
+          try {
+            const page = await doc.getPage(p);
+            const content = await page.getTextContent();
+            text = squash(content.items.map((i) => ("str" in i ? i.str : ""))).text;
+          } catch {
+            if (cancelled) return; // the document was closed meanwhile
+            text = ""; // one unreadable page shouldn't stop the search
+          }
           texts.current.set(p, text);
         }
         if (cancelled) return;
