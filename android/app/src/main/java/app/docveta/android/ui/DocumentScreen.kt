@@ -923,7 +923,12 @@ private fun ShareLinkSheet(vm: DocViewModel, onDismiss: () -> Unit) {
                             Text(if (s.expiresAt != null) "until ${formatDate(s.expiresAt)}" else "no expiry", style = MaterialTheme.typography.bodyMedium)
                             Text("${s.accessCount} view${if (s.accessCount == 1) "" else "s"}${if (s.hasPassword) " · password" else ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        TextButton({ scope.launch { vm.revokeShare(s); existing = existing - s } }) { Text("Stop", color = MaterialTheme.colorScheme.error) }
+                        // Only drop it from the list once the server has stopped it: a link that still
+                        // works must not look stopped.
+                        TextButton({
+                            error = null
+                            scope.launch { vm.revokeShare(s).onSuccess { existing = existing - s }.onFailure { error = it.friendly() } }
+                        }) { Text("Stop", color = MaterialTheme.colorScheme.error) }
                     }
                 }
             }
