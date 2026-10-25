@@ -139,13 +139,17 @@ func (a *API) Authenticate(next http.Handler) http.Handler {
 			if err == nil && p == nil {
 				err = apperr.Unauthorized("Invalid or expired token")
 			}
-		} else if c, cerr := r.Cookie(a.cookieName); cerr == nil && c.Value != "" {
-			p, err = a.Identity.AuthenticateSession(ctx, c.Value)
-			if err == nil && p != nil && !safeMethod(r.Method) && !a.sameOrigin(r) {
-				err = apperr.Forbidden("Cross-site request blocked")
+		} else {
+			if c, cerr := r.Cookie(a.cookieName); cerr == nil && c.Value != "" {
+				p, err = a.Identity.AuthenticateSession(ctx, c.Value)
+				if err == nil && p == nil {
+					a.clearSessionCookie(w) // expired/revoked: let the UI show the login page cleanly
+				}
 			}
-			if err == nil && p == nil {
-				a.clearSessionCookie(w) // expired/revoked: let the UI show the login page cleanly
+			// Without a bearer token this may be a browser, signed in or not: other sites must
+			// not act through it, nor sign it in to an account of theirs (login CSRF).
+			if err == nil && !safeMethod(r.Method) && !a.sameOrigin(r) {
+				err = apperr.Forbidden("Cross-site request blocked")
 			}
 		}
 		if err != nil {
