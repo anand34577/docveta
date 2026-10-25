@@ -96,7 +96,7 @@ W=/opt/docveta-worker-allwinner
 if [ "$UNINSTALL" = 1 ]; then
   say "Removing Docveta"
   remove_service
-  pkill -x docveta-worker-allwinner 2>/dev/null || true
+  pkill -f "$W/docveta-worker-allwinner" 2>/dev/null || true
   rm -rf /opt/docveta "$W" "$W.old"
   echo "Docveta removed. Your documents and settings are still in /var/lib/docveta (and in your own PostgreSQL, if you used one)."
   echo "Installing again picks them up. To delete them too: sudo rm -rf /var/lib/docveta"
@@ -171,7 +171,7 @@ fi
 say "Installing"
 STOPPED=1
 stop
-pkill -x docveta-worker-allwinner 2>/dev/null || true
+pkill -f "$W/docveta-worker-allwinner" 2>/dev/null || true # -f: the name is too long for pkill -x (15 characters)
 if grep -q -- --no-start "$SRC/install.sh"; then "$SRC/install.sh" --port "$PORT" --no-start >/dev/null
 else "$SRC/install.sh" --port "$PORT" >/dev/null; stop; fi # releases before 0.17.0 start it themselves
 CONF=/opt/docveta/docveta.conf
