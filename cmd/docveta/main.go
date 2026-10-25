@@ -9,6 +9,7 @@
 //	docveta export --dir D | --zip F [--with-password-hashes]   write everything to a folder or zip
 //	docveta import --dir D             read such an export (safe to run twice)
 //	docveta service install|uninstall|start|stop   (Windows) run Docveta as a Windows service
+//	docveta healthcheck                exit 0 when the server on this machine answers (Docker)
 //	docveta version
 //
 // Configuration comes from environment variables and docveta.conf files; see
@@ -114,6 +115,8 @@ func run(parent context.Context, args []string) error {
 		return nil
 	case "service":
 		return serviceCmd(args)
+	case "healthcheck":
+		return healthcheck()
 	}
 	if serviceMode {
 		// Services start in C:\Windows\System32; resolve relative paths (./data) next to the program.
@@ -186,7 +189,7 @@ func run(parent context.Context, args []string) error {
 	case "import":
 		return importCmd(ctx, cfg, log, args)
 	}
-	return fmt.Errorf("unknown command %q (try: serve, migrate, user, doctor, export, import, version)", cmd)
+	return fmt.Errorf("unknown command %q (try: serve, migrate, user, doctor, export, import, healthcheck, version)", cmd)
 }
 
 func userCmd(ctx context.Context, cfg *config.Config, log *slog.Logger, args []string) error {

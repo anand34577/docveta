@@ -28,6 +28,7 @@ ENV DOCVETA_DATA_DIR=/data DOCVETA_LISTEN=:8080
 VOLUME ["/data"]
 EXPOSE 8080
 USER nonroot
-HEALTHCHECK NONE
+# No shell or curl in the image: the binary checks its own /healthz.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD ["/docveta", "healthcheck"]
 ENTRYPOINT ["/docveta"]
 CMD ["serve"]
