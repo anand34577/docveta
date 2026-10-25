@@ -20,6 +20,10 @@ export function safeRedirect(target: string | undefined | null): string | undefi
     if (!inner) return undefined;
     t = inner;
   }
+  // Browsers drop tabs and line breaks from addresses, so "/<tab>/example.com" would become
+  // "//example.com", another site.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(t)) return undefined;
   if (!t.startsWith("/") || t.startsWith("//") || t.startsWith("/\\") || isAuthPage(t) || t === "/") return undefined;
   return t;
 }
