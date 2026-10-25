@@ -2035,6 +2035,10 @@ func TestDateReminders(t *testing.T) {
 		return n == 1
 	})
 	// The weekly summary goes out once a week (from Monday 9:00 in the person's time zone).
+	// A time zone PostgreSQL doesn't know counts as UTC instead of stopping everyone's.
+	if _, err := e.a.Pool.Exec(e.ctx, `UPDATE users SET timezone='' WHERE id=$1`, e.me); err != nil {
+		t.Fatal(err)
+	}
 	first, err := e.a.sendDigests(e.ctx)
 	if err != nil {
 		t.Fatal(err)
