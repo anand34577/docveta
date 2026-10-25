@@ -16,8 +16,10 @@ export function DocViewer({ doc, page, highlight }: { doc: Document; page?: numb
   const located = useLocate();
   const locate = located.docId === doc.id ? located.target : null;
   // A scanned picture shows text selected in the Text tab through its searchable PDF copy.
-  const [viaArchive, setViaArchive] = React.useState(false);
-  if (locate && !viaArchive && doc.has_archive && kind === "image") setViaArchive(true);
+  // Kept per document: the Inbox shows the next one in the same viewer.
+  const [archiveFor, setArchiveFor] = React.useState<string | null>(null);
+  const viaArchive = archiveFor === doc.id;
+  if (locate && !viaArchive && doc.has_archive && kind === "image") setArchiveFor(doc.id);
   if (doc.has_derived) {
     // A working copy exists: Office documents became a PDF, HEIC/AVIF pictures a JPEG.
     const url = `/api/v1/documents/${doc.id}/file?kind=derived&v=${v}`;
@@ -61,10 +63,14 @@ export function DocViewer({ doc, page, highlight }: { doc: Document; page?: numb
 function TextViewer({ id, version }: { id: string; version: number }) {
   const [text, setText] = React.useState<string | null>(null);
   React.useEffect(() => {
-    fetch(`/api/v1/documents/${id}/file?kind=original&v=${version}`, { credentials: "same-origin" })
-      .then((r) => r.text())
+    // Stepping quickly through documents (J / K) mustn't show an earlier one's text.
+    const ctl = new AbortController();
+    setText(null);
+    fetch(`/api/v1/documents/${id}/file?kind=original&v=${version}`, { credentials: "same-origin", signal: ctl.signal })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
       .then(setText)
-      .catch(() => setText("Couldn't load the file."));
+      .catch(() => !ctl.signal.aborted && setText("Couldn't load the file."));
+    return () => ctl.abort();
   }, [id, version]);
   if (text === null) return <div className="flex h-full items-center justify-center"><Spinner /></div>;
   return (
