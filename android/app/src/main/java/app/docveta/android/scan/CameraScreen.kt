@@ -163,7 +163,9 @@ private fun LiveCamera(session: ScanSession, autoDefault: Boolean, onDone: () ->
                 lastShot = System.currentTimeMillis()
                 flash = true
                 tracker.reset()
-                session.addFile(file) { page ->
+                // A shot that can't be used frees the shutter (the same message twice in a row
+                // wouldn't, through the error watch below).
+                session.addFile(file, onFailed = { capturing = false; leaving = null }) { page ->
                     capturing = false
                     val go = leaving.also { leaving = null }
                     if (go != null) go() else if (!page.detected) onEdit(page.id)

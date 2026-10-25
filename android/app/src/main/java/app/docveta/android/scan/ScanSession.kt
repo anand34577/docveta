@@ -90,7 +90,7 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
      * the edges can't be found, a camera shot starts from a slightly inset frame (it surely shows
      * some table), an imported picture from the whole picture (it is often a scan already).
      */
-    fun add(open: () -> java.io.InputStream, orientation: Int, fromGallery: Boolean = false, onAdded: (ScanPage) -> Unit = {}) {
+    fun add(open: () -> java.io.InputStream, orientation: Int, fromGallery: Boolean = false, onFailed: () -> Unit = {}, onAdded: (ScanPage) -> Unit = {}) {
         viewModelScope.launch {
             working = true
             try {
@@ -110,15 +110,17 @@ class ScanSession(private val c: AppContainer) : ViewModel() {
                 onAdded(page)
             } catch (e: Exception) {
                 error = "Couldn't use that picture"
+                onFailed()
             } finally {
                 working = false
             }
         }
     }
 
-    fun addFile(file: File, onAdded: (ScanPage) -> Unit = {}) {
+    /** [onFailed] runs when the shot can't be used (the message is in [error]); the file is removed either way. */
+    fun addFile(file: File, onFailed: () -> Unit = {}, onAdded: (ScanPage) -> Unit = {}) {
         val orientation = ImageIO.orientationOf { file.inputStream() }
-        add({ file.inputStream() }, orientation) { onAdded(it); file.delete() }
+        add({ file.inputStream() }, orientation, onFailed = { file.delete(); onFailed() }) { onAdded(it); file.delete() }
     }
 
     fun addUri(uri: Uri, resolver: android.content.ContentResolver, onAdded: (ScanPage) -> Unit = {}) {
