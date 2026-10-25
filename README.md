@@ -95,7 +95,7 @@ test runs when a database is available:
 ## Project layout
 
 ```
-cmd/docveta/            server + admin CLI (serve, migrate, doctor, user, service)
+cmd/docveta/            server + admin CLI (serve, migrate, doctor, user, export, import, service, version)
 internal/             Go packages (api, identity, spaces, documents, search, pipeline, notify, …)
 web/                  React + TypeScript app (built into internal/webui/dist and embedded)
 workers/sdk-python/   SDK for OCR workers (protocol client, rasterisation, searchable PDFs, PP-OCR)

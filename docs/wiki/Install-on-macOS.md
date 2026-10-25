@@ -6,7 +6,7 @@ own database.
 | Your Mac | Download |
 |---|---|
 | Apple silicon (M1, M2, M3, M4) | `docveta-<version>-darwin-arm64.tar.gz` + `docveta-ocr-<version>-darwin-arm64.zip` |
-| Intel | `docveta-<version>-darwin-x64.tar.gz` (text recognition: use the [Docker OCR engine](Install-with-Docker#text-recognition) or a worker on another machine) |
+| Intel | `docveta-<version>-darwin-x64.tar.gz` (text recognition: use the [Docker OCR engine](Install-with-Docker#more-engines) or a worker on another machine) |
 
 Not sure? Apple menu → *About This Mac*: "Chip: Apple M…" means Apple silicon.
 

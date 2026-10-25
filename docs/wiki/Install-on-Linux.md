@@ -1,6 +1,6 @@
 # Install on Linux
 
-Docveta runs on any Linux distribution with systemd, on PCs, servers and boards (Raspberry Pi
+Docveta runs on any Linux distribution with systemd (or OpenRC, as on Alpine), on PCs, servers and boards (Raspberry Pi
 4/5, Rockchip, Radxa Cubie A7A, Orange Pi, Ampere). You don't need to install a database first.
 
 ## Install (one command)
