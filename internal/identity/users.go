@@ -434,10 +434,8 @@ func (s *Service) UpdateProfile(ctx context.Context, p *auth.Principal, in Profi
 			v.Add("display_name", "Name must be 1–80 characters")
 		}
 	}
-	if in.Timezone != nil {
-		if _, err := time.LoadLocation(*in.Timezone); err != nil {
-			v.Add("timezone", "Unknown time zone")
-		}
+	if in.Timezone != nil && !validTimezone(*in.Timezone) {
+		v.Add("timezone", "Unknown time zone")
 	}
 	if in.DateFormat != nil {
 		switch *in.DateFormat {
@@ -462,6 +460,17 @@ func (s *Service) UpdateProfile(ctx context.Context, p *auth.Principal, in Profi
 		return nil, err
 	}
 	return s.GetUser(ctx, p.UserID)
+}
+
+// validTimezone reports whether tz names a time zone, such as "Europe/Berlin" or "UTC". Go also
+// accepts "" and "Local" (this server's own zone), which mean nothing to PostgreSQL or to
+// another computer, so they are refused.
+func validTimezone(tz string) bool {
+	if tz == "" || tz == "Local" {
+		return false
+	}
+	_, err := time.LoadLocation(tz)
+	return err == nil
 }
 
 // ChangePassword requires the current password (if one is set) and revokes other sessions.
