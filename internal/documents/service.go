@@ -386,11 +386,15 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, q search.Query) (
 	if err != nil {
 		return nil, err
 	}
-	for i, d := range docs {
-		// Hydrate preserves order; hits and docs align unless a doc vanished concurrently.
-		if i < len(res.Hits) && res.Hits[i].ID == d.ID {
-			d.Snippet = res.Hits[i].Snippet
-			d.MatchedPage = res.Hits[i].MatchedPage
+	// By id: a document deleted since the search leaves Hydrate's list shorter than the hits.
+	hits := make(map[uuid.UUID]*search.Hit, len(res.Hits))
+	for i := range res.Hits {
+		hits[res.Hits[i].ID] = &res.Hits[i]
+	}
+	for _, d := range docs {
+		if h := hits[d.ID]; h != nil {
+			d.Snippet = h.Snippet
+			d.MatchedPage = h.MatchedPage
 		}
 	}
 	return &ListResult{Items: docs, Total: res.Total, TotalCapped: res.TotalCapped, NextCursor: res.NextCursor, Facets: res.Facets}, nil

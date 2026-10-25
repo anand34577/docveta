@@ -20,11 +20,16 @@ func (a *App) sendDigests(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `WITH due AS (
+	// A time zone PostgreSQL doesn't know (saved before it was checked, or one only Go knows)
+	// counts as UTC: AT TIME ZONE would otherwise fail the query for everyone.
+	rows, err := tx.Query(ctx, `WITH local AS (
+			SELECT u.id, now() AT TIME ZONE coalesce(tz.name, 'UTC') AS now FROM users u
+			LEFT JOIN (SELECT name FROM pg_timezone_names) tz ON tz.name = u.timezone
+			WHERE u.status = 'active'),
+		due AS (
 			INSERT INTO digests_sent (user_id, week)
-			SELECT u.id, date_trunc('week', now() AT TIME ZONE u.timezone)::date FROM users u
-			WHERE u.status = 'active'
-				AND now() AT TIME ZONE u.timezone >= date_trunc('week', now() AT TIME ZONE u.timezone) + interval '9 hours'
+			SELECT id, date_trunc('week', local.now)::date FROM local
+			WHERE local.now >= date_trunc('week', local.now) + interval '9 hours'
 			ON CONFLICT DO NOTHING
 			RETURNING user_id),
 		docs AS (

@@ -1590,6 +1590,7 @@ func TestBatchScanning(t *testing.T) {
 		sepPage,
 		text("Third document is a single page with plenty of words as well too"),
 	})
+	queued := time.Now()
 	orig := c.upload(e.family, "scanned batch.pdf", b2)
 	var docs jsonList[struct {
 		ID        string `json:"id"`
@@ -1639,6 +1640,18 @@ func TestBatchScanning(t *testing.T) {
 	}
 	if !found {
 		t.Error("the original batch should be in the Trash")
+	}
+
+	// A split that runs again (it failed halfway, or the server restarted during it) doesn't
+	// make the parts that already exist a second time.
+	c.do("POST", "/api/v1/documents/"+orig.ID+"/restore", nil, 204, nil)
+	if err := e.a.Docedit.SplitBatch(e.ctx, jobs.SplitArgs{DocumentID: uuid.MustParse(orig.ID), Version: 1, Separators: []int{3, 5}}, queued); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = e.a.Pool.QueryRow(e.ctx, `SELECT count(*) FROM documents WHERE title LIKE 'scanned batch (%' AND deleted_at IS NULL AND id <> $1`, orig.ID).Scan(&n)
+	if n != 3 {
+		t.Errorf("after the split ran again: %d parts, want 3", n)
 	}
 
 	// A single document with a label (no separators) just gets its archive number.
@@ -2035,6 +2048,10 @@ func TestDateReminders(t *testing.T) {
 		return n == 1
 	})
 	// The weekly summary goes out once a week (from Monday 9:00 in the person's time zone).
+	// A time zone PostgreSQL doesn't know counts as UTC instead of stopping everyone's.
+	if _, err := e.a.Pool.Exec(e.ctx, `UPDATE users SET timezone='' WHERE id=$1`, e.me); err != nil {
+		t.Fatal(err)
+	}
 	first, err := e.a.sendDigests(e.ctx)
 	if err != nil {
 		t.Fatal(err)
