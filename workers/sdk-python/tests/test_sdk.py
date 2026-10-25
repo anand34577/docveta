@@ -75,6 +75,32 @@ class SDKTest(unittest.TestCase):
         self.assertIn("Electricity", text)
         self.assertIn("page", text)
 
+    def test_searchable_pdf_with_crop_box(self):
+        # Scanners and PDF tools often crop a page with /CropBox. Viewers and the rasteriser
+        # show only that area, so the OCR boxes are relative to it, not to the MediaBox.
+        from pypdf import PdfWriter
+        from pypdf.generic import RectangleObject
+
+        full = os.path.join(self.dir, "full.pdf")
+        scanned_pdf(full, 1)
+        w = PdfWriter(clone_from=full)
+        w.pages[0].cropbox = RectangleObject((100, 200, 495, 742))
+        src = os.path.join(self.dir, "cropped.pdf")
+        with open(src, "wb") as f:
+            w.write(f)
+        res = self.ocr(src, "application/pdf")
+        page = res["pages"][0]
+        self.assertAlmostEqual(page["width"] * 72 / page["dpi"], 395, delta=1)  # rendered the crop box
+        out = os.path.join(self.dir, "out.pdf")
+        build_searchable_pdf(src, "application/pdf", res, out)
+        origins = []
+        PdfReader(out).pages[0].extract_text(
+            visitor_text=lambda text, cm, tm, *_: origins.append((tm[4] + cm[4], tm[5] + cm[5])) if text.startswith("Mock") else None)
+        x, y = origins[0]
+        # The mock puts "Mock" at 10% from the left and ~13.5% from the top of the image.
+        self.assertAlmostEqual(x, 100 + 0.1 * 395, delta=3)
+        self.assertAlmostEqual(y, 742 - 0.135 * 542, delta=6)
+
     def test_searchable_pdf_from_image_with_exif_rotation(self):
         src = os.path.join(self.dir, "photo.jpg")
         img = Image.new("RGB", (800, 600), "white")

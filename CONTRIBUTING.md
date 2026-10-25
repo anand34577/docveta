@@ -33,8 +33,10 @@ The integration test needs PostgreSQL 16+ and uses a throwaway schema.
 - **Schema changes** are new goose migrations in `internal/platform/db/migrations`;
   never edit a released migration.
 - Format Go with `gofmt`; keep the TypeScript type-check clean (`npx tsc -b` in `web/`).
-- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
-  (`fix: …`, `feat: …`), which the changelog is built from.
+- Commit messages start with the area and say in plain words what changed
+  (`Workers: retry uploading a result when the connection drops`), with a short body on
+  the problem and the fix. User-visible changes also get a line in
+  [CHANGELOG.md](CHANGELOG.md) under *Unreleased*.
 
 ## Licensing
 

@@ -41,7 +41,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
   svc disable 2>/dev/null || true
   rm -f /etc/systemd/system/docveta.service /etc/init.d/docveta
   if [ "$INIT" = systemd ]; then systemctl daemon-reload; fi
-  pkill -x docveta-worker-allwinner 2>/dev/null || true
+  pkill -f /opt/docveta-worker-allwinner/docveta-worker-allwinner 2>/dev/null || true # -f: name too long for -x
   rm -rf /opt/docveta /opt/docveta-worker-allwinner /opt/docveta-worker-allwinner.old
   echo "Docveta removed. Your data is still in /var/lib/docveta (and in PostgreSQL, if you used your own)."
   exit 0
