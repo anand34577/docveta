@@ -119,6 +119,12 @@ func decodeCursor(s string) (cursor, error) {
 	if err == nil {
 		err = json.Unmarshal(raw, &c)
 	}
+	if err == nil && c.Key != nil {
+		_, err = uuid.Parse(c.ID) // a keyset cursor's tie-breaker goes to the database as a uuid
+	}
+	if err == nil && c.Offset < 0 {
+		err = fmt.Errorf("negative offset")
+	}
 	if err != nil {
 		return c, apperr.Invalid("cursor", "Invalid cursor")
 	}
