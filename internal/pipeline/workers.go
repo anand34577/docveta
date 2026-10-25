@@ -985,6 +985,15 @@ func (s *Service) Tasks(ctx context.Context, p *auth.Principal, status, cursor s
 	return out, &st, "", nil
 }
 
+// latestRun holds for a task t whose OCR run is still the document's latest for its current
+// version (reprocessing or a new version starts a new run). Archive tasks belong to a run too.
+const latestRun = `(t.ocr_run_id IS NULL OR EXISTS (SELECT 1 FROM ocr_runs r JOIN documents d ON d.id = r.document_id
+	WHERE r.id = t.ocr_run_id AND r.status <> 'cancelled' AND r.version_no = d.current_version
+	  AND NOT EXISTS (SELECT 1 FROM ocr_runs n WHERE n.document_id = r.document_id AND (n.created_at, n.id) > (r.created_at, r.id))))`
+
+// inTrash holds for a task t of a document in the Trash, which workers are never given.
+const inTrash = `EXISTS (SELECT 1 FROM documents d WHERE d.id = t.document_id AND d.deleted_at IS NOT NULL)`
+
 // RetryTask re-queues a failed task (admin).
 func (s *Service) RetryTask(ctx context.Context, p *auth.Principal, id uuid.UUID) error {
 	if !p.Admin() {
@@ -993,10 +1002,15 @@ func (s *Service) RetryTask(ctx context.Context, p *auth.Principal, id uuid.UUID
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var runID *uuid.UUID
 		var docID uuid.UUID
-		err := tx.QueryRow(ctx, `UPDATE processing_tasks SET status='queued', attempt=0, excluded_engines='{}', not_before=now(),
+		err := tx.QueryRow(ctx, `UPDATE processing_tasks t SET status='queued', attempt=0, excluded_engines='{}', not_before=now(),
 			fallback_at=now(), last_error='', finished_at=NULL, updated_at=now() WHERE id=$1 AND status='failed'
+			  AND `+latestRun+` AND NOT `+inTrash+`
 			RETURNING ocr_run_id, document_id`, id).Scan(&runID, &docID)
 		if db.IsNoRows(err) {
+			var failed bool
+			if err := tx.QueryRow(ctx, `SELECT status='failed' FROM processing_tasks WHERE id=$1`, id).Scan(&failed); err == nil && failed {
+				return apperr.Conflict("superseded", "This document is in the Trash or was processed again after this task failed, so there's nothing to retry")
+			}
 			return apperr.Conflict("not_failed", "Only failed tasks can be retried")
 		}
 		if err != nil {
@@ -1025,8 +1039,14 @@ func (s *Service) RetryFailed(ctx context.Context, p *auth.Principal) (int, erro
 	}
 	n := 0
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `UPDATE processing_tasks SET status='queued', attempt=0, excluded_engines='{}', not_before=now(),
-			fallback_at=now(), last_error='', finished_at=NULL, updated_at=now() WHERE status='failed'
+		// Failures of runs that reprocessing has replaced are obsolete: running them again would
+		// reopen the old run and overwrite the document's current text with its result.
+		if _, err := tx.Exec(ctx, `UPDATE processing_tasks t SET status='cancelled', updated_at=now()
+			WHERE status='failed' AND NOT `+latestRun); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `UPDATE processing_tasks t SET status='queued', attempt=0, excluded_engines='{}', not_before=now(),
+			fallback_at=now(), last_error='', finished_at=NULL, updated_at=now() WHERE status='failed' AND NOT `+inTrash+`
 			RETURNING ocr_run_id, document_id`)
 		if err != nil {
 			return err

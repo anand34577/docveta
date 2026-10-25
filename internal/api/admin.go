@@ -221,7 +221,7 @@ func (a *API) registerAdmin(mux router) {
 		}
 		return map[string]any{"items": t, "stats": st, "next_cursor": nc}, err
 	}))
-	mux.HandleFunc("POST /api/v1/admin/tasks/retry-failed", handle(func(r *http.Request, p *auth.Principal) (map[string]int, error) {
+	mux.HandleFunc("POST /api/v1/admin/tasks/retry-failed", handleAction(func(r *http.Request, p *auth.Principal) (map[string]int, error) {
 		n, err := a.Pipeline.RetryFailed(r.Context(), p)
 		if err == nil && n > 0 {
 			a.Audit.Record(r.Context(), nil, "task.retry_failed", "task", "", map[string]any{"count": n})

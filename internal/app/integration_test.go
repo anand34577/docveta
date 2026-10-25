@@ -29,9 +29,11 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/legacy"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/anand34577/docveta/internal/api"
+	"github.com/anand34577/docveta/internal/jobs"
 	"github.com/anand34577/docveta/internal/platform/config"
 )
 
@@ -483,6 +485,30 @@ func TestIntegration(t *testing.T) {
 	w.completeMultipart(rl.Tasks[retried].Complete, rl.Tasks[retried].LeaseID, "result", "result.json", mustJSON(result), 204)
 	if d := c.waitStatus(lost.ID, "ready"); d.Error != "" {
 		t.Errorf("error not cleared after successful retry: %q", d.Error)
+	}
+
+	// A failure from before the document was processed again is obsolete: retrying it would
+	// reopen the old run, and its result would replace the text of the new one.
+	stale := c.upload(family, "stale.png", pngBytesY(80))
+	c.waitStage(stale.ID, "awaiting_ocr")
+	var staleTask, staleRun string
+	if err := a.Pool.QueryRow(ctx, `UPDATE processing_tasks SET status='failed', last_error='engine_error: boom', finished_at=now()
+		WHERE document_id=$1 AND type='ocr' RETURNING id, ocr_run_id`, stale.ID).Scan(&staleTask, &staleRun); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Queue.Insert(ctx, jobs.OCRFinalizeArgs{RunID: uuid.MustParse(staleRun)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.waitStatus(stale.ID, "failed")
+	c.do("POST", "/api/v1/documents/"+stale.ID+"/reprocess", nil, 204, nil)
+	c.waitStage(stale.ID, "awaiting_ocr")
+	c.do("POST", "/api/v1/admin/tasks/"+staleTask+"/retry", nil, 409, nil)
+	c.do("POST", "/api/v1/admin/tasks/retry-failed", nil, 200, nil)
+	var staleStatus, runStatus string
+	_ = a.Pool.QueryRow(ctx, `SELECT t.status, r.status FROM processing_tasks t JOIN ocr_runs r ON r.id=t.ocr_run_id WHERE t.id=$1`, staleTask).
+		Scan(&staleStatus, &runStatus)
+	if staleStatus != "cancelled" || runStatus != "failed" {
+		t.Errorf("obsolete failure after retrying all: task %s, run %s; want cancelled, failed", staleStatus, runStatus)
 	}
 
 	// --- SSRF guard: only administrators' channels reach the local network by default ---
