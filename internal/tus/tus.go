@@ -48,7 +48,7 @@ type Service struct {
 	maxSize int64
 
 	mu    sync.Mutex
-	locks map[uuid.UUID]*sync.Mutex // one writer per upload at a time
+	locks map[uuid.UUID]*uploadLock // one writer per upload at a time
 }
 
 func NewService(pool *pgxpool.Pool, docs *documents.Service, sp *spaces.Service, dataDir string, maxSize int64) (*Service, error) {
@@ -56,26 +56,37 @@ func NewService(pool *pgxpool.Pool, docs *documents.Service, sp *spaces.Service,
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
-	return &Service{pool: pool, docs: docs, spaces: sp, dir: dir, maxSize: maxSize, locks: map[uuid.UUID]*sync.Mutex{}}, nil
+	return &Service{pool: pool, docs: docs, spaces: sp, dir: dir, maxSize: maxSize, locks: map[uuid.UUID]*uploadLock{}}, nil
 }
 
 func (s *Service) MaxSize() int64 { return s.maxSize }
 
 func (s *Service) path(id uuid.UUID) string { return filepath.Join(s.dir, id.String()) }
 
+// uploadLock is one upload's writer lock; users counts the holders and waiters, so it is
+// only forgotten when nobody needs it (forgetting it while someone waits would let the next
+// request make a second lock and write at the same time).
+type uploadLock struct {
+	sync.Mutex
+	users int
+}
+
 func (s *Service) lock(id uuid.UUID) func() {
 	s.mu.Lock()
 	l := s.locks[id]
 	if l == nil {
-		l = &sync.Mutex{}
+		l = &uploadLock{}
 		s.locks[id] = l
 	}
+	l.users++
 	s.mu.Unlock()
 	l.Lock()
 	return func() {
 		l.Unlock()
 		s.mu.Lock()
-		delete(s.locks, id)
+		if l.users--; l.users == 0 {
+			delete(s.locks, id)
+		}
 		s.mu.Unlock()
 	}
 }
