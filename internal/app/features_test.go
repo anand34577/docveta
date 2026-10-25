@@ -1590,6 +1590,7 @@ func TestBatchScanning(t *testing.T) {
 		sepPage,
 		text("Third document is a single page with plenty of words as well too"),
 	})
+	queued := time.Now()
 	orig := c.upload(e.family, "scanned batch.pdf", b2)
 	var docs jsonList[struct {
 		ID        string `json:"id"`
@@ -1639,6 +1640,18 @@ func TestBatchScanning(t *testing.T) {
 	}
 	if !found {
 		t.Error("the original batch should be in the Trash")
+	}
+
+	// A split that runs again (it failed halfway, or the server restarted during it) doesn't
+	// make the parts that already exist a second time.
+	c.do("POST", "/api/v1/documents/"+orig.ID+"/restore", nil, 204, nil)
+	if err := e.a.Docedit.SplitBatch(e.ctx, jobs.SplitArgs{DocumentID: uuid.MustParse(orig.ID), Version: 1, Separators: []int{3, 5}}, queued); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = e.a.Pool.QueryRow(e.ctx, `SELECT count(*) FROM documents WHERE title LIKE 'scanned batch (%' AND deleted_at IS NULL AND id <> $1`, orig.ID).Scan(&n)
+	if n != 3 {
+		t.Errorf("after the split ran again: %d parts, want 3", n)
 	}
 
 	// A single document with a label (no separators) just gets its archive number.
