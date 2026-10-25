@@ -45,7 +45,7 @@ documents, in all scripts, and tolerates typos. Filters:
 | `from:hdfc` | from the correspondent HDFC |
 | `type:invoice` | of the document type *invoice* |
 | `date:2025` / `date:2025-04..2026-03` | by document date |
-| `added:>30d` | added in the last 30 days |
+| `added:30d` / `added:>30d` | added in the last 30 days / more than 30 days ago |
 | `is:inbox` / `is:failed` | not yet reviewed / couldn't be processed |
 | `-draft` | without the word *draft* |
 
