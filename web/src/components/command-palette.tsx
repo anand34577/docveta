@@ -103,6 +103,7 @@ export function CommandPalette() {
                 value={q}
                 onValueChange={setQ}
                 placeholder="Search documents or type a command…"
+                aria-label="Search documents or type a command"
                 className="h-12 flex-1 bg-transparent text-[15px] outline-none placeholder:text-subtle"
               />
             </div>

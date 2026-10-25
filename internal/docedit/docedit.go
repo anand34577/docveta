@@ -420,14 +420,15 @@ type SplitWorker struct {
 func (w *SplitWorker) Timeout(*river.Job[jobs.SplitArgs]) time.Duration { return 30 * time.Minute }
 
 func (w *SplitWorker) Work(ctx context.Context, job *river.Job[jobs.SplitArgs]) error {
-	return w.S.SplitBatch(ctx, job.Args)
+	return w.S.SplitBatch(ctx, job.Args, job.CreatedAt)
 }
 
 // SplitBatch turns a batch scan into one document per run of pages between separator
 // sheets (the separators themselves are dropped). Each part keeps the batch's metadata,
 // and a part whose pages carry an archive-number label gets that number. The batch goes
-// to the Trash, where it can still be restored.
-func (s *Service) SplitBatch(ctx context.Context, a jobs.SplitArgs) error {
+// to the Trash, where it can still be restored. Parts made since queuedAt (by an earlier
+// attempt of the same job) are kept, not made again.
+func (s *Service) SplitBatch(ctx context.Context, a jobs.SplitArgs, queuedAt time.Time) error {
 	p := s.docs.Principal(ctx, a.DocumentID)
 	access, err := s.docs.Access(ctx, auth.System(), a.DocumentID, spaces.ActView)
 	if err != nil || access.Deleted || access.CurrentVersion != a.Version {
@@ -472,6 +473,10 @@ func (s *Service) SplitBatch(ctx context.Context, a jobs.SplitArgs) error {
 		tagIDs[i] = t.ID
 	}
 	for i, pages := range parts {
+		title := fmt.Sprintf("%s (%d of %d)", src.Title, i+1, len(parts))
+		if _, done := s.docs.SplitPart(ctx, access.SpaceID, title, queuedAt); done {
+			continue // made by an earlier attempt of this job that failed further on
+		}
 		refs := make([]pipeline.PageRef, len(pages))
 		for j, pg := range pages {
 			refs[j] = pipeline.PageRef{Page: pg}
@@ -483,7 +488,7 @@ func (s *Service) SplitBatch(ctx context.Context, a jobs.SplitArgs) error {
 		if err != nil {
 			return err
 		}
-		in := documents.IngestInput{SpaceID: access.SpaceID, Filename: src.OriginalFilename, Title: fmt.Sprintf("%s (%d of %d)", src.Title, i+1, len(parts)),
+		in := documents.IngestInput{SpaceID: access.SpaceID, Filename: src.OriginalFilename, Title: title,
 			TagIDs: tagIDs, DocumentDate: src.DocumentDate, Language: src.Language, Source: "scan", AllowDuplicate: true, Priority: jobs.PriorityNormal}
 		if src.Correspondent != nil {
 			in.CorrespondentID = &src.Correspondent.ID

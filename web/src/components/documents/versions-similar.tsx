@@ -49,7 +49,16 @@ export function VersionsTab({ id, canEdit }: { id: string; canEdit: boolean }) {
           <Button size="sm" loading={busy} onClick={() => input.current?.click()}>
             <Upload /> Upload a new version
           </Button>
-          <input ref={input} type="file" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+          <input
+            ref={input}
+            type="file"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = ""; // so choosing the same file again (after a failed upload) works
+              if (f) void upload(f);
+            }}
+          />
         </>
       )}
       {versions.isLoading ? (

@@ -10,8 +10,8 @@ web UI (*Administration*).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DOCVETA_DATABASE_URL` | — (required) | `postgres://user:pass@host:5432/db` |
-| `DOCVETA_SECRET_KEY` | — (required, ≥32 chars) | Encrypts stored secrets (SMTP, OIDC). **Back it up**; losing it means re-entering those secrets. |
+| `DOCVETA_DATABASE_URL` | set by the setup page | `postgres://user:pass@host:5432/db`, or `builtin` for the built-in database |
+| `DOCVETA_SECRET_KEY` | generated (≥32 chars) | Encrypts stored secrets (SMTP, OIDC). Generated on first start and saved in `docveta.conf` in the data directory. **Back it up**; losing it means re-entering those secrets. |
 | `DOCVETA_BASE_URL` | `http://localhost:8080` | Public URL; used in links, cookies (`https` ⇒ Secure cookies + HSTS) and OIDC redirects |
 | `DOCVETA_LISTEN` | `:8080` | Listen address |
 | `DOCVETA_DATA_DIR` | `./data` | Files (`blobs/`) and temporary uploads (`tmp/`) |
@@ -25,7 +25,7 @@ web UI (*Administration*).
 | `DOCVETA_SESSION_IDLE` / `DOCVETA_SESSION_MAX` | `720h` / `2160h` | Session lifetimes |
 | `DOCVETA_PDF_WORKERS` | `2` | Parallel PDF inspections (memory: ~50–100 MB each) |
 | `DOCVETA_JOB_WORKERS` | `4` | Parallel background jobs |
-| `DOCVETA_LOG_LEVEL` / `DOCVETA_LOG_FORMAT` | `info` / `json` | `debug`…`error` / `json` or `text` |
+| `DOCVETA_LOG_LEVEL` / `DOCVETA_LOG_FORMAT` | `info` / `json` (`text` in a terminal) | `debug`…`error` / `json` or `text` |
 | `DOCVETA_ALLOW_LOCAL_TARGETS` | `false` | Let Gotify/ntfy/webhook channels point at private network addresses (`192.168.x.x`, `10.x`, `localhost`, Tailscale `100.64/10`…). Off by default so users can't make the server probe your network; turn it on if your Gotify/ntfy runs on the LAN and you trust your users. |
 
 Migrations run automatically at start (guarded by a database lock). Use
@@ -72,11 +72,11 @@ seven days after they stop being used, so the safe order is: database first, the
 docker compose exec -T db pg_dump -U docveta -Fc docveta > backup/docveta-$(date +%F).dump
 # 2. files (incremental; restic, borg or rsync all work)
 restic -r /mnt/backup/docveta backup ./data/blobs
-# 3. keep .env (DOCVETA_SECRET_KEY!) with the backup, encrypted
+# 3. keep docveta.conf from the data directory (the generated DOCVETA_SECRET_KEY!) with the backup, encrypted
 ```
 
 Restore: create an empty database, `pg_restore -d docveta docveta-YYYY-MM-DD.dump`, restore
-`data/blobs`, start Docveta with the same `DOCVETA_SECRET_KEY`, then verify with
+`data/blobs` and `docveta.conf`, start Docveta with the same `DOCVETA_SECRET_KEY`, then verify with
 `docveta doctor --verify-blobs` (see below).
 
 ## Checking an installation

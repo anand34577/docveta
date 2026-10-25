@@ -221,6 +221,7 @@ export function useChannels() {
 export function invalidateDocuments(qc: QueryClient, id?: string) {
   qc.invalidateQueries({ queryKey: ["documents"] });
   qc.invalidateQueries({ queryKey: keys.stats });
+  qc.invalidateQueries({ queryKey: keys.me }); // each space's document count (sidebar, Home)
   if (id) qc.invalidateQueries({ queryKey: keys.document(id) });
 }
 
@@ -245,11 +246,12 @@ export function useUpdateDocument(id: string) {
   return useMutation({
     mutationFn: ({ patch, version }: { patch: DocPatch; version?: number }) =>
       api.patch<Document>(`/documents/${id}`, patch, version !== undefined ? { "If-Match": `"${version}"` } : undefined),
-    onSuccess: (doc) => {
+    onSuccess: (doc, { patch }) => {
       qc.setQueryData(keys.document(id), doc);
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: keys.stats });
       qc.invalidateQueries({ queryKey: keys.history(id) });
+      if (patch.space_id) qc.invalidateQueries({ queryKey: keys.me }); // moved: both spaces' counts
     },
   });
 }

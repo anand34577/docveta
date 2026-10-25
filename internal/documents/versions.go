@@ -266,6 +266,16 @@ func (s *Service) Principal(ctx context.Context, id uuid.UUID) *auth.Principal {
 	return &auth.Principal{Kind: auth.KindSession, UserID: uid, Name: name, Email: email}
 }
 
+// SplitPart finds a part a batch split already created (title, in the space, added since
+// the split job was queued), so a split that runs again after failing halfway doesn't
+// make the same documents twice.
+func (s *Service) SplitPart(ctx context.Context, spaceID uuid.UUID, title string, since time.Time) (uuid.UUID, bool) {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT id FROM documents WHERE space_id=$1 AND title=$2 AND source='scan' AND added_at >= $3
+		AND deleted_at IS NULL ORDER BY added_at LIMIT 1`, spaceID, title, since).Scan(&id)
+	return id, err == nil
+}
+
 // FinishSplit marks a split-up original as done and moves it to the Trash.
 func (s *Service) FinishSplit(ctx context.Context, id uuid.UUID, parts int) error {
 	if _, err := s.pool.Exec(ctx, `UPDATE documents SET status='ready', processing_stage='done', inbox=false WHERE id=$1`, id); err != nil {

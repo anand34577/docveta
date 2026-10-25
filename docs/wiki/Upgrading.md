@@ -7,6 +7,7 @@ Docveta updates its database by itself on start (migrations). Your data and sett
 |---|---|
 | Windows installer | Run the new `docveta-setup-…exe`. It stops the service, replaces the program, keeps `docveta.conf` and data, and starts it again |
 | Windows portable | Close Docveta, replace `docveta.exe` (and the `ocr` folder, if the release has a new one), start it |
+| Linux `get-docveta.sh` | Run `sudo sh get-docveta.sh` again (download it again first: it installs the latest release, or `--version X.Y.Z`) |
 | Linux `install.sh` | Unpack the new release, run `sudo ./install.sh` again |
 | macOS `install.sh` | Unpack the new release, run `./install.sh` again |
 | Docker | `docker compose pull && docker compose up -d` |

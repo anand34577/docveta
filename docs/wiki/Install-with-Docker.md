@@ -19,7 +19,8 @@ Open `http://<server>:8080` and create your account. There is nothing to edit:
   Docveta with an enrollment key that only the engine containers can see
 - the **secret key** that protects stored passwords is generated and saved in Docveta's data
 
-Your data lives in the Docker volumes `docveta_data` and `docveta_db`.
+Your data lives in the Docker volumes `docveta_data` (documents, and `docveta.conf` with the
+secret key) and `docveta_db` (the database); `docveta_secrets` holds the database password.
 
 ## More engines
 
@@ -50,8 +51,11 @@ docker compose down                                # stop (data stays in the vol
 docker compose exec docveta /docveta doctor        # health check
 ```
 
-**Backups:** back up the `docveta_data` and `docveta_db` volumes together, for example with
-`docker compose stop` and a copy of `/var/lib/docker/volumes/docveta_*`.
+**Backups:** back up the `docveta_data`, `docveta_db` and `docveta_secrets` volumes together, for
+example with `docker compose stop` and a copy of `/var/lib/docker/volumes/docveta_*`. Keep
+`docveta_secrets` with the database: without it a restored `docveta_db` gets a new password on
+start that the database doesn't know, and Docveta can't connect. Or dump the database as in
+[Backup and restore](Backup-and-restore#docker).
 
 ## Upgrading from an older compose file
 

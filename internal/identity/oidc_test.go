@@ -79,6 +79,8 @@ func TestSafeReturnTo(t *testing.T) {
 		"": "/", "/documents?q=bill": "/documents?q=bill", "//evil.com": "/", "https://evil.com": "/",
 		"/login": "/", "/login?redirect=%2Flogin%3Fredirect%3D%252F": "/", "/setup": "/", "/invite/abc": "/",
 		"/settings/security": "/settings/security", "/loginfo": "/loginfo",
+		"/\t/evil.com": "/", "/\n/evil.com": "/", "/\r\n/evil.com": "/", "/\\evil.com": "/", "/\t\\evil.com": "/",
+		"/docs\\..\\x": "/", "/a\x7f": "/", "/documents/é": "/documents/é",
 	} {
 		if got := safeReturnTo(in); got != want {
 			t.Errorf("safeReturnTo(%q) = %q, want %q", in, got, want)

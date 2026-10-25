@@ -53,7 +53,8 @@ export function ShortcutsHelp({ open, onOpenChange }: { open: boolean; onOpenCha
                     <span className="flex shrink-0 items-center gap-1">
                       {keys.map((k, i) => (
                         <React.Fragment key={k}>
-                          {i > 0 && <span className="text-xs text-subtle">{k === "click" ? "+" : "then"}</span>}
+                          {/* Held together ("Ctrl + K", "Shift + click") or one after the other ("G then I"). */}
+                          {i > 0 && <span className="text-xs text-subtle">{keys[0] === modKey || keys[0] === "Shift" ? "+" : "then"}</span>}
                           <Kbd>{k}</Kbd>
                         </React.Fragment>
                       ))}

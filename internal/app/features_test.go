@@ -169,6 +169,39 @@ func TestDocumentEditing(t *testing.T) {
 	}
 }
 
+// TestDocumentLinkFieldNeedsAccess: a document-link field only takes documents the person can
+// see, so it can't be used to find out what exists in other spaces.
+func TestDocumentLinkFieldNeedsAccess(t *testing.T) {
+	e := newEnv(t)
+	c := e.c
+	var me struct {
+		Spaces []struct{ ID, Kind string } `json:"spaces"`
+	}
+	c.do("GET", "/api/v1/me", nil, 200, &me)
+	var personal string
+	for _, s := range me.Spaces {
+		if s.Kind == "personal" {
+			personal = s.ID
+		}
+	}
+	var link struct{ ID string }
+	c.do("POST", "/api/v1/custom-fields", map[string]any{"space_id": e.family, "name": "See also", "data_type": "document"}, 201, &link)
+	private := c.upload(personal, "private.pdf", minimalPDF("a document only the admin can see"))
+	shared := c.upload(e.family, "shared.pdf", minimalPDF("a document everyone in the family can see"))
+
+	var kid struct{ ID string }
+	c.do("POST", "/api/v1/admin/users", map[string]any{"email": "kid@example.com", "display_name": "Kid", "password": "another-long-pw"}, 201, &kid)
+	c.do("PUT", "/api/v1/spaces/"+e.family+"/members/"+kid.ID, map[string]any{"role": "editor"}, 204, nil)
+	k := newClient(t, e.srv.URL)
+	k.do("POST", "/api/v1/auth/login", map[string]any{"email": "kid@example.com", "password": "another-long-pw"}, 200, nil)
+	k.do("PATCH", "/api/v1/documents/"+shared.ID, map[string]any{"custom_fields": map[string]any{link.ID: private.ID}}, 422, nil)
+	k.do("PATCH", "/api/v1/documents/"+shared.ID, map[string]any{"custom_fields": map[string]any{link.ID: "00000000-0000-4000-8000-000000000000"}}, 422, nil)
+	other := k.upload(e.family, "other.pdf", minimalPDF("another family document the kid can link to"))
+	k.do("PATCH", "/api/v1/documents/"+shared.ID, map[string]any{"custom_fields": map[string]any{link.ID: other.ID}}, 200, nil)
+	// The admin can see both spaces, so linking the private document works for them.
+	c.do("PATCH", "/api/v1/documents/"+shared.ID, map[string]any{"custom_fields": map[string]any{link.ID: private.ID}}, 200, nil)
+}
+
 // TestBulkTagsByName tags documents from different spaces with one tag name.
 func TestBulkTagsByName(t *testing.T) {
 	e := newEnv(t)
@@ -860,6 +893,20 @@ func TestShareLinks(t *testing.T) {
 	// Documents outside the view stay out of reach.
 	other2 := c.upload(e.family, "private.pdf", minimalPDF("this one is not part of the shared view at all"))
 	anon.do("GET", "/api/v1/public/shares/"+token(vs.Link)+"/documents/"+other2.ID+"/file", nil, 404, nil)
+
+	// A read-only token can't turn links off.
+	var ro struct{ Secret string }
+	c.do("POST", "/api/v1/me/tokens", map[string]any{"name": "ro", "scopes": []string{"documents:read"}}, 201, &ro)
+	roc := newClient(t, e.srv.URL)
+	roc.token = ro.Secret
+	roc.do("DELETE", "/api/v1/shares/"+vs.Share.ID, nil, 403, nil)
+
+	// A document in the trash can't be opened through its link any more.
+	var trashed created
+	c.do("POST", "/api/v1/shares", map[string]any{"document_id": doc.ID}, 201, &trashed)
+	anon.raw("GET", "/api/v1/public/shares/"+token(trashed.Link)+"/documents/"+doc.ID+"/file", nil, nil, 200)
+	c.do("DELETE", "/api/v1/documents/"+doc.ID, nil, 204, nil)
+	anon.do("GET", "/api/v1/public/shares/"+token(trashed.Link)+"/documents/"+doc.ID+"/file", nil, 404, nil)
 }
 
 // TestMCP talks to the MCP endpoint like an AI assistant would.
@@ -1590,6 +1637,7 @@ func TestBatchScanning(t *testing.T) {
 		sepPage,
 		text("Third document is a single page with plenty of words as well too"),
 	})
+	queued := time.Now()
 	orig := c.upload(e.family, "scanned batch.pdf", b2)
 	var docs jsonList[struct {
 		ID        string `json:"id"`
@@ -1639,6 +1687,18 @@ func TestBatchScanning(t *testing.T) {
 	}
 	if !found {
 		t.Error("the original batch should be in the Trash")
+	}
+
+	// A split that runs again (it failed halfway, or the server restarted during it) doesn't
+	// make the parts that already exist a second time.
+	c.do("POST", "/api/v1/documents/"+orig.ID+"/restore", nil, 204, nil)
+	if err := e.a.Docedit.SplitBatch(e.ctx, jobs.SplitArgs{DocumentID: uuid.MustParse(orig.ID), Version: 1, Separators: []int{3, 5}}, queued); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = e.a.Pool.QueryRow(e.ctx, `SELECT count(*) FROM documents WHERE title LIKE 'scanned batch (%' AND deleted_at IS NULL AND id <> $1`, orig.ID).Scan(&n)
+	if n != 3 {
+		t.Errorf("after the split ran again: %d parts, want 3", n)
 	}
 
 	// A single document with a label (no separators) just gets its archive number.
@@ -2035,6 +2095,10 @@ func TestDateReminders(t *testing.T) {
 		return n == 1
 	})
 	// The weekly summary goes out once a week (from Monday 9:00 in the person's time zone).
+	// A time zone PostgreSQL doesn't know counts as UTC instead of stopping everyone's.
+	if _, err := e.a.Pool.Exec(e.ctx, `UPDATE users SET timezone='' WHERE id=$1`, e.me); err != nil {
+		t.Fatal(err)
+	}
 	first, err := e.a.sendDigests(e.ctx)
 	if err != nil {
 		t.Fatal(err)

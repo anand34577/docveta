@@ -170,7 +170,8 @@ def _from_pdf(src: str, pages: dict[int, dict[str, Any]], out: str) -> None:
         # Make rotation part of the content so overlay coordinates match the rendered view.
         if page.get("/Rotate", 0):
             page.transfer_rotation_to_content()
-        box = page.mediabox
+        # The visible area (CropBox, else the MediaBox) is what was rasterised for OCR.
+        box = page.cropbox
         w_pt, h_pt = float(box.width), float(box.height)
         data = _overlay(ocr_page, w_pt, h_pt)
         if data:

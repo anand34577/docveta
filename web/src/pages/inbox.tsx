@@ -5,7 +5,7 @@ import { Check, CheckCheck, PartyPopper, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { invalidateDocuments, useDocument, useDocuments } from "@/lib/queries";
-import { cn, formatDocDate, spaceLabel, usePageTitle } from "@/lib/utils";
+import { cn, formatDocDate, overlayOpen, spaceLabel, usePageTitle } from "@/lib/utils";
 import { PageHeader, useCurrentUser } from "@/components/app-shell";
 import { StatusBadge, Thumbnail } from "@/components/documents/doc-items";
 import { DocumentDetail } from "./document";
@@ -35,6 +35,13 @@ export function InboxPage() {
   }, [items, selected, isDesktop]);
 
   const index = items.findIndex((d) => d.id === selected);
+  // While the list has focus, it follows J / K, so Enter opens the document that is shown.
+  const list = React.useRef<HTMLUListElement>(null);
+  React.useEffect(() => {
+    const ul = list.current;
+    if (!selected || !ul || !ul.contains(document.activeElement)) return;
+    ul.querySelector<HTMLElement>(`a[data-id="${selected}"]`)?.focus();
+  }, [selected]);
   const move = React.useCallback(
     (delta: number) => {
       const next = items[Math.min(items.length - 1, Math.max(0, index + delta))];
@@ -78,7 +85,7 @@ export function InboxPage() {
     const onKey = async (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return; // a dialog or menu has the keyboard
+      if (overlayOpen()) return; // a dialog, menu or dropdown has the keyboard
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
         move(1);
@@ -98,7 +105,8 @@ export function InboxPage() {
         } catch (err) {
           toast.error(errorMessage(err));
         }
-      } else if (e.key === "Enter" && selected) {
+      } else if (e.key === "Enter" && selected && !t.closest("a, button, summary, [role=button], [role=tab], [role=checkbox], [role=radio]")) {
+        // Enter on a focused button or link does what that button or link does, nothing more.
         navigate({ to: "/documents/$id", params: { id: selected } });
       }
     };
@@ -183,14 +191,16 @@ export function InboxPage() {
             <CheckCheck /> All reviewed
           </Button>
         </div>
-        <ul className="flex-1 overflow-y-auto scrollbar-thin" role="listbox" aria-label="Documents to review">
+        <ul ref={list} className="flex-1 overflow-y-auto scrollbar-thin" role="listbox" aria-label="Documents to review">
           {items.map((d) => (
             <li key={d.id} role="option" aria-selected={d.id === selected} className="relative">
               <Link
                 to="/documents/$id"
                 params={{ id: d.id }}
+                data-id={d.id}
                 onClick={(e) => {
-                  if (isDesktop) {
+                  // A click shows it beside the list; Enter on the focused item opens it.
+                  if (isDesktop && e.detail !== 0) {
                     e.preventDefault();
                     setSelected(d.id);
                   }

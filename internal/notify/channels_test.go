@@ -9,6 +9,10 @@ import (
 	"net/smtp"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/anand34577/docveta/internal/auth"
 )
 
 func TestBlockedAddr(t *testing.T) {
@@ -91,5 +95,16 @@ func TestNtfyJSON(t *testing.T) {
 	}
 	if got["topic"] != "docs" || got["title"] != "बिजली का बिल" || got["click"] != "https://d.example/x" {
 		t.Fatalf("payload %v", got)
+	}
+}
+
+func TestChannelChangesNeedWriteScope(t *testing.T) {
+	s := &Service{}
+	upload := &auth.Principal{Kind: auth.KindToken, Scopes: []string{auth.ScopeUpload}}
+	if _, err := s.CreateChannel(context.Background(), upload, ChannelInput{Type: "webhook"}); err == nil {
+		t.Fatal("an upload-only token created a channel")
+	}
+	if err := s.DeleteChannel(context.Background(), upload, uuid.New()); err == nil {
+		t.Fatal("an upload-only token deleted a channel")
 	}
 }

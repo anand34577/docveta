@@ -98,6 +98,14 @@ export function spaceLabel(s: { kind?: string; name: string } | undefined): stri
 export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 export const modKey = isMac ? "⌘" : "Ctrl";
 
+/**
+ * True while a dialog, menu, popover or dropdown list has the keyboard, so single-letter page
+ * shortcuts (J, K, E…) leave it alone. Dropdown lists are listboxes marked open.
+ */
+export function overlayOpen(): boolean {
+  return !!document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"][data-state="open"]');
+}
+
 /** Tag colour classes (full literal class names so Tailwind picks them up). */
 export const tagColors: Record<string, string> = {
   slate: "bg-slate-100 text-slate-700 dark:bg-slate-400/15 dark:text-slate-300",

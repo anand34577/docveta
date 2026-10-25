@@ -304,7 +304,9 @@ func firstLine(err error) string {
 }
 
 // isLocal reports whether the request comes straight from this computer (not via a
-// proxy, which would make every visitor look local).
+// proxy, which would make every visitor look local) and was addressed to it by a local
+// name. A website can point its own name at 127.0.0.1 (DNS rebinding) and have the
+// visitor's browser submit this page; its requests are local but carry its host name.
 func isLocal(r *http.Request) bool {
 	if r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Forwarded") != "" || r.Header.Get("X-Real-Ip") != "" {
 		return false
@@ -314,6 +316,19 @@ func isLocal(r *http.Request) bool {
 		return false
 	}
 	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback() && loopbackName(r.Host)
+}
+
+// loopbackName reports whether a Host header names this computer.
+func loopbackName(h string) bool {
+	if name, _, err := net.SplitHostPort(h); err == nil {
+		h = name
+	}
+	h = strings.ToLower(strings.TrimSuffix(strings.Trim(h, "[]"), "."))
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
 	return ip != nil && ip.IsLoopback()
 }
 

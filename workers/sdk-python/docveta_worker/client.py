@@ -104,24 +104,40 @@ class Client:
         self._check(r)
         return r.json()
 
-    def complete(self, task: dict[str, Any], metrics: dict[str, Any], result: Optional[bytes] = None, archive_path: Optional[str] = None) -> None:
-        # Field order matters: the server streams parts and expects lease_id/metrics first.
-        fields: list[tuple[str, Any]] = [
-            ("lease_id", (None, task["lease_id"])),
-            ("metrics", (None, json.dumps(metrics), "application/json")),
-        ]
-        fh = None
-        try:
-            if result is not None:
-                fields.append(("result", ("result.json", result, "application/json")))
-            if archive_path is not None:
-                fh = open(archive_path, "rb")
-                fields.append(("archive", ("archive.pdf", fh, "application/pdf")))
-            r = self.s.post(self._url(task["complete_url"]), files=fields, timeout=max(self.timeout, 300))
+    def complete(self, task: dict[str, Any], metrics: dict[str, Any], result: Optional[bytes] = None, archive_path: Optional[str] = None,
+                 attempts: int = 3, retry_delay: float = 5.0) -> None:
+        # A dropped connection would otherwise throw away the whole task's work: retry the
+        # upload while the lease holds. If an earlier attempt did arrive, the server answers
+        # lease_lost (LeaseLost), which the caller treats as "nothing more to do".
+        for attempt in range(1, attempts + 1):
+            # Field order matters: the server streams parts and expects lease_id/metrics first.
+            fields: list[tuple[str, Any]] = [
+                ("lease_id", (None, task["lease_id"])),
+                ("metrics", (None, json.dumps(metrics), "application/json")),
+            ]
+            fh = None
+            try:
+                if result is not None:
+                    fields.append(("result", ("result.json", result, "application/json")))
+                if archive_path is not None:
+                    fh = open(archive_path, "rb")
+                    fields.append(("archive", ("archive.pdf", fh, "application/pdf")))
+                r = self.s.post(self._url(task["complete_url"]), files=fields, timeout=max(self.timeout, 300))
+            except requests.ConnectionError as e:
+                if attempt == attempts:
+                    raise
+                log.warning("task %s: uploading the result failed (%s); retrying in %.0fs", task.get("task_id"), e, retry_delay * attempt)
+                time.sleep(retry_delay * attempt)
+                continue
+            finally:
+                if fh:
+                    fh.close()
+            if r.status_code in (502, 503, 504) and attempt < attempts:  # restarting, or a proxy in between
+                log.warning("task %s: Docveta answered HTTP %d to the result; retrying in %.0fs", task.get("task_id"), r.status_code, retry_delay * attempt)
+                time.sleep(retry_delay * attempt)
+                continue
             self._check(r)
-        finally:
-            if fh:
-                fh.close()
+            return
 
     def fail(self, task: dict[str, Any], code: str, message: str, retryable: bool) -> None:
         r = self.s.post(

@@ -119,6 +119,12 @@ func decodeCursor(s string) (cursor, error) {
 	if err == nil {
 		err = json.Unmarshal(raw, &c)
 	}
+	if err == nil && c.Key != nil {
+		_, err = uuid.Parse(c.ID) // a keyset cursor's tie-breaker goes to the database as a uuid
+	}
+	if err == nil && c.Offset < 0 {
+		err = fmt.Errorf("negative offset")
+	}
 	if err != nil {
 		return c, apperr.Invalid("cursor", "Invalid cursor")
 	}
@@ -222,10 +228,18 @@ func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Resul
 	}
 
 	// Tags
-	tagAll := append([]uuid.UUID{}, q.TagIDs...)
-	if ids, err := s.resolveNames(ctx, "tags", parsed.Tags, spaceIDs); err != nil {
-		return nil, err
-	} else if ids != nil {
+	// The same tag twice would never be counted twice below.
+	var tagAll []uuid.UUID
+	for _, id := range q.TagIDs {
+		if !slices.Contains(tagAll, id) {
+			tagAll = append(tagAll, id)
+		}
+	}
+	for _, name := range parsed.Tags { // tag:a tag:b means both, like tag_ids
+		ids, err := s.resolveNames(ctx, "tags", []string{name}, spaceIDs)
+		if err != nil {
+			return nil, err
+		}
 		// Each named tag may exist in several spaces: require any of the same-named ones.
 		b.where("EXISTS (SELECT 1 FROM document_tags dt WHERE dt.document_id=d.id AND dt.tag_id = ANY(" + b.arg(ids) + "))")
 	}

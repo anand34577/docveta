@@ -47,8 +47,10 @@ Duplicati or Macrium also work for the data folder.
 ### Docker
 
 ```bash
+# 1. database
 docker compose exec -T db pg_dump -U docveta -Fc docveta > docveta-$(date +%F).dump
-restic -r /mnt/backup/docveta backup ./data
+# 2. files and settings: the docveta_data volume (or your DOCVETA_DATA_DIR folder)
+docker run --rm -v docveta_data:/data:ro -v "$PWD":/backup alpine tar czf /backup/docveta-data-$(date +%F).tar.gz -C /data .
 ```
 
 ## Restore

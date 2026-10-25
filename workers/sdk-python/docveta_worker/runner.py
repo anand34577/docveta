@@ -71,6 +71,7 @@ class Worker:
         self.stop = _Stop()
         self.heartbeat_interval = 20
         self.lease_wait = 30
+        self.start_failed = False
 
     def capabilities(self) -> list[dict[str, Any]]:
         e = self.engine
@@ -128,11 +129,19 @@ class Worker:
         while any(t.is_alive() for t in threads):
             for t in threads:
                 t.join(timeout=1)
+        if self.start_failed:
+            raise SystemExit("the OCR engine could not start (see the error above)")
 
     def _slot_loop(self, slot: int) -> None:
         session = None
         if slot >= 0:
-            session = self.engine.open_session(slot)
+            try:
+                session = self.engine.open_session(slot)
+            except (Exception, SystemExit) as e:  # SystemExit would silently end only this thread
+                log.error("cannot start OCR slot %d: %s", slot, e)
+                self.start_failed = True
+                self.stop.event.set()
+                return
         backoff = 2.0
         try:
             while not self.stop.event.is_set():
@@ -226,7 +235,7 @@ class Worker:
         mime = task["input"]["mime"]
         rng = task.get("page_range") or [None, None]
         hints = task.get("hints") or {}
-        languages = [l for l in hints.get("languages", []) if l] or list(self.engine.languages[:1])
+        languages = [l for l in hints.get("languages") or [] if l] or list(self.engine.languages[:1])
         dpi = int(hints.get("dpi") or self.engine.dpi)
         pages = []
         for p in iter_pages(path, mime, rng[0], rng[1], dpi):

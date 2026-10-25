@@ -104,6 +104,12 @@ func (w *MaintenanceWorker) storageAlert(ctx context.Context) {
 // are always consistent and in-flight uploads are never collected.
 const blobGCGrace = 7 * 24 * time.Hour
 
+// supersededRuns are the OCR runs whose task results nothing will read again. A failed run
+// that is still the document's latest isn't one: retrying its failed tasks merges their new
+// result with the pages its other tasks (embedded text, pages that worked) already have.
+const supersededRuns = `SELECT r.id FROM ocr_runs r WHERE NOT r.is_current AND (r.status IN ('done','cancelled')
+	OR EXISTS (SELECT 1 FROM ocr_runs n WHERE n.document_id = r.document_id AND (n.created_at, n.id) > (r.created_at, r.id)))`
+
 func (w *MaintenanceWorker) gcBlobs(ctx context.Context) error {
 	a := w.A
 	var last time.Time
@@ -132,11 +138,11 @@ func (w *MaintenanceWorker) gcBlobs(ctx context.Context) error {
 	// Old OCR task results of superseded runs are no longer needed once a newer run is current.
 	if _, err := a.Pool.Exec(ctx, `UPDATE processing_tasks SET result_blob_key=NULL
 		WHERE result_blob_key IS NOT NULL AND finished_at < now() - interval '30 days'
-		  AND ocr_run_id IN (SELECT id FROM ocr_runs WHERE NOT is_current)`); err != nil {
+		  AND ocr_run_id IN (`+supersededRuns+`)`); err != nil {
 		return err
 	}
 	if _, err := a.Pool.Exec(ctx, `DELETE FROM processing_tasks WHERE status IN ('done','cancelled') AND finished_at < now() - interval '90 days'
-		AND ocr_run_id IN (SELECT id FROM ocr_runs WHERE NOT is_current)`); err != nil {
+		AND ocr_run_id IN (`+supersededRuns+`)`); err != nil {
 		return err
 	}
 	if removed > 0 {

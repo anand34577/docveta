@@ -32,9 +32,11 @@ Configuration (environment):
 |---|---|
 | `DOCVETA_URL` | Docveta base URL, e.g. `https://docs.example.com` |
 | `DOCVETA_WORKER_TOKEN` | Token from *Administration → Processing → Add worker* |
+| `DOCVETA_ENROLL_KEY_FILE` | Instead of a token: Docveta's enrollment key file (Docker setup); the worker fetches its own token |
 | `DOCVETA_WORKER_NAME` | Optional display name (default: hostname) |
 | `DOCVETA_ARCHIVE` | `false` to not build searchable PDFs on this worker |
 | `DOCVETA_TLS_VERIFY` | `false`, or path to a CA bundle |
+| `DOCVETA_LOG_LEVEL` | `DEBUG`, `INFO` (default) or `WARNING` |
 
 What the SDK handles for you: capability announcement, long-poll leasing, heartbeats
 (and aborting when a lease is lost), downloads, PDF rasterisation (pypdfium2), multi-page

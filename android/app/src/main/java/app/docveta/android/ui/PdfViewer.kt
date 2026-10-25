@@ -67,22 +67,44 @@ import kotlinx.coroutines.withContext
 /** Renders PDF pages to bitmaps, one at a time (PdfRenderer isn't thread-safe), keeping a few in memory. */
 class PdfPages(file: File) : AutoCloseable {
     private val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-    private val renderer = PdfRenderer(fd)
+    private val renderer = try {
+        PdfRenderer(fd)
+    } catch (e: Exception) {
+        fd.close() // not a PDF Android can read: don't leave the file open
+        throw e
+    }
     private val lock = Mutex()
     private val cache = object : LruCache<String, Bitmap>(48 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
-    val count: Int get() = renderer.pageCount
+    val count: Int = renderer.pageCount
+
+    @Volatile private var closed = false
+
+    /**
+     * Runs [block] with the renderer to itself. Closing while a page is being drawn (leaving the
+     * document mid-render) waits for that page, which then closes the renderer on its way out.
+     */
+    private suspend fun <T> locked(block: suspend () -> T): T {
+        try {
+            return lock.withLock {
+                if (closed) throw kotlinx.coroutines.CancellationException("closed")
+                block()
+            }
+        } finally {
+            if (closed) closeNow()
+        }
+    }
 
     /** Width and height of a page in points (for sizing the placeholder before it's drawn). */
-    suspend fun size(index: Int): Pair<Int, Int> = lock.withLock {
+    suspend fun size(index: Int): Pair<Int, Int> = locked {
         withContext(Dispatchers.IO) { renderer.openPage(index).use { it.width to it.height } }
     }
 
     suspend fun render(index: Int, widthPx: Int): Bitmap {
         val key = "$index@$widthPx"
         cache.get(key)?.let { return it }
-        return lock.withLock {
+        return locked {
             cache.get(key) ?: withContext(Dispatchers.Default) {
                 renderer.openPage(index).use { p ->
                     val h = (widthPx.toFloat() * p.height / p.width).toInt().coerceAtLeast(1)
@@ -102,14 +124,24 @@ class PdfPages(file: File) : AutoCloseable {
         val out = ArrayList<PdfMatch>()
         for (i in 0 until count) {
             coroutineContext.ensureActive()
-            lock.withLock { renderer.openPage(i).use { p -> p.searchText(query).forEach { m -> out.add(PdfMatch(i, m.bounds)) } } }
+            locked { renderer.openPage(i).use { p -> p.searchText(query).forEach { m -> out.add(PdfMatch(i, m.bounds)) } } }
         }
         out
     }
 
     override fun close() {
-        runCatching { renderer.close() }
-        runCatching { fd.close() }
+        closed = true
+        closeNow() // busy drawing a page: the drawing closes it when done (see [locked])
+    }
+
+    private fun closeNow() {
+        if (!lock.tryLock()) return
+        try {
+            runCatching { renderer.close() } // a second time just throws, and is ignored
+            runCatching { fd.close() }
+        } finally {
+            lock.unlock()
+        }
     }
 
     companion object {

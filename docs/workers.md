@@ -11,6 +11,18 @@ another language.
 Create a worker in *Administration → Processing → Add worker*. Every request carries
 `Authorization: Bearer dvt_wrk_…`. Disabled workers get `403`.
 
+Or, when Docveta runs with `DOCVETA_WORKER_ENROLL_KEY_FILE` (the Docker Compose setup does), a
+worker that can read that key file fetches its own token:
+
+```json
+POST /worker/v1/enroll
+{"name": "ocr-1", "key": "<contents of the key file>"}
+→ 200 {"token": "dvt_wrk_…"}
+→ 401 wrong key, 404 enrollment not enabled
+```
+
+The SDK does this when `DOCVETA_ENROLL_KEY_FILE` is set instead of `DOCVETA_WORKER_TOKEN`.
+
 ## Lifecycle
 
 ```

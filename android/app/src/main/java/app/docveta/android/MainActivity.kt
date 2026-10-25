@@ -40,13 +40,22 @@ import app.docveta.android.ui.ShareInbox
 import app.docveta.android.ui.SsoInbox
 
 private const val LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
+private const val SHARED = "shared_uris"
+private const val LOCK_AFTER_MS = 30_000L
 
 class MainActivity : FragmentActivity() {
     private val shared = ShareInbox()
     private val sso = SsoInbox()
     private var locked by mutableStateOf(false)
-    private var leftAt = 0L
     private lateinit var container: AppContainer
+
+    private companion object {
+        // Kept for the life of the app, not of this screen: Android rebuilds the screen when
+        // dark mode or the font size changes, and that mustn't ask to unlock again. A fresh
+        // start of the app always asks.
+        var unlocked = false
+        var leftAt = 0L
+    }
     private val askLocalNetwork = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -56,8 +65,15 @@ class MainActivity : FragmentActivity() {
         // Android 17 blocks connections to local-network addresses (192.168.x.x, 10.x.x.x, .local)
         // unless the person allows it; without this a server at home can't be reached.
         if (Build.VERSION.SDK_INT >= 37 && checkSelfPermission(LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) askLocalNetwork.launch(LOCAL_NETWORK)
-        locked = container.session.appLock && container.session.signedIn
-        handle(intent)
+        val recentlyUnlocked = unlocked && (leftAt == 0L || System.currentTimeMillis() - leftAt <= LOCK_AFTER_MS)
+        locked = container.session.appLock && container.session.signedIn && !recentlyUnlocked
+        if (!locked) unlocked = true
+        // The intent that started the app is handed over again when the activity is recreated
+        // (dark mode switching on, say) or reopened from recent apps: files shared once were
+        // offered for upload a second time. Only a fresh start reads it; files still waiting
+        // for a space are kept across the restart instead.
+        if (savedInstanceState == null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) handle(intent)
+        else savedUris(savedInstanceState)?.let { if (container.session.signedIn) shared.uris = it }
         setContent {
             val mode by container.theme
             DocvetaTheme(dark = when (mode) { "dark" -> true; "light" -> false; else -> androidx.compose.foundation.isSystemInDarkTheme() }) {
@@ -75,6 +91,15 @@ class MainActivity : FragmentActivity() {
         }
         if (locked) window.decorView.post { promptUnlock() }
     }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (shared.uris.isNotEmpty()) outState.putParcelableArrayList(SHARED, ArrayList(shared.uris))
+    }
+
+    @Suppress("DEPRECATION")
+    private fun savedUris(state: Bundle?): List<Uri>? =
+        (if (Build.VERSION.SDK_INT >= 33) state?.getParcelableArrayList(SHARED, Uri::class.java) else state?.getParcelableArrayList<Uri>(SHARED))?.takeIf { it.isNotEmpty() }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -96,8 +121,9 @@ class MainActivity : FragmentActivity() {
     override fun onStart() {
         super.onStart()
         // Coming back after a while: ask again if the person turned on the lock.
-        if (container.session.appLock && container.session.signedIn && leftAt != 0L && System.currentTimeMillis() - leftAt > 30_000) {
+        if (container.session.appLock && container.session.signedIn && leftAt != 0L && System.currentTimeMillis() - leftAt > LOCK_AFTER_MS) {
             locked = true
+            unlocked = false
             promptUnlock()
         }
     }
@@ -131,11 +157,13 @@ class MainActivity : FragmentActivity() {
         if (BiometricManager.from(this).canAuthenticate(auth) != BiometricManager.BIOMETRIC_SUCCESS) {
             // No screen lock set up on the phone: nothing to ask, so the lock can't protect anything.
             locked = false
+            unlocked = true
             return
         }
         val prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 locked = false
+                unlocked = true
             }
         })
         prompt.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Unlock Docveta").setAllowedAuthenticators(auth).build())
