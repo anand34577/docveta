@@ -103,12 +103,24 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
+      # Otherwise first built when a release is tagged. (The OCR image needs the converted models.)
+      - name: Tesseract engine image
+        uses: docker/build-push-action@v7
+        with:
+          context: workers
+          file: workers/tesseract/Dockerfile
+          push: false
 
   # The Linux package's install.sh on a real init system: Debian (systemd) and Alpine (OpenRC).
   linux-install:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Check the install scripts (POSIX sh, as dash and BusyBox run them)
+        run: |
+          scripts="deploy/linux/get-docveta.sh deploy/linux/install.sh deploy/macos/install.sh"
+          for f in $scripts; do dash -n "$f"; done
+          shellcheck -S warning -s sh $scripts
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
