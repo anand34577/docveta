@@ -173,6 +173,15 @@ func TestIntegration(t *testing.T) {
 	if len(list.Items) != 1 {
 		t.Fatalf("tag filter failed")
 	}
+	// Several tags: a document needs every one of them (a tag that doesn't exist matches nothing).
+	c.do("GET", "/api/v1/documents?q="+url.QueryEscape("tag:invoices tag:doesnotexist"), nil, 200, &list)
+	if len(list.Items) != 0 {
+		t.Fatalf("tag:invoices tag:doesnotexist found %d documents, want 0", len(list.Items))
+	}
+	c.do("GET", "/api/v1/documents?tag_id="+tag.ID+"&tag_id="+tag.ID, nil, 200, &list)
+	if len(list.Items) != 1 {
+		t.Fatalf("the same tag twice in tag_id found %d documents, want 1", len(list.Items))
+	}
 
 	// Duplicate upload is detected.
 	c.uploadStatus(family, "again.pdf", minimalPDF("Electricity bill from BESCOM, invoice 05/08/2026"), 409)
