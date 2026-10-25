@@ -550,7 +550,15 @@ export function InvitesPanel() {
   const refresh = () => qc.invalidateQueries({ queryKey: ["invites"] });
   const pending = (invites.data ?? []).filter((i) => i.status === "pending");
   const revoke = async (i: Invite) => {
-    await api.del(`/admin/invites/${i.id}`).then(refresh, (e) => toast.error(errorMessage(e)));
+    const who = i.display_name || i.email;
+    if (!(await confirm({ title: who ? `Cancel the invitation for ${who}?` : "Cancel this invitation?", body: "The link stops working straight away. You can invite them again later.", confirmLabel: "Cancel invitation", destructive: true }))) return;
+    await api.del(`/admin/invites/${i.id}`).then(
+      () => {
+        refresh();
+        toast.success("Invitation cancelled");
+      },
+      (e) => toast.error(errorMessage(e)),
+    );
   };
   return (
     <SettingsCard
@@ -575,7 +583,7 @@ export function InvitesPanel() {
                   {i.spaces.length ? ` · ${i.spaces.map((s) => s.name ?? "a space").join(", ")}` : ""}
                 </div>
               </div>
-              <Button size="sm" variant="danger-ghost" onClick={() => revoke(i)}>
+              <Button size="sm" variant="danger-ghost" onClick={() => revoke(i)} aria-label={`Cancel the invitation for ${i.display_name || i.email || "this person"}`}>
                 Cancel
               </Button>
             </li>
