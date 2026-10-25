@@ -34,8 +34,11 @@ if [ "$UNINSTALL" -eq 1 ]; then
 fi
 
 mkdir -p "$APP" "$DATA" "$LOGS" "$HOME/Library/LaunchAgents"
-cp "$HERE/docveta" "$APP/docveta"
-chmod 755 "$APP/docveta"
+# A new file, not cp over the old one: macOS caches a program's code signature per file and
+# kills a binary that was changed in place (on Apple silicon it then won't start: "Killed: 9").
+cp "$HERE/docveta" "$APP/docveta.new"
+chmod 755 "$APP/docveta.new"
+mv -f "$APP/docveta.new" "$APP/docveta"
 [ -d "$HERE/ocr" ] && { rm -rf "$APP/ocr"; cp -R "$HERE/ocr" "$APP/ocr"; }
 # Downloaded files are quarantined by Gatekeeper; Docveta isn't notarised yet.
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
@@ -67,7 +70,13 @@ cat > "$PLIST" <<EOF
 </dict>
 </plist>
 EOF
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+# bootout above finishes in the background; until it has, bootstrap fails ("Input/output error").
+i=0
+until launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; do
+  i=$((i + 1))
+  if [ "$i" -ge 10 ]; then launchctl bootstrap "gui/$(id -u)" "$PLIST"; break; fi # shows why, and stops here
+  sleep 1
+done
 
 PORT_NOW=$(sed -n 's/^DOCVETA_LISTEN=.*:\([0-9]*\)$/\1/p' "$APP/docveta.conf")
 URL="http://localhost:${PORT_NOW:-$PORT}"
