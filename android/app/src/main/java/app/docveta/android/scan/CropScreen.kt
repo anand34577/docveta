@@ -3,6 +3,10 @@ package app.docveta.android.scan
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -92,14 +96,19 @@ fun CropScreen(session: ScanSession, pageId: String, onBack: () -> Unit) {
     var turns by remember(pageId) { mutableStateOf(page.turns) }
     var filter by remember(pageId) { mutableStateOf(page.filter) }
 
+    // A photo that can't be read (short of memory, say) must not close the app: say so instead.
     LaunchedEffect(pageId) {
-        val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { ImageIO.decodeUpright(page.file, 2400) } // sharp enough for the magnifier
+        val bmp = runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { ImageIO.decodeUpright(page.file, 2400) } }.getOrNull() // sharp enough for the magnifier
+        if (bmp == null) {
+            session.error = "Couldn't open this page. Try again, or delete it and scan it again."
+            return@LaunchedEffect
+        }
         scale = bmp.width.toFloat() / page.width
         image = bmp.asImageBitmap()
     }
     // The result preview follows the current corners, filter and turn.
     LaunchedEffect(showing, quad, filter, turns) {
-        if (showing) preview = session.preview(page.copy(quad = quad, filter = filter, turns = turns), 1800)
+        if (showing) runCatching { session.preview(page.copy(quad = quad, filter = filter, turns = turns), 1800) }.onSuccess { preview = it }
     }
 
     fun commit() {
@@ -219,9 +228,10 @@ fun CropScreen(session: ScanSession, pageId: String, onBack: () -> Unit) {
         // Tools
         Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
             Tool(Icons.Outlined.AutoFixHigh, if (finding) "Looking…" else "Auto") {
+                if (finding) return@Tool
                 finding = true
                 scope.launch {
-                    session.redetect(pageId)?.let { quad = it } ?: run { session.error = "Couldn't find the page edges. Drag the corners instead." }
+                    runCatching { session.redetect(pageId) }.getOrNull()?.let { quad = it } ?: run { session.error = "Couldn't find the page edges. Drag the corners instead." }
                     finding = false
                     showing = false
                 }
@@ -239,8 +249,9 @@ private fun Modifier.clickableDismiss(onClick: () -> Unit) = this.then(Modifier.
 
 @Composable
 private fun Tool(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    Column(Modifier.pointerInput(label) { detectTapGestures { onClick() } }.padding(horizontal = 10.dp, vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(icon, label, tint = Color.White, modifier = Modifier.size(24.dp))
+    // A real button, so TalkBack and switch access can use it (a bare tap detector is invisible to them).
+    Column(Modifier.clip(RoundedCornerShape(12.dp)).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 10.dp, vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(24.dp))
         Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall)
     }
 }
