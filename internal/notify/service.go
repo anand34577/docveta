@@ -267,6 +267,15 @@ func (s *Service) Channels(ctx context.Context, p *auth.Principal) ([]*Channel, 
 	return out, rows.Err()
 }
 
+// needWrite keeps read-only and upload-only tokens from choosing where notifications
+// (document titles, mentions) are sent.
+func needWrite(p *auth.Principal) error {
+	if p == nil || !p.Has(auth.ScopeWrite) {
+		return apperr.Forbidden("This token doesn't have the required scope")
+	}
+	return nil
+}
+
 func (s *Service) loadChannel(ctx context.Context, p *auth.Principal, id uuid.UUID) (*Channel, map[string]any, error) {
 	c, cfg, err := s.scanChannel(s.pool.QueryRow(ctx, `SELECT `+channelCols+` FROM notification_channels WHERE id=$1
 		AND (owner_id=$2 OR (owner_id IS NULL AND $3))`, id, p.UserID, p.Admin()))
@@ -287,6 +296,9 @@ func cleanEvents(evts []string) []string {
 }
 
 func (s *Service) CreateChannel(ctx context.Context, p *auth.Principal, in ChannelInput) (*Channel, error) {
+	if err := needWrite(p); err != nil {
+		return nil, err
+	}
 	if in.System && !p.Admin() {
 		return nil, apperr.Forbidden("Only administrators can create system channels")
 	}
@@ -313,6 +325,9 @@ func (s *Service) CreateChannel(ctx context.Context, p *auth.Principal, in Chann
 }
 
 func (s *Service) UpdateChannel(ctx context.Context, p *auth.Principal, id uuid.UUID, in ChannelInput) (*Channel, error) {
+	if err := needWrite(p); err != nil {
+		return nil, err
+	}
 	c, old, err := s.loadChannel(ctx, p, id)
 	if err != nil {
 		return nil, err
@@ -340,6 +355,9 @@ func (s *Service) UpdateChannel(ctx context.Context, p *auth.Principal, id uuid.
 }
 
 func (s *Service) DeleteChannel(ctx context.Context, p *auth.Principal, id uuid.UUID) error {
+	if err := needWrite(p); err != nil {
+		return err
+	}
 	if _, _, err := s.loadChannel(ctx, p, id); err != nil {
 		return err
 	}
