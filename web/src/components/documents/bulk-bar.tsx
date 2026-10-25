@@ -300,7 +300,7 @@ function MoveDialog({ busy, onClose, onApply }: { busy: boolean; onClose: () => 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent title="Move to another space" description="Tags, correspondent and type are matched by name in the new space (created if missing)." size="sm">
-        <Select value={space} onChange={(e) => setSpace(e.target.value)}>
+        <Select value={space} onChange={(e) => setSpace(e.target.value)} aria-label="Space to move to">
           {writable.map((s) => (
             <option key={s.id} value={s.id}>
               {spaceLabel(s)}
