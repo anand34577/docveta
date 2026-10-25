@@ -5,7 +5,7 @@ import { ArrowLeft, CheckCheck, ChevronLeft, ChevronRight, CloudOff, Download, F
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { invalidateDocuments, useAIEnabled, useDocument, useUpdateDocument } from "@/lib/queries";
-import { cn, spaceLabel, usePageTitle } from "@/lib/utils";
+import { cn, overlayOpen, spaceLabel, usePageTitle } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { useResultList } from "@/stores/ui";
 import { forgetDoc, rememberDoc, rememberSearch } from "@/lib/recent";
@@ -338,7 +338,7 @@ function Neighbours({ id }: { id: string }) {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      if (overlayOpen()) return;
       if (e.key === "j" && next) go(next);
       else if (e.key === "k" && prev) go(prev);
     };
