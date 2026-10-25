@@ -169,6 +169,39 @@ func TestDocumentEditing(t *testing.T) {
 	}
 }
 
+// TestDocumentLinkFieldNeedsAccess: a document-link field only takes documents the person can
+// see, so it can't be used to find out what exists in other spaces.
+func TestDocumentLinkFieldNeedsAccess(t *testing.T) {
+	e := newEnv(t)
+	c := e.c
+	var me struct {
+		Spaces []struct{ ID, Kind string } `json:"spaces"`
+	}
+	c.do("GET", "/api/v1/me", nil, 200, &me)
+	var personal string
+	for _, s := range me.Spaces {
+		if s.Kind == "personal" {
+			personal = s.ID
+		}
+	}
+	var link struct{ ID string }
+	c.do("POST", "/api/v1/custom-fields", map[string]any{"space_id": e.family, "name": "See also", "data_type": "document"}, 201, &link)
+	private := c.upload(personal, "private.pdf", minimalPDF("a document only the admin can see"))
+	shared := c.upload(e.family, "shared.pdf", minimalPDF("a document everyone in the family can see"))
+
+	var kid struct{ ID string }
+	c.do("POST", "/api/v1/admin/users", map[string]any{"email": "kid@example.com", "display_name": "Kid", "password": "another-long-pw"}, 201, &kid)
+	c.do("PUT", "/api/v1/spaces/"+e.family+"/members/"+kid.ID, map[string]any{"role": "editor"}, 204, nil)
+	k := newClient(t, e.srv.URL)
+	k.do("POST", "/api/v1/auth/login", map[string]any{"email": "kid@example.com", "password": "another-long-pw"}, 200, nil)
+	k.do("PATCH", "/api/v1/documents/"+shared.ID, map[string]any{"custom_fields": map[string]any{link.ID: private.ID}}, 422, nil)
+	k.do("PATCH", "/api/v1/documents/"+shared.ID, map[string]any{"custom_fields": map[string]any{link.ID: "00000000-0000-4000-8000-000000000000"}}, 422, nil)
+	other := k.upload(e.family, "other.pdf", minimalPDF("another family document the kid can link to"))
+	k.do("PATCH", "/api/v1/documents/"+shared.ID, map[string]any{"custom_fields": map[string]any{link.ID: other.ID}}, 200, nil)
+	// The admin can see both spaces, so linking the private document works for them.
+	c.do("PATCH", "/api/v1/documents/"+shared.ID, map[string]any{"custom_fields": map[string]any{link.ID: private.ID}}, 200, nil)
+}
+
 // TestBulkTagsByName tags documents from different spaces with one tag name.
 func TestBulkTagsByName(t *testing.T) {
 	e := newEnv(t)

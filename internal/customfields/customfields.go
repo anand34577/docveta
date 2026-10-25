@@ -480,9 +480,17 @@ func SetValues(ctx context.Context, q db.Querier, docID, spaceID uuid.UUID, in m
 			continue
 		}
 		if f.DataType == Document && st != nil {
-			// The linked document must exist.
+			// The linked document must exist and, when a person sets the value, be one they can
+			// see: otherwise the answer would tell them whether a document exists in a space they
+			// aren't in. Background jobs and imports (no person) only need it to exist.
+			var viewer *uuid.UUID
+			if p := auth.From(ctx); p != nil && (p.Kind == auth.KindSession || p.Kind == auth.KindToken) {
+				viewer = &p.UserID
+			}
 			var ok bool
-			if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM documents WHERE id=$1::uuid)`, *st.text).Scan(&ok); err != nil || !ok {
+			if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM documents d WHERE d.id=$1::uuid
+				AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM space_members m WHERE m.space_id=d.space_id AND m.user_id=$2)))`,
+				*st.text, viewer).Scan(&ok); err != nil || !ok {
 				v.Add("custom_fields."+key, "%s: that document doesn't exist", f.Name)
 				continue
 			}
