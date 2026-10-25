@@ -69,6 +69,9 @@ func newEnvWith(t *testing.T, adjust func(*config.Config)) *env {
 	if _, err := conn.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS citext SCHEMA public; CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public"); err != nil {
 		t.Fatal(err)
 	}
+	// pgvector too, when the server has it: created by the migration instead, it would land in
+	// one test's schema, vanish with it, and leave the other environments without its type.
+	_, _ = conn.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
 	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
