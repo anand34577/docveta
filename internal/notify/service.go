@@ -162,7 +162,7 @@ func validURL(raw string) bool {
 
 // validateConfig checks a channel config; old supplies existing secrets when the client
 // sends back the redacted placeholder.
-func validateConfig(typ string, raw json.RawMessage, old map[string]any) (map[string]any, error) {
+func validateConfig(typ string, raw json.RawMessage, old map[string]any, system bool) (map[string]any, error) {
 	var cfg map[string]any
 	if len(raw) == 0 {
 		raw = []byte("{}")
@@ -217,6 +217,8 @@ func validateConfig(typ string, raw json.RawMessage, old map[string]any) (map[st
 		to := str("to")
 		if _, err := mail.ParseAddress(to); to != "" && err != nil {
 			v.Add("config.to", "Enter a valid email address")
+		} else if to == "" && system {
+			v.Add("config.to", "System channels have no account email; enter the address to send to")
 		}
 		cfg = map[string]any{"to": to}
 	default:
@@ -288,7 +290,7 @@ func (s *Service) CreateChannel(ctx context.Context, p *auth.Principal, in Chann
 	if in.System && !p.Admin() {
 		return nil, apperr.Forbidden("Only administrators can create system channels")
 	}
-	cfg, err := validateConfig(in.Type, in.Config, nil)
+	cfg, err := validateConfig(in.Type, in.Config, nil, in.System)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +319,7 @@ func (s *Service) UpdateChannel(ctx context.Context, p *auth.Principal, id uuid.
 	}
 	sealed := []byte(nil)
 	if len(in.Config) > 0 {
-		cfg, err := validateConfig(c.Type, in.Config, old)
+		cfg, err := validateConfig(c.Type, in.Config, old, c.System)
 		if err != nil {
 			return nil, err
 		}
@@ -353,9 +355,15 @@ func (s *Service) TestChannel(ctx context.Context, p *auth.Principal, id uuid.UU
 	}
 	msg := Message{Title: "Docveta test notification", Body: "If you can read this, \"" + c.Name + "\" is set up correctly.",
 		URL: s.link(ctx, "/"), Severity: "info", Event: jobs.Event{Type: "test", At: time.Now()}}
-	if err := s.deliver(ctx, c.Type, cfg, p.UserID, msg); err != nil {
+	// Send as the channel's real owner so the test matches what events do (system channels have none).
+	owner := p.UserID
+	if c.System {
+		owner = uuid.Nil
+	}
+	if err := s.deliver(ctx, c.Type, cfg, owner, msg); err != nil {
 		return &apperr.Error{Kind: apperr.KindValidation, Code: "delivery_failed", Msg: "Sending failed: " + err.Error()}
 	}
+	_, _ = s.pool.Exec(ctx, `UPDATE notification_channels SET failure_count=0, last_error='' WHERE id=$1`, id)
 	return nil
 }
 
