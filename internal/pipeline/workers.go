@@ -381,8 +381,8 @@ func (s *Service) tryLease(ctx context.Context, workerID uuid.UUID, capacity int
 		if len(types) > 0 && !slices.Contains(types, c.TaskType) {
 			continue
 		}
-		limit := min(max(capacity, 1), c.Concurrency) - countType(out, c.TaskType)
-		if limit <= 0 || active >= totalConcurrency(caps) {
+		limit := leaseLimit(capacity, out, c, caps, active)
+		if limit <= 0 {
 			continue
 		}
 		mimes := c.InputMime
@@ -477,6 +477,12 @@ func (s *Service) tryLease(ctx context.Context, workerID uuid.UUID, capacity int
 		out = append(out, leased...)
 	}
 	return out, nil
+}
+
+// leaseLimit is how many more tasks capability c may hand out in this lease: what is left of
+// the capacity asked for (across all task types), of c's concurrency, and of the worker's.
+func leaseLimit(capacity int, leased []LeasedTask, c Capability, caps []Capability, active int) int {
+	return min(max(capacity, 1)-len(leased), c.Concurrency-countType(leased, c.TaskType), totalConcurrency(caps)-active)
 }
 
 func subset(a, b []string) bool {
