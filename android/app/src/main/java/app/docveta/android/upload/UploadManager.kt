@@ -20,6 +20,7 @@ import app.docveta.android.scan.PhoneOcr
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -72,8 +73,21 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
             .filter { File(it.path).exists() || !it.active }
     }.getOrDefault(emptyList())
 
+    /**
+     * Written to a side file and then moved over the old list, so being killed mid-write (a dead
+     * battery) can't leave half a list that loads as an empty queue. One writer at a time: reading
+     * text and uploading change the queue from two workers.
+     */
+    @Synchronized
     private fun save() {
-        runCatching { stateFile.writeText(AppJson.encodeToString(ListSerializer(UploadItem.serializer()), _items.value)) }
+        runCatching {
+            val tmp = File(dir, "queue.json.tmp")
+            tmp.writeText(AppJson.encodeToString(ListSerializer(UploadItem.serializer()), _items.value))
+            if (!tmp.renameTo(stateFile)) {
+                tmp.copyTo(stateFile, overwrite = true)
+                tmp.delete()
+            }
+        }
     }
 
     private fun change(id: String, f: (UploadItem) -> UploadItem) {
@@ -212,6 +226,11 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
                 }
                 file.delete()
                 change(item.id) { it.copy(status = "done", progress = 1f, docId = docId, tusUrl = null) }
+            } catch (e: CancellationException) {
+                // Android stopped the work (the Wi-Fi went, say): leave it queued for the next run,
+                // not "uploading", which nothing would pick up again until the app restarts.
+                change(item.id) { if (it.status == "uploading") it.copy(status = "queued") else it }
+                throw e
             } catch (e: ApiException) {
                 when {
                     e.code == "duplicate_document" -> change(item.id) { it.copy(status = "duplicate", error = e.message, duplicateOfId = e.extra["document_id"], duplicateTitle = e.extra["title"], tusUrl = null) }
@@ -226,6 +245,9 @@ class UploadManager(private val context: Context, private val api: ApiClient, pr
                     }
                     else -> change(item.id) { it.copy(status = "error", error = e.message, tusUrl = if (e.status in 500..599) it.tusUrl else null) }
                 }
+            } catch (e: Exception) {
+                // Anything else (the file can't be read, no server address any more): this one fails, the rest still go.
+                change(item.id) { it.copy(status = "error", error = "Couldn't send this file") }
             }
         }
         if (_items.value.any { it.status == "queued" && it.ocr == "pending" }) retryLater = true
