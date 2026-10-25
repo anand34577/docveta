@@ -76,7 +76,9 @@ class ApiClient(
         val token = session.token
         val base = session.serverUrl
         // Only talk credentials to our own server (images may come from nowhere else, but be strict).
-        val ours = base != null && chain.request().url.toString().startsWith(base)
+        // A whole path segment must match: "https://docs.example.com" is not "https://docs.example.com.evil.net".
+        val url = chain.request().url.toString()
+        val ours = !base.isNullOrEmpty() && (url == base || url.startsWith("$base/") || url.startsWith("$base?"))
         if (ours) {
             if (token != null) b.header("Authorization", "Bearer $token")
             b.header("Origin", origin(base!!))
