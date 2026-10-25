@@ -5,6 +5,82 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-10-25
+
+### Security
+- Built with Go 1.26.10 (fixes GO-2026-6809 in crypto/x509, used when sending email) and the
+  latest releases of Docveta's libraries. Updating is recommended.
+- The single sign-on return address can no longer send people to another website after they sign in.
+- Read-only API tokens can no longer add or remove space members, delete spaces or stop share
+  links, and upload-only or read-only tokens can no longer set up notification channels (which
+  could have sent document titles elsewhere).
+- Share links stop showing a document's files once it is in the Trash or its creator can no
+  longer see it.
+- The database setup page asks for the setup code when another website tries to use it through
+  the visitor's browser (DNS rebinding).
+- Other websites can no longer sign a visitor in to an account of theirs: sign-in, invitation and
+  two-step requests from other sites are refused.
+- Document-link custom fields only accept documents you can see, so they no longer tell whether a
+  document exists in a space you aren't in.
+- Android: the sign-in is sent only to your Docveta server, never to an address that merely
+  starts like it.
+
+### Fixed
+- Retrying failed processing tasks no longer brings back an older text recognition run and
+  overwrites the document's current text; failures that reprocessing has replaced are cancelled
+  instead, and tasks of documents in the Trash are skipped.
+- Retrying a document more than a month after its text recognition failed keeps the pages that
+  had already been read, such as a PDF's own text.
+- One person's unusual time zone setting no longer stops the weekly summary for everyone, and the
+  profile no longer accepts an empty or "Local" time zone.
+- Searching for several tags (`tag:tax tag:2024`) finds documents with all of them, and a tag that
+  doesn't exist matches nothing.
+- A scanned batch whose split was interrupted no longer creates its documents twice.
+- Resumable uploads can no longer corrupt a file when a chunk is retried while another is still
+  being written.
+- Two owners or administrators changing each other's roles at the same moment can no longer leave
+  a space without an owner, or the server without an administrator.
+- A worker asking for one task is never given more than one; search results keep their snippets
+  when a document is deleted at the same moment; a damaged search cursor is "Invalid cursor", not
+  a server error.
+- System email channels ask for the address to send to, and **Test** on a channel clears its
+  failure count when it works.
+- Text recognition engines retry sending a finished result when the connection drops or Docveta
+  is restarting, instead of reading the whole document again. An engine that can't start now
+  stops with an error in its log instead of staying online without reading anything, and
+  Tesseract errors go to another engine right away instead of being retried as timeouts.
+- Searchable PDFs: the hidden text lines up on PDF pages that were cropped.
+- Web: editing a document's title no longer sometimes warns that someone else just changed it.
+- Web: in the Inbox, Enter on a button no longer also opens the document, and typing in an open
+  dropdown list no longer moves through documents, marks them reviewed or accepts suggestions.
+- Web: the **Notifications** page updates as notifications arrive and after **Mark all read**;
+  space document counts update after uploading, moving or deleting; **Home** says when documents
+  couldn't be loaded, with **Try again**.
+- Web: stepping quickly between documents no longer shows an earlier document's text or the
+  wrong kind of preview; **Upload a new version** works again with the same file after a failed
+  try; cancelling an invitation asks first.
+- Web: documents can be selected in the grid on phones and tablets, and selection checkboxes
+  show when reached with the keyboard.
+- Android: an upload interrupted by Android (for example when Wi-Fi drops with "Wi-Fi only" on)
+  no longer stays stuck at "uploading", and the upload queue can't be lost if the phone switches
+  off while saving it.
+- Android: the scanner no longer crashes on devices without a usable back camera, no longer
+  leaves the camera on after you leave it quickly, offers the app's settings when the camera was
+  refused for good, and the shutter no longer stays disabled after a photo that couldn't be used.
+- Android: the crop screen shows a message instead of closing the app when a page can't be
+  opened, and going back while a PDF page is being drawn no longer breaks the viewer.
+- Android: switching dark mode or the font size no longer offers shared files a second time or
+  asks to unlock again; sharing files says when some couldn't be read; stopping a share link the
+  server couldn't stop keeps it listed; the scan upload button says correctly what will be sent.
+- Android: the shutter, page thumbnail and crop tools work with TalkBack.
+- macOS: upgrading with `install.sh` no longer leaves Docveta unable to start on Apple silicon.
+- Linux: upgrading or uninstalling really stops a separately run Allwinner NPU engine.
+- Windows installer: upgrades wait for Docveta to stop fully and replace the OCR engine as a whole.
+- Pre-release versions are no longer published as the latest release or `latest` Docker image,
+  and Docker images report their version without a leading "v".
+- Docs: the Docker backup instructions now back up the data volume and keep the database password
+  volume with the database; `added:>30d` is explained correctly (older than 30 days).
+
 ## [0.17.1] - 2026-10-13
 
 ### Fixed
