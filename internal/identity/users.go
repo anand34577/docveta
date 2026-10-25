@@ -327,6 +327,9 @@ func (s *Service) AdminUpdateUser(ctx context.Context, p *auth.Principal, id uui
 		hash = &h
 	}
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockAdmins(ctx, tx); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `UPDATE users SET display_name=coalesce($2,display_name), is_admin=coalesce($3,is_admin),
 			status=coalesce($4,status), password_hash=coalesce($5,password_hash), updated_at=now() WHERE id=$1`,
 			id, in.DisplayName, in.IsAdmin, in.Status, hash)
@@ -366,6 +369,9 @@ func (s *Service) DeleteUser(ctx context.Context, p *auth.Principal, id uuid.UUI
 		return apperr.Conflict("self_delete", "You can't delete your own account here")
 	}
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockAdmins(ctx, tx); err != nil {
+			return err
+		}
 		var docs int
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM documents d JOIN spaces s ON s.id=d.space_id
 			JOIN space_members m ON m.space_id=s.id AND m.user_id=$1 WHERE s.kind='personal'`, id).Scan(&docs); err != nil {
@@ -489,6 +495,14 @@ func (s *Service) ChangePassword(ctx context.Context, p *auth.Principal, current
 	if err == nil {
 		s.audit.Record(ctx, nil, "user.password_change", "user", p.UserID.String(), nil)
 	}
+	return err
+}
+
+// lockAdmins makes changes that could remove the last active administrator take turns, so
+// the check after each one sees the others: two administrators demoting or disabling each
+// other at the same moment would otherwise both pass it.
+func lockAdmins(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, `SELECT id FROM users WHERE is_admin AND status='active' ORDER BY id FOR UPDATE`)
 	return err
 }
 
