@@ -95,7 +95,7 @@ fun MoreScreen(onNavigate: (String) -> Unit, uploadsActive: Int) {
                 SpaceDot(s, size = 10.dp)
                 Spacer(Modifier.width(12.dp))
                 Text(s.label, Modifier.weight(1f))
-                Text("${s.documentCount}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("%,d".format(s.documentCount), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(8.dp))
                 Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.outline)
             }

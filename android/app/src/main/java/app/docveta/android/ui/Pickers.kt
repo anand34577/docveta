@@ -70,7 +70,17 @@ fun TaxonomyPicker(
     val scope = rememberCoroutineScope()
     LaunchedEffect(kind, spaceId) { items = runCatching { c.repo.taxonomy(kind, spaceId) }.getOrDefault(emptyList()) }
     val all = items.orEmpty()
-    val shown = all.filter { it.name.contains(q.trim(), ignoreCase = true) }
+    // What was chosen when the sheet opened first, then names starting with what was typed, then
+    // the most used: with thousands of senders the useful ones would otherwise be far down.
+    val needle = q.trim()
+    val shown = remember(all, needle) {
+        all.filter { it.name.contains(needle, ignoreCase = true) }.sortedWith(
+            compareByDescending<Taxonomy> { it.id in selected }
+                .thenByDescending { needle.isNotEmpty() && it.name.startsWith(needle, ignoreCase = true) }
+                .thenByDescending { it.documentCount }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name },
+        )
+    }
     val exact = all.any { it.name.equals(q.trim(), ignoreCase = true) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 16.dp).imePadding()) {
@@ -98,6 +108,7 @@ fun TaxonomyPicker(
                 }
                 if (items == null) item { LoadingBox(Modifier.fillMaxWidth().height(80.dp)) }
                 else if (shown.isEmpty() && q.isBlank()) item { Text("Nothing here yet.", Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                else if (shown.isEmpty() && !(allowCreate && spaceId != null)) item { Text("No matches.", Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 items(shown, key = { it.id }) { t ->
                     val on = t.id in picked
                     Row(Modifier.fillMaxWidth().clickable {
@@ -111,7 +122,7 @@ fun TaxonomyPicker(
                             Spacer(Modifier.width(8.dp))
                         }
                         Text(t.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                        Text(t.documentCount.toString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("%,d".format(t.documentCount), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
