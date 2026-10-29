@@ -116,7 +116,10 @@ func TestSortOrdersAcrossSpaces(t *testing.T) {
 		if i%2 == 0 {
 			space = personal
 		}
-		d := c.upload(space, fmt.Sprintf("sorted%d.pdf", i), minimalPDF(fmt.Sprintf("Sorted paper %d", i)))
+		d := c.upload(space, fmt.Sprintf("sorted%d.pdf", i), minimalPDF(fmt.Sprintf("Sorted paper number %d about the water supply of the flat", i)))
+		// Processing finishing later would change the document again, and with it the
+		// "recently changed" order checked below.
+		c.waitStatus(d.ID, "ready")
 		patch := map[string]any{"title": titles[i]}
 		if dates[i] != "" {
 			patch["document_date"] = dates[i]
