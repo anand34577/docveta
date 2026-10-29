@@ -162,7 +162,11 @@ func Start(ctx context.Context, dataDir string, log *slog.Logger) (string, func(
 		if port, err = freePort(); err != nil {
 			return "", nil, err
 		}
-		conf := fmt.Sprintf("listen_addresses = '127.0.0.1'\nport = %d\nunix_socket_directories = ''\n", port)
+		// Planner settings as in the Docker setup: the data folder is on an SSD or SD card, where
+		// reading a few thousand rows by key beats reading a whole large table; memory that still
+		// suits a board with 1 GB.
+		conf := fmt.Sprintf("listen_addresses = '127.0.0.1'\nport = %d\nunix_socket_directories = ''\n"+
+			"random_page_cost = 1.1\nwork_mem = '8MB'\nmaintenance_work_mem = '64MB'\n", port)
 		if err := os.WriteFile(filepath.Join(p.data, "docveta.conf"), []byte(conf), 0o600); err != nil {
 			return "", nil, err
 		}

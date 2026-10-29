@@ -86,11 +86,17 @@ func (l *Log) List(ctx context.Context, p *auth.Principal, action string, before
 	if before <= 0 {
 		before = 1<<63 - 1
 	}
+	// An action prefix is a range of audit_log_action_idx (byte order, so "share" ends before
+	// "share￿"): finding a rare kind of entry among millions of sign-ins reads just those.
+	cond, args := "", []any{before, limit}
+	if action != "" {
+		cond, args = ` AND a.action COLLATE "C" >= $3 AND a.action COLLATE "C" < $4`, append(args, action, action+"￿")
+	}
 	rows, err := l.pool.Query(ctx, `SELECT a.id, a.at, a.actor_id, coalesce(u.display_name,''), a.actor_type, a.action,
 		a.target_type, a.target_id, a.ip, a.user_agent, a.details
 		FROM audit_log a LEFT JOIN users u ON u.id=a.actor_id
-		WHERE a.id < $1 AND ($2='' OR a.action LIKE $2 || '%')
-		ORDER BY a.id DESC LIMIT $3`, before, action, limit)
+		WHERE a.id < $1`+cond+`
+		ORDER BY a.id DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -4773,7 +4773,7 @@ components:
           enum:
           - inbox
           - failed
-          description: Pick the documents on the server instead of ids ("inbox" = your Inbox, "failed" = documents whose processing failed; up to 5000 per call)
+          description: Pick the documents on the server instead of ids ("inbox" = your Inbox, "failed" = documents whose processing failed; up to 1000 per call)
         ids:
           items:
             format: uuid
