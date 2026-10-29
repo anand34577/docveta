@@ -30,7 +30,7 @@ func DecodeImage(r io.ReadSeeker) (image.Image, int, error) {
 	if err != nil {
 		return nil, 1, err
 	}
-	if int64(cfg.Width)*int64(cfg.Height) > 120_000_000 {
+	if int64(cfg.Width)*int64(cfg.Height) > maxPixels {
 		return nil, 1, errTooManyPixels
 	}
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
@@ -45,6 +45,10 @@ type imgErr string
 func (e imgErr) Error() string { return string(e) }
 
 const errTooManyPixels = imgErr("image is too large to process")
+
+// maxPixels bounds the images decoded in memory (four bytes a pixel): far beyond any scan or
+// phone photo, short of what would exhaust a small server.
+const maxPixels = 120_000_000
 
 // exifOrientation reads the EXIF orientation tag (0x0112) from a JPEG.
 func exifOrientation(r io.ReadSeeker) (int, error) {

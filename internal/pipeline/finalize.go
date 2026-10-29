@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,6 +63,7 @@ func (s *Service) finalize(ctx context.Context, runID uuid.UUID) error {
 	cfg := loadSettings(ctx, s.settings)
 	var notifyFail *docRow
 	var failMsg string
+	archiveQueued := false
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var docID uuid.UUID
 		var status string
@@ -195,17 +197,18 @@ func (s *Service) finalize(ctx context.Context, runID uuid.UUID) error {
 			if _, err := tx.Exec(ctx, `DELETE FROM pages WHERE document_id=$1`, docID); err != nil {
 				return err
 			}
+			// All pages in one statement: a long scan has hundreds of them.
 			maxPage := 0
-			for _, p := range merged.Pages {
-				var conf any
-				if p.Confidence != nil {
-					conf = *p.Confidence
-				}
-				if _, err := tx.Exec(ctx, `INSERT INTO pages (document_id, page_no, ocr_run_id, text, confidence, rotation)
-					VALUES ($1,$2,$3,$4,$5,$6)`, docID, p.Page, runID, textindex.Normalize(p.Text), conf, p.Rotation); err != nil {
-					return err
-				}
+			nos, texts, rots := make([]int32, len(merged.Pages)), make([]string, len(merged.Pages)), make([]int32, len(merged.Pages))
+			confs := make([]*float64, len(merged.Pages))
+			for i, p := range merged.Pages {
+				nos[i], texts[i], rots[i], confs[i] = int32(p.Page), textindex.Normalize(p.Text), int32(p.Rotation), p.Confidence
 				maxPage = max(maxPage, p.Page)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO pages (document_id, page_no, ocr_run_id, text, confidence, rotation)
+				SELECT $1, p.no, $2, p.text, p.conf, p.rot FROM unnest($3::int[], $4::text[], $5::float8[], $6::int[]) AS p(no, text, conf, rot)`,
+				docID, runID, nos, texts, confs, rots); err != nil {
+				return err
 			}
 			if maxPage > 0 {
 				if _, err := tx.Exec(ctx, `UPDATE documents SET page_count=greatest(coalesce(page_count,0), $2) WHERE id=$1`, docID, maxPage); err != nil {
@@ -233,7 +236,7 @@ func (s *Service) finalize(ctx context.Context, runID uuid.UUID) error {
 					VALUES ($1,$2,$3,'archive',$4,$5,$6,$7)`, uuid.Must(uuid.NewV7()), docID, runID, workMime, payload, jobs.PriorityBulk, cfg.MaxAttempts); err != nil {
 					return err
 				}
-				defer s.signal()
+				archiveQueued = true // workers are woken once this is committed
 			}
 		}
 
@@ -266,6 +269,9 @@ func (s *Service) finalize(ctx context.Context, runID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
+	if archiveQueued {
+		s.signal()
+	}
 	if notifyFail != nil && notifyFail.OwnerID != nil {
 		id := notifyFail.ID
 		_ = s.queue.Emit(ctx, jobs.Event{Type: "document.failed", Title: "Couldn't read text in \"" + notifyFail.Title + "\"",
@@ -288,11 +294,7 @@ func sortedPageKeys(m map[int]OCRPage) []int {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
+	slices.Sort(keys)
 	return keys
 }
 

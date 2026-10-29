@@ -152,7 +152,7 @@ func (s *Service) SetWorkerEnabled(ctx context.Context, p *auth.Principal, id uu
 	if !p.Admin() {
 		return apperr.Forbidden("")
 	}
-	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE workers SET enabled=$2 WHERE id=$1`, id, enabled)
 		if err != nil {
 			return err
@@ -165,13 +165,17 @@ func (s *Service) SetWorkerEnabled(ctx context.Context, p *auth.Principal, id uu
 		}
 		return nil
 	})
+	if err == nil && !enabled {
+		s.signal() // its tasks are back in the queue
+	}
+	return err
 }
 
 func (s *Service) DeleteWorker(ctx context.Context, p *auth.Principal, id uuid.UUID) error {
 	if !p.Admin() {
 		return apperr.Forbidden("")
 	}
-	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := s.releaseWorkerTasks(ctx, tx, id); err != nil {
 			return err
 		}
@@ -181,15 +185,17 @@ func (s *Service) DeleteWorker(ctx context.Context, p *auth.Principal, id uuid.U
 		}
 		return err
 	})
+	if err == nil {
+		s.signal() // its tasks are back in the queue
+	}
+	return err
 }
 
-// releaseWorkerTasks returns a worker's leased tasks to the queue immediately.
+// releaseWorkerTasks returns a worker's leased tasks to the queue immediately; the caller
+// wakes the other workers once that is committed.
 func (s *Service) releaseWorkerTasks(ctx context.Context, tx pgx.Tx, workerID uuid.UUID) error {
 	_, err := tx.Exec(ctx, `UPDATE processing_tasks SET status='queued', lease_id=NULL, worker_id=NULL, lease_expires_at=NULL,
 		attempt=greatest(attempt-1, 0), updated_at=now() WHERE worker_id=$1 AND status='leased'`, workerID)
-	if err == nil {
-		defer s.signal()
-	}
 	return err
 }
 
@@ -746,7 +752,8 @@ type FailRequest struct {
 // ones exclude this engine and fall back to another capable engine if any exists.
 func (s *Service) Fail(ctx context.Context, p *auth.Principal, taskID uuid.UUID, req FailRequest) error {
 	msg := truncate(strings.TrimSpace(req.Code+": "+req.Message), 500)
-	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+	requeued := false
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		t, err := s.leasedTask(ctx, tx, p, taskID, req.LeaseID, true)
 		if err != nil {
 			return err
@@ -794,26 +801,29 @@ func (s *Service) Fail(ctx context.Context, p *auth.Principal, taskID uuid.UUID,
 		if status == "failed" && t.RunID != nil && t.Type == "ocr" {
 			return s.maybeFinalizeTx(ctx, tx, *t.RunID)
 		}
-		if status == "queued" {
-			defer s.signal()
-		}
+		requeued = status == "queued"
 		return nil
 	})
+	if err == nil && requeued {
+		s.signal() // once committed, so waiting workers find it
+	}
+	return err
 }
 
 // Release returns a task to the queue without counting an attempt (graceful shutdown).
 func (s *Service) Release(ctx context.Context, p *auth.Principal, taskID, leaseID uuid.UUID) error {
-	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := s.leasedTask(ctx, tx, p, taskID, leaseID, true); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE processing_tasks SET status='queued', lease_id=NULL, worker_id=NULL, lease_expires_at=NULL,
 			attempt=greatest(attempt-1,0), updated_at=now() WHERE id=$1`, taskID)
-		if err == nil {
-			defer s.signal()
-		}
 		return err
 	})
+	if err == nil {
+		s.signal() // once committed, so waiting workers find it
+	}
+	return err
 }
 
 func backoff(attempt int) time.Duration {
