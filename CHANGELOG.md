@@ -5,6 +5,13 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-29
+
+### Security
+- Built with go-jose 4.1.6, which fixes CVE-2026-116587: a key set from the single sign-on
+  provider could make Docveta spend excessive resources parsing it. Also built with
+  golang.org/x/net 0.62.0. Updating is recommended if you use single sign-on.
+
 ## [0.18.0] - 2026-10-29
 
 Docveta at scale: tested against a library of 210,000 documents, the lists, counts, search and
