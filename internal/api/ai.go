@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 
 	"github.com/anand34577/docveta/internal/ai"
 	"github.com/anand34577/docveta/internal/apperr"
@@ -94,10 +95,17 @@ func (a *API) registerAI(mux router) {
 		if err != nil {
 			return nil, err
 		}
-		for _, id := range ids {
-			if err := a.Queue.Insert(r.Context(), jobs.AIArgs{DocumentID: id, Embed: true}, &river.InsertOpts{Priority: jobs.PriorityBackground, MaxAttempts: 2}); err != nil {
-				return nil, err
-			}
+		// In batches, and once per document: a whole library is queued in seconds, and asking
+		// again while it is being worked through doesn't queue it twice.
+		args := make([]river.JobArgs, len(ids))
+		for i, id := range ids {
+			args[i] = jobs.AIArgs{DocumentID: id, Embed: true}
+		}
+		if err := a.Queue.InsertMany(r.Context(), args, &river.InsertOpts{Priority: jobs.PriorityBackground, MaxAttempts: 2,
+			// Only against jobs still to run: after switching models, documents done before are queued again.
+			UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStatePending,
+				rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled}}}); err != nil {
+			return nil, err
 		}
 		return map[string]int{"queued": len(ids)}, nil
 	}))

@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -81,7 +81,7 @@ func digestBody(added, inbox, failed, upcoming int) string {
 		if n == 1 {
 			return "1 " + one
 		}
-		return fmt.Sprintf("%d %s", n, many)
+		return thousands(n) + " " + many
 	}
 	var parts []string
 	if added > 0 {
@@ -100,4 +100,13 @@ func digestBody(added, inbox, failed, upcoming int) string {
 		return ""
 	}
 	return strings.Join(parts, " · ") + "."
+}
+
+// thousands writes a count as people read it: 12,480 rather than 12480.
+func thousands(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0 && s[i-1] != '-'; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }

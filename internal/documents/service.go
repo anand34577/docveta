@@ -237,6 +237,7 @@ func (s *Service) Ingest(ctx context.Context, p *auth.Principal, in IngestInput,
 	if err != nil {
 		return nil, err
 	}
+	s.spaces.ForgetTotals(in.SpaceID)
 	return s.get(ctx, id)
 }
 
@@ -435,6 +436,9 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id uuid.UUID, i
 	})
 	if err != nil {
 		return nil, err
+	}
+	if in.SpaceID.Set {
+		s.spaces.ForgetTotals() // moved: two spaces' counts changed
 	}
 	return s.get(ctx, id)
 }
@@ -757,7 +761,7 @@ func (s *Service) AssignASN(ctx context.Context, p *auth.Principal, id uuid.UUID
 type BulkInput struct {
 	IDs []uuid.UUID `json:"ids"`
 	// Select picks the documents on the server instead of IDs: "inbox" = the caller's Inbox,
-	// "failed" = documents whose processing failed (up to 5000 per call; BulkResult.Remaining
+	// "failed" = documents whose processing failed (up to 1000 per call; BulkResult.Remaining
 	// says whether to call again).
 	Select string      `json:"select,omitempty"`
 	Action string      `json:"action"` // update | trash | restore | purge | reprocess | suggest
@@ -778,6 +782,11 @@ type BulkError struct {
 
 const bulkMax = 5000
 
+// selectBatch is how many documents one call with Select works through: each takes a few
+// milliseconds, and a call has to finish before a reverse proxy gives up on it (often after a
+// minute), even on a small board.
+const selectBatch = 1000
+
 func (s *Service) Bulk(ctx context.Context, p *auth.Principal, in BulkInput) (*BulkResult, error) {
 	selected := false
 	where := map[string]string{"inbox": "inbox", "failed": "status='failed'"}[in.Select]
@@ -789,7 +798,7 @@ func (s *Service) Bulk(ctx context.Context, p *auth.Principal, in BulkInput) (*B
 			return nil, err
 		}
 		rows, err := s.pool.Query(ctx, `SELECT id FROM documents WHERE `+where+` AND deleted_at IS NULL AND space_id = ANY($1)
-			ORDER BY added_at LIMIT $2`, visible, bulkMax)
+			ORDER BY added_at LIMIT $2`, visible, selectBatch)
 		if err != nil {
 			return nil, err
 		}
@@ -826,6 +835,9 @@ func (s *Service) bulk(ctx context.Context, p *auth.Principal, in BulkInput) (*B
 		switch in.Action {
 		case "update":
 			err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error { return s.updateTx(ctx, tx, p, id, in.Update, nil) })
+			if err == nil && in.Update.SpaceID.Set {
+				s.spaces.ForgetTotals()
+			}
 		case "trash":
 			err = s.Trash(ctx, p, id)
 		case "restore":
@@ -859,6 +871,8 @@ func (s *Service) bulk(ctx context.Context, p *auth.Principal, in BulkInput) (*B
 // ---------------------------------------------------------------------------
 
 func (s *Service) Trash(ctx context.Context, p *auth.Principal, id uuid.UUID) error {
+	var space uuid.UUID
+	defer func() { s.spaces.ForgetTotals(space) }()
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		raw, _, err := s.authorize(ctx, tx, p, id, spaces.ActEdit, true)
 		if err != nil {
@@ -867,6 +881,7 @@ func (s *Service) Trash(ctx context.Context, p *auth.Principal, id uuid.UUID) er
 		if raw.Deleted {
 			return nil
 		}
+		space = raw.SpaceID
 		if _, err := tx.Exec(ctx, `UPDATE documents SET deleted_at=now(), version=version+1 WHERE id=$1`, id); err != nil {
 			return err
 		}
@@ -879,6 +894,8 @@ func (s *Service) Trash(ctx context.Context, p *auth.Principal, id uuid.UUID) er
 }
 
 func (s *Service) Restore(ctx context.Context, p *auth.Principal, id uuid.UUID) error {
+	var space uuid.UUID
+	defer func() { s.spaces.ForgetTotals(space) }()
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		raw, _, err := s.authorize(ctx, tx, p, id, spaces.ActEdit, true)
 		if err != nil {
@@ -887,6 +904,7 @@ func (s *Service) Restore(ctx context.Context, p *auth.Principal, id uuid.UUID) 
 		if !raw.Deleted {
 			return nil
 		}
+		space = raw.SpaceID
 		if _, err := tx.Exec(ctx, `UPDATE documents SET deleted_at=NULL, version=version+1 WHERE id=$1`, id); err != nil {
 			return err
 		}
@@ -1201,16 +1219,24 @@ func (s *Service) Stats(ctx context.Context, p *auth.Principal) (*Stats, error) 
 	if err != nil {
 		return nil, err
 	}
+	// Each count walks a small partial index; the list is asked for every few seconds while
+	// documents are processing.
 	var st Stats
 	err = s.pool.QueryRow(ctx, `SELECT
-		count(*) FILTER (WHERE deleted_at IS NULL),
-		count(*) FILTER (WHERE deleted_at IS NULL AND inbox),
-		count(*) FILTER (WHERE deleted_at IS NULL AND status='processing'),
-		count(*) FILTER (WHERE deleted_at IS NULL AND status IN ('failed','needs_password')),
-		count(*) FILTER (WHERE deleted_at IS NOT NULL),
-		count(*) FILTER (WHERE deleted_at IS NULL AND added_at > now() - interval '7 days'),
-		coalesce(sum(size_bytes) FILTER (WHERE deleted_at IS NULL), 0)
-		FROM documents WHERE space_id = ANY($1)`, ids).Scan(&st.Total, &st.Inbox, &st.Processing, &st.Failed, &st.Trash, &st.AddedWeek, &st.Bytes)
+		(SELECT count(*) FROM documents WHERE space_id = ANY($1) AND deleted_at IS NULL AND inbox),
+		(SELECT count(*) FROM documents WHERE space_id = ANY($1) AND deleted_at IS NULL AND status='processing'),
+		(SELECT count(*) FROM documents WHERE space_id = ANY($1) AND deleted_at IS NULL AND status IN ('failed','needs_password')),
+		(SELECT count(*) FROM documents WHERE space_id = ANY($1) AND deleted_at IS NOT NULL),
+		(SELECT count(*) FROM documents WHERE space_id = ANY($1) AND deleted_at IS NULL AND added_at > now() - interval '7 days')`,
+		ids).Scan(&st.Inbox, &st.Processing, &st.Failed, &st.Trash, &st.AddedWeek)
+	if err != nil {
+		return nil, err
+	}
+	totals, err := s.spaces.SpaceTotals(ctx, ids)
+	for _, t := range totals {
+		st.Total += t.Documents
+		st.Bytes += t.Bytes
+	}
 	return &st, err
 }
 

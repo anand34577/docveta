@@ -4,7 +4,7 @@ import { CalendarRange, Check, ChevronDown, CircleHelp, History, LayoutGrid, Lis
 import { clearRecentSearches, recentSearches } from "@/lib/recent";
 import { useAIEnabled, useCustomFields, useFacets, useTaxonomy } from "@/lib/queries";
 import type { CustomField, DocQuery, TaxonomyKind } from "@/lib/types";
-import { cn, formatDocDate, spaceLabel, tagDot } from "@/lib/utils";
+import { cn, compareNames, formatCount, formatDocDate, spaceLabel, tagDot } from "@/lib/utils";
 import { useUI } from "@/stores/ui";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
@@ -313,30 +313,62 @@ function FilterButton({ label, count, hideCount, open, onOpenChange, children }:
   );
 }
 
+/** How many entries a filter menu lists at once; typing finds the others. */
+const MENU_LIMIT = 150;
+
 function TaxonomyFilter({ kind, label, spaceId, facets, onOpen, value, onChange }: { kind: TaxonomyKind; label: string; spaceId?: string; facets?: Record<string, number>; onOpen?: () => void; value: string[]; onChange: (v: string[]) => void }) {
   const { data: items = [] } = useTaxonomy(kind, spaceId);
+  const me = useCurrentUser();
   const [q, setQ] = React.useState("");
-  const shown = items.filter((i) => i.name.toLowerCase().includes(q.toLowerCase()));
+  // What was chosen when the menu opened comes first (ticking one doesn't move it from under
+  // the pointer), then the most used: with thousands of senders the useful ones would
+  // otherwise be pages down an alphabetical list.
+  const [pinned, setPinned] = React.useState<string[]>([]);
+  const { shown, more, spaceOf } = React.useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const matching = items
+      .filter((i) => !needle || i.name.toLowerCase().includes(needle))
+      .sort((a, b) => Number(pinned.includes(b.id)) - Number(pinned.includes(a.id)) || b.document_count - a.document_count || compareNames(a.name, b.name));
+    // A name that exists in several spaces says which space each one is in.
+    const names = new Map<string, number>();
+    for (const i of items) names.set(i.name.toLowerCase(), (names.get(i.name.toLowerCase()) ?? 0) + 1);
+    const spaceOf = (i: { name: string; space_id: string }) =>
+      (names.get(i.name.toLowerCase()) ?? 0) > 1 ? spaceLabel(me.spaces.find((s) => s.id === i.space_id)) : "";
+    return { shown: matching.slice(0, MENU_LIMIT), more: Math.max(0, matching.length - MENU_LIMIT), spaceOf };
+  }, [items, q, pinned, me.spaces]);
   return (
-    <FilterButton label={label} count={value.length} onOpenChange={(o) => o && onOpen?.()}>
+    <FilterButton
+      label={label}
+      count={value.length}
+      onOpenChange={(o) => {
+        if (!o) return;
+        setPinned(value);
+        onOpen?.();
+      }}
+    >
       <div className="border-b border-border p-2">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter ${label.toLowerCase()}…`} className="h-8" autoFocus />
       </div>
       <div className="max-h-72 overflow-y-auto scrollbar-thin p-1">
-        {shown.length === 0 && <div className="px-3 py-4 text-center text-sm text-muted">Nothing here yet</div>}
+        {shown.length === 0 && <div className="px-3 py-4 text-center text-sm text-muted">{q.trim() ? "No matches" : "Nothing here yet"}</div>}
         {shown.map((it) => {
           const on = value.includes(it.id);
+          const sp = spaceOf(it);
           return (
             <label key={it.id} className="flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm hover:bg-surface-2">
               <Checkbox checked={on} onCheckedChange={() => onChange(on ? value.filter((v) => v !== it.id) : [...value, it.id])} />
               {kind === "tags" && <span className={cn("size-2 rounded-full", tagDot[it.color ?? "slate"])} />}
-              <span className="flex-1 truncate">{it.name}</span>
+              <span className="flex-1 truncate">
+                {it.name}
+                {sp && <span className="ml-1.5 text-xs text-subtle">{sp}</span>}
+              </span>
               <span className={cn("text-xs tabular-nums text-subtle", facets && !facets[it.id] && !on && "opacity-50")} title={facets ? "Documents matching your current filters" : undefined}>
-                {facets ? (facets[it.id] ?? 0) : it.document_count}
+                {formatCount(facets ? (facets[it.id] ?? 0) : it.document_count)}
               </span>
             </label>
           );
         })}
+        {more > 0 && <div className="px-3 py-2 text-center text-xs text-subtle">Type to find the other {more.toLocaleString()}</div>}
       </div>
       {value.length > 0 && (
         <div className="border-t border-border p-1.5">

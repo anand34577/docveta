@@ -439,7 +439,7 @@ fun ItemRow(title: String, detail: String? = null, error: String? = null, leadin
 }
 
 /** "3 documents", "1 document". */
-fun plural(n: Int, one: String, many: String = one + "s") = "$n " + if (n == 1) one else many
+fun plural(n: Int, one: String, many: String = one + "s") = "%,d ".format(n) + if (n == 1) one else many
 
 /** Full date and time for an ISO timestamp. */
 fun formatDateTime(iso: String?, format: String = "DD/MM/YYYY"): String {

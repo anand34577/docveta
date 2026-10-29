@@ -669,7 +669,7 @@ private fun DocumentBrowser(
             }
         }, header = {
             if (vm.total != null) Text(
-                vm.total!!.toString() + (if (vm.totalCapped) "+" else "") + " document" + (if (vm.total == 1 && !vm.totalCapped) "" else "s") + if (vm.foundByMeaning) " · found by meaning" else "",
+                "%,d".format(vm.total!!) + (if (vm.totalCapped) "+" else "") + " document" + (if (vm.total == 1 && !vm.totalCapped) "" else "s") + if (vm.foundByMeaning) " · found by meaning" else "",
                 style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             )
         })
@@ -1054,7 +1054,7 @@ fun InboxScreen(onOpen: (String) -> Unit, onScan: () -> Unit) {
                     Text("Inbox", style = MaterialTheme.typography.headlineMedium)
                     Text(if (vm.items.isEmpty()) "Nothing to review" else "Swipe right when a document looks right. Hold one to select several.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (vm.items.size > 1) TextButton({ confirmAll = true }) { Icon(Icons.Outlined.DoneAll, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("All reviewed") }
+                if (vm.items.size > 1) TextButton({ confirmAll = true }) { Icon(Icons.Outlined.DoneAll, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Mark all reviewed") }
             }
             StatsBanner()
             DocumentList(vm, me.spaces, me.dateFormat, rememberLazyListState(), onOpen, selectable = true, empty = {

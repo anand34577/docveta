@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { keys, useDirectory, useTaxonomy } from "@/lib/queries";
 import type { MatchAlgorithm, Member, Space, SpaceRole, TaxonomyItem, TaxonomyKind } from "@/lib/types";
-import { cn, colorNames, tagDot } from "@/lib/utils";
+import { cn, colorNames, compareNames, formatCount, tagDot } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { SettingsCard, SettingsLayout } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ export function SpaceSettingsPage() {
   return (
     <SettingsLayout
       title={space.kind === "personal" ? "Personal space" : space.name}
-      description={space.kind === "personal" ? "Only you can see documents here." : `${space.member_count} member${space.member_count === 1 ? "" : "s"} · ${space.document_count} document${space.document_count === 1 ? "" : "s"}`}
+      description={space.kind === "personal" ? "Only you can see documents here." : `${space.member_count} member${space.member_count === 1 ? "" : "s"} · ${formatCount(space.document_count)} document${space.document_count === 1 ? "" : "s"}`}
       base={`/spaces/${id}`}
       sections={shown}
       active={section}
@@ -277,10 +277,17 @@ function Vocabulary({ space, kind }: { space: Space; kind: TaxonomyKind }) {
   const [filter, setFilter] = React.useState("");
   const qc = useQueryClient();
   const L = kindLabels[kind];
-  const shown = (items.data ?? []).filter((i) => i.name.toLowerCase().includes(filter.toLowerCase()));
+  // In name order with numbers counted ("Sender 2" before "Sender 10"); a page at a time, since
+  // a space can collect thousands of senders.
+  const [limit, setLimit] = React.useState(200);
+  const matching = React.useMemo(
+    () => (items.data ?? []).filter((i) => i.name.toLowerCase().includes(filter.toLowerCase())).sort((a, b) => compareNames(a.name, b.name)),
+    [items.data, filter],
+  );
+  const shown = matching.slice(0, limit);
 
   const remove = async (it: TaxonomyItem) => {
-    if (!(await confirm({ title: `Delete ${L.one} “${it.name}”?`, body: it.document_count ? `It will be removed from ${it.document_count} document(s). The documents are kept.` : undefined, confirmLabel: "Delete", destructive: true })))
+    if (!(await confirm({ title: `Delete ${L.one} “${it.name}”?`, body: it.document_count ? `It will be removed from ${formatCount(it.document_count)} document${it.document_count === 1 ? "" : "s"}. The documents are kept.` : undefined, confirmLabel: "Delete", destructive: true })))
       return;
     try {
       await api.del(`/${kind}/${it.id}`);
@@ -323,7 +330,9 @@ function Vocabulary({ space, kind }: { space: Space; kind: TaxonomyKind }) {
       }
     >
       {(items.data?.length ?? 0) > 8 && <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={`Filter ${L.many.toLowerCase()}…`} className="mb-3" />}
-      {shown.length === 0 ? (
+      {shown.length === 0 && filter.trim() ? (
+        <EmptyState title="No matches" className="py-8" />
+      ) : shown.length === 0 ? (
         <EmptyState title={`No ${L.many.toLowerCase()} yet`} className="py-8">
           You can also create them right from a document.
         </EmptyState>
@@ -340,7 +349,7 @@ function Vocabulary({ space, kind }: { space: Space; kind: TaxonomyKind }) {
                   </div>
                 )}
               </div>
-              <span className="text-xs tabular-nums text-subtle">{it.document_count} doc{it.document_count === 1 ? "" : "s"}</span>
+              <span className="text-xs tabular-nums text-subtle">{formatCount(it.document_count)} doc{it.document_count === 1 ? "" : "s"}</span>
               {canEdit && (
                 <>
                   <Button size="icon-sm" variant="ghost" onClick={() => setEditing(it)} aria-label={`Edit ${it.name}`}>
@@ -354,6 +363,11 @@ function Vocabulary({ space, kind }: { space: Space; kind: TaxonomyKind }) {
             </li>
           ))}
         </ul>
+      )}
+      {matching.length > shown.length && (
+        <Button size="sm" variant="ghost" className="mt-2 w-full" onClick={() => setLimit((n) => n + 200)}>
+          Show more ({formatCount(matching.length - shown.length)} left)
+        </Button>
       )}
       {editing && <ItemDialog kind={kind} spaceId={space.id} item={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}
     </SettingsCard>

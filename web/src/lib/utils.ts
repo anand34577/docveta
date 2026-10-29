@@ -18,6 +18,14 @@ export function usePageTitle(title?: string) {
   }, [title]);
 }
 
+/** A count as people read it: 12,480 rather than 12480. */
+export function formatCount(n: number): string {
+  return n.toLocaleString();
+}
+
+/** Names in the order people expect: "Type 2" before "Type 10". */
+export const compareNames = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const units = ["KB", "MB", "GB", "TB"];

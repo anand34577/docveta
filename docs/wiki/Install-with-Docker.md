@@ -48,7 +48,8 @@ from [Configuration](Configuration) can also be added to the `environment:` sect
 docker compose logs -f docveta                     # log
 docker compose pull && docker compose up -d        # upgrade
 docker compose down                                # stop (data stays in the volumes)
-docker compose exec docveta /docveta doctor        # health check
+docker compose exec docveta /docveta doctor        # full check of settings, database, storage
+docker compose ps                                  # docveta shows (healthy) once it answers
 ```
 
 **Backups:** back up the `docveta_data`, `docveta_db` and `docveta_secrets` volumes together, for

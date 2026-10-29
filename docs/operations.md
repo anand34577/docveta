@@ -93,7 +93,8 @@ docker compose exec docveta /docveta doctor
 
 ## Monitoring
 
-* `GET /healthz` — process is up; `GET /readyz` — database reachable.
+* `GET /healthz` — process is up; `GET /readyz` — database reachable. The Docker image
+  checks `/healthz` itself (`docveta healthcheck`), so `docker ps` shows it as healthy.
 * `GET /api/v1/openapi.yaml` — the API specification (OpenAPI 3), for API clients.
 * `GET /metrics` — Prometheus: request latency per route, processing queue depth,
   documents, workers online, free disk space. (Expose it only on a private network.)

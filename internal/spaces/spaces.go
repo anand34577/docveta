@@ -4,7 +4,9 @@ package spaces
 
 import (
 	"context"
+	"maps"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -81,7 +83,10 @@ type Member struct {
 }
 
 type Service struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	countM sync.Mutex
+	counts map[uuid.UUID]Totals
+	forgot uint64 // ForgetTotals calls so far
 }
 
 func NewService(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
@@ -152,13 +157,103 @@ func (s *Service) VisibleSpaceIDs(ctx context.Context, userID uuid.UUID) ([]uuid
 
 const spaceCols = `s.id, s.name, s.kind, s.description, s.color, s.ai_policy, s.ai_apply_mode, s.ai_new_tags, s.default_language,
 	s.split_on_separators, s.read_asn_barcodes, s.ai_auto_confidence, s.ai_new_confidence, s.ai_max_new_tags, s.ai_new_types, m.role, (SELECT count(*) FROM space_members x WHERE x.space_id=s.id),
-	(SELECT count(*) FROM documents d WHERE d.space_id=s.id AND d.deleted_at IS NULL), s.created_at`
+	s.created_at`
 
 func scanSpace(row pgx.Row) (*Space, error) {
 	var sp Space
 	err := row.Scan(&sp.ID, &sp.Name, &sp.Kind, &sp.Description, &sp.Color, &sp.AIPolicy, &sp.AIApplyMode, &sp.AINewTags,
-		&sp.DefaultLanguage, &sp.SplitOnSeparators, &sp.ReadASNBarcodes, &sp.AIAutoConfidence, &sp.AINewConfidence, &sp.AIMaxNewTags, &sp.AINewTypes, &sp.Role, &sp.MemberCount, &sp.DocumentCount, &sp.CreatedAt)
+		&sp.DefaultLanguage, &sp.SplitOnSeparators, &sp.ReadASNBarcodes, &sp.AIAutoConfidence, &sp.AINewConfidence, &sp.AIMaxNewTags, &sp.AINewTypes, &sp.Role, &sp.MemberCount, &sp.CreatedAt)
 	return &sp, err
+}
+
+// Totals are a space's documents outside the trash: how many, and their size.
+type Totals struct {
+	Documents int
+	Bytes     int64
+	at        time.Time
+}
+
+// totalsTTL bounds how old a cached count gets when a change didn't come through
+// ForgetTotals (processing splitting a scan, an import).
+const totalsTTL = 15 * time.Second
+
+// SpaceTotals counts each space's documents. Counting reads every document of a space (a
+// tenth of a second at 200,000) and the sidebar asks with every page, so counts are kept until
+// ForgetTotals says a space changed, or for totalsTTL.
+func (s *Service) SpaceTotals(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]Totals, error) {
+	out := make(map[uuid.UUID]Totals, len(ids))
+	var missing []uuid.UUID
+	s.countM.Lock()
+	gen := s.forgot
+	for _, id := range ids {
+		if t, ok := s.counts[id]; ok && time.Since(t.at) < totalsTTL {
+			out[id] = t
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	s.countM.Unlock()
+	if len(missing) == 0 {
+		return out, nil
+	}
+	at := time.Now()
+	rows, err := s.pool.Query(ctx, `SELECT sp.id, count(d.id), coalesce(sum(d.size_bytes), 0) FROM unnest($1::uuid[]) AS sp(id)
+		LEFT JOIN documents d ON d.space_id = sp.id AND d.deleted_at IS NULL GROUP BY sp.id`, missing)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	fresh := map[uuid.UUID]Totals{}
+	for rows.Next() {
+		var id uuid.UUID
+		t := Totals{at: at}
+		if err := rows.Scan(&id, &t.Documents, &t.Bytes); err != nil {
+			return nil, err
+		}
+		fresh[id], out[id] = t, t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.countM.Lock()
+	// A change forgotten while counting may be missing from these counts: keep them out of the cache.
+	if s.forgot == gen {
+		if s.counts == nil || len(s.counts) > 10000 {
+			s.counts = map[uuid.UUID]Totals{}
+		}
+		maps.Copy(s.counts, fresh)
+	}
+	s.countM.Unlock()
+	return out, nil
+}
+
+// ForgetTotals drops the cached counts of spaces whose documents were added, trashed,
+// restored or moved; with no spaces, of every space.
+func (s *Service) ForgetTotals(ids ...uuid.UUID) {
+	s.countM.Lock()
+	s.forgot++
+	if len(ids) == 0 {
+		s.counts = nil
+	}
+	for _, id := range ids {
+		delete(s.counts, id)
+	}
+	s.countM.Unlock()
+}
+
+func (s *Service) fillCounts(ctx context.Context, list []*Space) error {
+	ids := make([]uuid.UUID, len(list))
+	for i, sp := range list {
+		ids[i] = sp.ID
+	}
+	totals, err := s.SpaceTotals(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for _, sp := range list {
+		sp.DocumentCount = totals[sp.ID].Documents
+	}
+	return nil
 }
 
 // List returns the spaces the user belongs to, personal space first.
@@ -178,7 +273,10 @@ func (s *Service) List(ctx context.Context, p *auth.Principal) ([]*Space, error)
 		}
 		out = append(out, sp)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, s.fillCounts(ctx, out)
 }
 
 func (s *Service) Get(ctx context.Context, p *auth.Principal, id uuid.UUID) (*Space, error) {
@@ -190,7 +288,10 @@ func (s *Service) Get(ctx context.Context, p *auth.Principal, id uuid.UUID) (*Sp
 	if db.IsNoRows(err) {
 		return nil, apperr.NotFound("Space")
 	}
-	return sp, err
+	if err != nil {
+		return nil, err
+	}
+	return sp, s.fillCounts(ctx, []*Space{sp})
 }
 
 type Input struct {

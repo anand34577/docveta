@@ -1,6 +1,7 @@
 import * as React from "react";
 import { keepPreviousData, QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
+import { compareNames } from "./utils";
 import type {
   AIProvider,
   AISuggestion,
@@ -95,7 +96,7 @@ export function useDocumentTypes() {
       if (cur) cur.count += t.document_count;
       else byName.set(k, { name: t.name, count: t.document_count });
     }
-    return [...byName.values()].filter((t) => t.count > 0).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    return [...byName.values()].filter((t) => t.count > 0).sort((a, b) => b.count - a.count || compareNames(a.name, b.name));
   }, [types.data]);
 }
 
@@ -121,6 +122,13 @@ export function docParams(q: DocQuery, cursor?: string | null) {
   };
 }
 
+/**
+ * Refreshing a document list fetches every page loaded so far again, one after another: a list
+ * scrolled this far is refreshed only after a change made here, not on its own.
+ */
+const LONG_LIST_PAGES = 5;
+const isLongList = (q: { state: { data?: unknown } }) => ((q.state.data as { pages?: unknown[] } | undefined)?.pages?.length ?? 0) > LONG_LIST_PAGES;
+
 export function useDocuments(q: DocQuery, opts: { refetchWhileProcessing?: boolean } = {}) {
   return useInfiniteQuery({
     queryKey: keys.documents(q),
@@ -128,12 +136,12 @@ export function useDocuments(q: DocQuery, opts: { refetchWhileProcessing?: boole
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor,
     placeholderData: keepPreviousData,
+    refetchOnWindowFocus: (query) => !isLongList(query),
     refetchInterval: (query) => {
-      if (!opts.refetchWhileProcessing) return false;
+      if (!opts.refetchWhileProcessing || isLongList(query)) return false;
       const pages = query.state.data?.pages ?? [];
       if (!pages.some((p) => p.items.some((d) => d.status === "processing"))) return false;
-      // Refreshing fetches every page loaded so far again: after a long scroll, do it less often.
-      return pages.length > 3 ? 15_000 : 4000;
+      return pages.length > 2 ? 10_000 : 4000;
     },
   });
 }
@@ -223,6 +231,23 @@ export function invalidateDocuments(qc: QueryClient, id?: string) {
   qc.invalidateQueries({ queryKey: keys.stats });
   qc.invalidateQueries({ queryKey: keys.me }); // each space's document count (sidebar, Home)
   if (id) qc.invalidateQueries({ queryKey: keys.document(id) });
+}
+
+let liveTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * After a live event about documents: one refresh for a burst of them (an import finishing
+ * document by document), and long-scrolled lists are only marked out of date.
+ */
+export function invalidateDocumentsLive(qc: QueryClient) {
+  if (liveTimer) return;
+  liveTimer = setTimeout(() => {
+    liveTimer = undefined;
+    qc.invalidateQueries({ queryKey: ["documents"], predicate: (q) => !isLongList(q) });
+    qc.invalidateQueries({ queryKey: ["documents"], predicate: isLongList, refetchType: "none" });
+    qc.invalidateQueries({ queryKey: keys.stats });
+    qc.invalidateQueries({ queryKey: keys.me });
+  }, 2000);
 }
 
 export type DocPatch = Partial<{

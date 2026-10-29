@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { keys, useCustomFields, useWorkflows } from "@/lib/queries";
 import type { CustomField, FieldType, Space, Workflow, WorkflowAction, WorkflowRun } from "@/lib/types";
-import { cn, colorNames, formatDateTime, tagDot, timeAgo } from "@/lib/utils";
+import { cn, colorNames, formatCount, formatDateTime, tagDot, timeAgo } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { SettingsCard } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
@@ -267,7 +267,7 @@ export function SpaceFields({ space }: { space: Space }) {
   const [editing, setEditing] = React.useState<CustomField | "new" | null>(null);
   const list = (fields.data ?? []).filter((f) => f.space_id === space.id);
   const remove = async (f: CustomField) => {
-    if (!(await confirm({ title: `Delete “${f.name}”?`, body: `Its value is removed from ${f.document_count} document${f.document_count === 1 ? "" : "s"}.`, confirmLabel: "Delete field", destructive: true }))) return;
+    if (!(await confirm({ title: `Delete “${f.name}”?`, body: `Its value is removed from ${formatCount(f.document_count)} document${f.document_count === 1 ? "" : "s"}.`, confirmLabel: "Delete field", destructive: true }))) return;
     await api.del(`/custom-fields/${f.id}`).catch((e) => toast.error(errorMessage(e)));
     qc.invalidateQueries({ queryKey: ["custom-fields"] });
   };
@@ -296,7 +296,7 @@ export function SpaceFields({ space }: { space: Space }) {
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">{f.name}</div>
                 <div className="text-xs text-subtle">
-                  {fieldTypes.find(([t]) => t === f.data_type)?.[1] ?? f.data_type} · used on {f.document_count} document{f.document_count === 1 ? "" : "s"}
+                  {fieldTypes.find(([t]) => t === f.data_type)?.[1] ?? f.data_type} · used on {formatCount(f.document_count)} document{f.document_count === 1 ? "" : "s"}
                   {f.options.choices?.length ? ` · ${f.options.choices.join(", ")}` : ""}
                   {f.remind && ` · reminds ${f.remind_days.map((d) => (d ? `${d}d` : "on the day")).join(", ")} before`}
                 </div>

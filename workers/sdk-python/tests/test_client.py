@@ -80,5 +80,23 @@ class CompleteTest(unittest.TestCase):
         self.assertIn(b"test archive", Server.bodies[1])
 
 
+class MultipartTest(unittest.TestCase):
+    def test_length_matches_what_is_sent(self):
+        import os
+        import tempfile
+
+        from docveta_worker.client import Multipart
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "archive.pdf")
+            with open(path, "wb") as f:
+                f.write(b"%PDF-1.7 " + b"x" * (3 << 20))  # more than one chunk
+            body = Multipart([("lease_id", None, None, b"l1"), ("archive", "archive.pdf", "application/pdf", path)])
+            sent = b"".join(body)
+            self.assertEqual(len(sent), len(body))
+        self.assertTrue(sent.endswith(f"--{body.boundary}--\r\n".encode()))
+        self.assertIn(b'name="archive"; filename="archive.pdf"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.7', sent)
+
+
 if __name__ == "__main__":
     unittest.main()

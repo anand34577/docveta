@@ -62,13 +62,14 @@ type Service struct {
 	keys   *crypto.Keys
 	audit  *audit.Log
 
-	ipLimiter   *ratelimit.Limiter // every public request, per IP
+	ipLimiter   *ratelimit.Limiter // every public request, per IP: a PDF viewer asks for a long file in hundreds of parts
+	missLimiter *ratelimit.Limiter // links that don't exist, per IP: what guessing at addresses looks like
 	passLimiter *ratelimit.Limiter // wrong passwords, per share
 }
 
 func NewService(pool *pgxpool.Pool, sp *spaces.Service, docs *documents.Service, se *search.Service, keys *crypto.Keys, al *audit.Log) *Service {
 	return &Service{pool: pool, spaces: sp, docs: docs, search: se, keys: keys, audit: al,
-		ipLimiter: ratelimit.New(300, 15*time.Minute), passLimiter: ratelimit.New(10, 15*time.Minute)}
+		ipLimiter: ratelimit.New(3000, 15*time.Minute), missLimiter: ratelimit.New(100, 15*time.Minute), passLimiter: ratelimit.New(10, 15*time.Minute)}
 }
 
 const selectSQL = `SELECT s.id, CASE WHEN s.document_id IS NOT NULL THEN 'document' ELSE 'view' END, s.document_id, s.view_id,
@@ -216,10 +217,18 @@ type resolved struct {
 	Title         string
 }
 
+func rateLimited(wait time.Duration) error {
+	return &apperr.Error{Kind: apperr.KindRateLimited, Code: "rate_limited", Msg: "Too many requests. Please wait a few minutes.",
+		Extra: map[string]any{"retry_after_seconds": int(wait.Seconds()) + 1}}
+}
+
 func (s *Service) limited(ctx context.Context) error {
-	if ok, wait := s.ipLimiter.Allow(httpx.ClientIP(ctx)); !ok {
-		return &apperr.Error{Kind: apperr.KindRateLimited, Code: "rate_limited", Msg: "Too many requests. Please wait a few minutes.",
-			Extra: map[string]any{"retry_after_seconds": int(wait.Seconds()) + 1}}
+	ip := httpx.ClientIP(ctx)
+	if over, wait := s.missLimiter.Over(ip); over {
+		return rateLimited(wait)
+	}
+	if ok, wait := s.ipLimiter.Allow(ip); !ok {
+		return rateLimited(wait)
 	}
 	return nil
 }
@@ -236,6 +245,7 @@ func (s *Service) resolve(ctx context.Context, token string) (*resolved, error) 
 		WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > now())`, crypto.HashToken(token)).
 		Scan(&r.ID, &r.DocumentID, &r.ViewID, &created, &r.SpaceID, &r.PasswordHash, &r.AllowDownload, &r.ExpiresAt, &r.Title, new(bool))
 	if db.IsNoRows(err) {
+		s.missLimiter.Allow(httpx.ClientIP(ctx))
 		return nil, errGone
 	}
 	if err != nil {
@@ -343,6 +353,35 @@ func (s *Service) docs_(ctx context.Context, r *resolved) ([]*documents.Document
 	return res.Items, nil
 }
 
+// exposes checks that a share shows this document right now: not in the trash, still visible
+// to the share's creator, and (for a view) matching the view's search. One document is looked
+// at, not the whole view: a PDF viewer asks for a file in many parts.
+func (s *Service) exposes(ctx context.Context, r *resolved, docID uuid.UUID) error {
+	if r.DocumentID != nil {
+		if *r.DocumentID != docID {
+			return apperr.NotFound("Document")
+		}
+		_, err := s.docs_(ctx, r)
+		return err
+	}
+	var raw []byte
+	if err := s.pool.QueryRow(ctx, `SELECT query FROM saved_views WHERE id=$1`, *r.ViewID).Scan(&raw); err != nil {
+		return errGone
+	}
+	var q search.Query
+	_ = json.Unmarshal(raw, &q)
+	q.SpaceIDs, q.IDs = []uuid.UUID{r.SpaceID}, []uuid.UUID{docID}
+	q.Limit, q.Cursor, q.Trash, q.Mode, q.WithTotal, q.WithFacets = 1, "", false, "", false, false
+	res, err := s.search.Search(ctx, &auth.Principal{Kind: auth.KindSession, UserID: r.CreatedBy}, q)
+	if err != nil {
+		return errGone
+	}
+	if len(res.Hits) == 0 {
+		return apperr.NotFound("Document")
+	}
+	return nil
+}
+
 // Meta returns what the visitor may see. Without the password only the title and the
 // fact that a password is needed are returned.
 func (s *Service) Meta(ctx context.Context, token, cookie string) (*Public, error) {
@@ -381,18 +420,8 @@ func (s *Service) File(ctx context.Context, token, cookie string, docID uuid.UUI
 	if kind == "original" && !r.AllowDownload {
 		kind = "best"
 	}
-	// Always through docs_, also for a single document: the link stops working when the
-	// document is in the trash or its creator can no longer see it, as Meta does.
-	list, err := s.docs_(ctx, r)
-	if err != nil {
+	if err := s.exposes(ctx, r, docID); err != nil {
 		return nil, err
-	}
-	allowed := false
-	for _, d := range list {
-		allowed = allowed || d.ID == docID
-	}
-	if !allowed {
-		return nil, apperr.NotFound("Document")
 	}
 	sys := auth.System()
 	if kind == "best" {

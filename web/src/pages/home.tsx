@@ -4,7 +4,7 @@ import { AlertCircle, ArrowRight, BellRing, Bookmark, CalendarPlus, CloudOff, Fi
 import { errorMessage } from "@/lib/api";
 import { recentDocs } from "@/lib/recent";
 import { nameSearch, useDocumentTypes, useDocuments, useSavedViews, useStats, useTaxonomy, useUpcoming } from "@/lib/queries";
-import { cn, formatBytes, formatDocDate, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
+import { cn, formatBytes, formatCount, formatDocDate, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
 import { useCurrentUser, useFilePicker } from "@/components/app-shell";
 import { Thumbnail, StatusBadge } from "@/components/documents/doc-items";
 import { Button } from "@/components/ui/button";
@@ -41,7 +41,7 @@ export function HomePage() {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block font-semibold text-accent-soft-fg">
-              {s.inbox} new document{s.inbox === 1 ? "" : "s"} to review
+              {formatCount(s.inbox)} new document{s.inbox === 1 ? "" : "s"} to review
             </span>
             <span className="block text-sm text-accent-soft-fg/80">Check the date, sender and tags Docveta filled in, then mark them reviewed.</span>
           </span>
@@ -143,7 +143,7 @@ export function HomePage() {
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">{spaceLabel(sp)}</span>
                       <span className="block text-xs text-muted">
-                        {sp.document_count} document{sp.document_count === 1 ? "" : "s"}
+                        {formatCount(sp.document_count)} document{sp.document_count === 1 ? "" : "s"}
                         {sp.kind === "shared" && ` · ${sp.member_count} member${sp.member_count === 1 ? "" : "s"}`}
                       </span>
                     </span>
@@ -294,7 +294,7 @@ function TopTags() {
       <div className="flex flex-wrap gap-1.5">
         {top.map((t) => (
           <Link key={t.name} to="/documents" search={{ q: nameSearch("tag", t.name) }} className="rounded-md transition-opacity hover:opacity-80">
-            <TagChip name={`${t.name} · ${t.count}`} color={t.color} className="px-2 py-1" />
+            <TagChip name={`${t.name} · ${formatCount(t.count)}`} color={t.color} className="px-2 py-1" />
           </Link>
         ))}
         <Link to="/documents" search={{ untagged: true }} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted hover:text-fg">

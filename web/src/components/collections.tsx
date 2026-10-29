@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { invalidateDocuments, useCollections } from "@/lib/queries";
 import type { Collection } from "@/lib/types";
-import { cn, colorNames, spaceLabel, tagColors, tagDot } from "@/lib/utils";
+import { cn, colorNames, formatCount, spaceLabel, tagColors, tagDot } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
@@ -159,7 +159,7 @@ export function AddToCollectionDialog({ ids, onClose, onDone }: { ids: string[];
               <CollectionCovers c={c} className="size-10 shrink-0 overflow-hidden rounded-md" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{c.name}</span>
-                <span className="block truncate text-xs text-muted">{c.document_count} document{c.document_count === 1 ? "" : "s"} · {shared(c)}</span>
+                <span className="block truncate text-xs text-muted">{formatCount(c.document_count)} document{c.document_count === 1 ? "" : "s"} · {shared(c)}</span>
               </span>
               {busy === c.id && <span className="text-xs text-subtle">Adding…</span>}
             </button>

@@ -5,6 +5,86 @@ All notable changes to Docveta. The format follows
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-29
+
+Docveta at scale: tested against a library of 210,000 documents, the lists, counts, search and
+background work stay quick, and nothing grows without bound.
+
+### Added
+- Docker: the image reports whether Docveta is healthy (`docker ps`, orchestrators), using the
+  new `docveta healthcheck` command.
+
+### Fixed
+- HEIC and AVIF photos are checked for size before they are decoded, like other images, so a
+  huge or crafted file can no longer exhaust the server's memory.
+- Workers waiting for work are told about new tasks once they are saved, instead of just before,
+  which could leave a task waiting for their next check: searchable-PDF tasks, tasks retried after
+  a failure, and tasks given back by a worker that stops, is turned off or is removed.
+- A long scan's recognised text is saved in one go instead of page by page.
+- Export: a database error while listing the documents no longer produces an export that quietly
+  misses some, a document deleted during a long export no longer stops it, and a file that can't
+  be looked up is reported instead of being left out.
+- Import: when documents keep failing for a reason outside them (the database or the disk), the
+  import stops after 50 in a row and says how far it got, instead of logging a warning for every
+  remaining document; running it again carries on. The report keeps the first 1,000 warnings and
+  counts the rest.
+- Administration → AI → **Prepare for meaning-based search** queues a large library in seconds
+  instead of one document at a time (which a reverse proxy could cut off halfway), doesn't queue
+  documents twice when pressed again, and leaves out spaces the AI server isn't allowed to read
+  ("local only" with a server that isn't local), whose documents it said it was preparing but never did.
+- Workers: a searchable PDF is uploaded straight from disk instead of being read into memory
+  first, so a large one no longer risks running a small board out of memory.
+- Share links: someone viewing a long PDF, or going through a shared view, is no longer told
+  "Too many requests" after a few hundred file requests (a PDF viewer reads a long file in many
+  parts). Instead, an address that keeps trying links that don't exist is stopped after 100 tries.
+  A shared view no longer runs its whole search again for every part of every file.
+
+### Changed
+- Large libraries: sorting by document date, title or **Recently changed** takes a couple of
+  milliseconds per page instead of reading every document (a tenth of a second and growing at
+  200,000 documents). Upgrading builds two indexes in the background; uploads keep working.
+- The sidebar, Home and Inbox counts no longer read the whole library each time they refresh
+  (every few seconds while documents are processing): the badges come from small indexes, and the
+  total number and size of documents are kept for a few seconds between changes.
+- Web: lists scrolled far down are no longer reloaded page by page whenever the window regains
+  focus or a document finishes processing elsewhere; a burst of finished documents refreshes the
+  lists once.
+- Web: the tag, sender and type filter menus and pickers list the most used first, stay quick
+  with thousands of entries (typing finds the rest), say which space a repeated name belongs to,
+  and keep their order while you tick entries.
+- In-app notifications older than half a year are removed by the daily maintenance.
+- Bulk actions on many documents are sent in parts of 500, with progress, and **Mark all
+  reviewed** and **Process failed again** work through 1,000 documents per request instead of
+  5,000, so a slow server behind a reverse proxy no longer has them cut off halfway.
+- Web: marking documents reviewed in a long Inbox no longer reloads the whole list each time.
+- Meaning-based search without pgvector reads only the best passages' text.
+- Search as you type (Ctrl K) answers in a few milliseconds at any library size, newest
+  matches first, and still finds misspelt titles.
+- The total and filter counts of a search are worked out at the same time as its first page.
+- Searching for a word that is in most of a large library (say "account" or "invoice" in a
+  household's 200,000 documents) answers in about a tenth of a second instead of up to half a
+  second, growing no further with the library: **Best match** then ranks the newest 10,000
+  documents with the word, and the count shows "10,000+". Other searches and sort orders are
+  unchanged and still reach every document.
+- Administration → Audit log: filtering to one kind of entry stays quick with millions of
+  sign-ins logged, and a filter with `%` or `_` in it matches those characters literally.
+- The built-in database uses planner settings suited to SSDs and SD cards (as the Docker setup
+  already did), which halves the time of filtered counts on large libraries.
+- Web: large numbers are written with separators (70,000) in the sidebar, Home, Inbox,
+  collections, filter menus and administration; names with numbers sort naturally ("Type 2"
+  before "Type 10"); search snippets keep the matched word in view on narrow cards; the audit log
+  says "Command line" or "Not signed in" instead of "anonymous"; administrators with more than a
+  few people get a box to find one; the Inbox button reads **Mark all reviewed**.
+- Web: notifications that arrive together (an import finishing many documents, or what was
+  missed while offline) show as one "12 new notifications" message instead of a stream of them.
+- Web: a space's tags, senders and types are listed in natural order, 200 at a time with
+  **Show more**, and a filter that matches nothing says so. The weekly summary writes large
+  numbers with separators.
+- Android: actions on a long selection are sent in parts of 500; tag, sender and type pickers
+  list what was chosen and the most used first; counts are written with separators.
+- Unused stored files are found with a fraction of the memory, so the daily clean-up no longer
+  needs hundreds of megabytes on very large libraries.
+
 ## [0.17.2] - 2026-10-25
 
 ### Security

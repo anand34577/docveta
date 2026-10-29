@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
-from typing import Any, BinaryIO, Optional
+import uuid
+from typing import Any, BinaryIO, Iterator, Optional, Union
 
 import requests
 
@@ -20,6 +22,50 @@ class LeaseLost(Exception):
 
 class ProtocolError(Exception):
     pass
+
+
+class Multipart:
+    """A multipart/form-data body whose files are read from disk while it is sent.
+
+    requests builds a body in memory, and a searchable PDF can be hundreds of megabytes: more
+    than a small board running an NPU engine should hold at once. The length is known up front,
+    so the upload has a Content-Length like any other."""
+
+    def __init__(self, fields: list[tuple[str, Optional[str], Optional[str], Union[bytes, str]]]):
+        # fields: (name, filename or None, content type or None, bytes, or the path of a file)
+        self.boundary = uuid.uuid4().hex
+        self.parts: list[tuple[bytes, Union[bytes, str]]] = []
+        for name, filename, ctype, data in fields:
+            head = f'--{self.boundary}\r\nContent-Disposition: form-data; name="{name}"'
+            if filename:
+                head += f'; filename="{filename}"'
+            head += "\r\n"
+            if ctype:
+                head += f"Content-Type: {ctype}\r\n"
+            self.parts.append(((head + "\r\n").encode(), data))
+        self.tail = f"--{self.boundary}--\r\n".encode()
+
+    @property
+    def content_type(self) -> str:
+        return f"multipart/form-data; boundary={self.boundary}"
+
+    def __len__(self) -> int:
+        n = len(self.tail)
+        for head, data in self.parts:
+            n += len(head) + (len(data) if isinstance(data, bytes) else os.path.getsize(data)) + 2
+        return n
+
+    def __iter__(self) -> Iterator[bytes]:
+        for head, data in self.parts:
+            yield head
+            if isinstance(data, bytes):
+                yield data
+            else:
+                with open(data, "rb") as f:
+                    while chunk := f.read(1 << 20):
+                        yield chunk
+            yield b"\r\n"
+        yield self.tail
 
 
 def enroll(base_url: str, name: str, key_file: str, verify: bool | str = True, wait: float = 5.0) -> str:
@@ -111,27 +157,24 @@ class Client:
         # lease_lost (LeaseLost), which the caller treats as "nothing more to do".
         for attempt in range(1, attempts + 1):
             # Field order matters: the server streams parts and expects lease_id/metrics first.
-            fields: list[tuple[str, Any]] = [
-                ("lease_id", (None, task["lease_id"])),
-                ("metrics", (None, json.dumps(metrics), "application/json")),
+            fields: list[tuple[str, Optional[str], Optional[str], Union[bytes, str]]] = [
+                ("lease_id", None, None, task["lease_id"].encode()),
+                ("metrics", None, "application/json", json.dumps(metrics).encode()),
             ]
-            fh = None
+            if result is not None:
+                fields.append(("result", "result.json", "application/json", result))
+            if archive_path is not None:
+                fields.append(("archive", "archive.pdf", "application/pdf", archive_path))
+            body = Multipart(fields)
             try:
-                if result is not None:
-                    fields.append(("result", ("result.json", result, "application/json")))
-                if archive_path is not None:
-                    fh = open(archive_path, "rb")
-                    fields.append(("archive", ("archive.pdf", fh, "application/pdf")))
-                r = self.s.post(self._url(task["complete_url"]), files=fields, timeout=max(self.timeout, 300))
+                r = self.s.post(self._url(task["complete_url"]), data=body, headers={"Content-Type": body.content_type},
+                                timeout=max(self.timeout, 300))
             except requests.ConnectionError as e:
                 if attempt == attempts:
                     raise
                 log.warning("task %s: uploading the result failed (%s); retrying in %.0fs", task.get("task_id"), e, retry_delay * attempt)
                 time.sleep(retry_delay * attempt)
                 continue
-            finally:
-                if fh:
-                    fh.close()
             if r.status_code in (502, 503, 504) and attempt < attempts:  # restarting, or a proxy in between
                 log.warning("task %s: Docveta answered HTTP %d to the result; retrying in %.0fs", task.get("task_id"), r.status_code, retry_delay * attempt)
                 time.sleep(retry_delay * attempt)

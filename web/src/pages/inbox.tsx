@@ -1,11 +1,12 @@
 import * as React from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { type InfiniteData, useQueryClient } from "@tanstack/react-query";
 import { Check, CheckCheck, PartyPopper, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
-import { invalidateDocuments, useDocument, useDocuments } from "@/lib/queries";
-import { cn, formatDocDate, overlayOpen, spaceLabel, usePageTitle } from "@/lib/utils";
+import { invalidateDocuments, invalidateDocumentsLive, keys, useDocument, useDocuments } from "@/lib/queries";
+import type { DocumentList } from "@/lib/types";
+import { cn, formatCount, formatDocDate, overlayOpen, spaceLabel, usePageTitle } from "@/lib/utils";
 import { PageHeader, useCurrentUser } from "@/components/app-shell";
 import { StatusBadge, Thumbnail } from "@/components/documents/doc-items";
 import { DocumentDetail } from "./document";
@@ -28,7 +29,7 @@ export function InboxPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const isDesktop = useMediaQuery("(min-width: 1024px)");
-  usePageTitle(total ? `Inbox (${total})` : "Inbox");
+  usePageTitle(total ? `Inbox (${formatCount(total)})` : "Inbox");
 
   React.useEffect(() => {
     if (isDesktop && items.length && (!selected || !items.some((d) => d.id === selected))) setSelected(items[0].id);
@@ -53,7 +54,18 @@ export function InboxPage() {
   const afterReview = React.useCallback(() => {
     const next = items[index + 1] ?? items[index - 1];
     setSelected(next?.id ?? null);
-    invalidateDocuments(qc);
+    // Gone from the list at once; reloading every page loaded so far after each document would
+    // make working through a long Inbox slow, so the lists catch up once the reviewing pauses.
+    const done = items[index]?.id;
+    if (done) {
+      qc.setQueryData<InfiniteData<DocumentList>>(keys.documents(inboxQuery), (d) =>
+        d && {
+          ...d,
+          pages: d.pages.map((p, i) => ({ ...p, items: p.items.filter((x) => x.id !== done), total: i === 0 && p.total ? p.total - 1 : p.total })),
+        },
+      );
+    }
+    invalidateDocumentsLive(qc);
   }, [items, index, qc]);
 
   const review = React.useCallback(
@@ -115,14 +127,14 @@ export function InboxPage() {
   }, [isDesktop, move, selected, review, navigate]);
 
   const reviewAll = async () => {
-    if (!(await confirm({ title: `Mark all ${total} as reviewed?`, body: "They'll leave the Inbox but stay in your documents.", confirmLabel: "Mark all reviewed" }))) return;
+    if (!(await confirm({ title: `Mark all ${formatCount(total)} as reviewed?`, body: "They'll leave the Inbox but stay in your documents.", confirmLabel: "Mark all reviewed" }))) return;
     // The server picks the documents (all of the Inbox, not just the ones loaded here), in
-    // batches of up to 5000.
+    // batches of up to 1000.
     const t = toast.loading("Marking as reviewed…");
     try {
       let done = 0;
       let skipped = 0;
-      for (let round = 0; round < 100; round++) {
+      for (let round = 0; round < 10_000; round++) {
         const r = await api.post<{ succeeded: number; failed: unknown[]; remaining: number }>("/documents/bulk", { select: "inbox", action: "update", update: { inbox: false } });
         done += r.succeeded;
         skipped = r.failed.length;
@@ -183,12 +195,12 @@ export function InboxPage() {
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-[17px] font-semibold leading-tight tracking-tight">
               Inbox
-              <span className="rounded-full bg-accent-soft px-2 text-sm tabular-nums text-accent-soft-fg">{total}</span>
+              <span className="rounded-full bg-accent-soft px-2 text-sm tabular-nums text-accent-soft-fg">{formatCount(total)}</span>
             </h1>
-            <p className="mt-0.5 text-xs text-muted">{isDesktop && index >= 0 ? `${index + 1} of ${total} · check and mark reviewed` : "Check what Docveta filled in"}</p>
+            <p className="mt-0.5 text-xs text-muted">{isDesktop && index >= 0 ? `${formatCount(index + 1)} of ${formatCount(total)} · check and mark reviewed` : "Check what Docveta filled in"}</p>
           </div>
           <Button size="sm" variant="ghost" onClick={reviewAll} title="Mark everything in the Inbox as reviewed">
-            <CheckCheck /> All reviewed
+            <CheckCheck /> Mark all reviewed
           </Button>
         </div>
         <ul ref={list} className="flex-1 overflow-y-auto scrollbar-thin" role="listbox" aria-label="Documents to review">

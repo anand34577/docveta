@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Bell, CheckCheck, CheckCircle2, Info, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
-import { invalidateDocuments, keys, useNotifications } from "@/lib/queries";
+import { invalidateDocumentsLive, keys, useNotifications } from "@/lib/queries";
 import { cn, timeAgo } from "@/lib/utils";
 import type { Notification } from "@/lib/types";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/overlay";
@@ -26,6 +26,33 @@ export function useLiveEvents() {
     let closed = false;
     let retry: ReturnType<typeof setTimeout>;
     let lastId = ""; // what we've seen, so a reconnect replays whatever arrived while we were offline
+    // Toasts for what arrives within a moment are shown together: an import finishing hundreds
+    // of documents, or a reconnect replaying what was missed, makes one summary, not hundreds.
+    let pending: Notification[] = [];
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    const show = (n: Notification) => {
+      const opts = {
+        description: n.body || undefined,
+        action: n.link ? { label: "Open", onClick: () => navigate({ to: n.link }) } : undefined,
+      };
+      if (n.severity === "error") toast.error(n.title, opts);
+      else if (n.severity === "warning") toast.warning(n.title, opts);
+      else if (n.severity === "success") toast.success(n.title, opts);
+      else toast(n.title, opts);
+    };
+    const flush = () => {
+      flushTimer = undefined;
+      const batch = pending;
+      pending = [];
+      if (batch.length <= 3) return batch.forEach(show);
+      const problems = batch.filter((n) => n.severity === "error" || n.severity === "warning").length;
+      const opts = {
+        description: problems ? `${problems} need${problems === 1 ? "s" : ""} attention` : batch[batch.length - 1].title,
+        action: { label: "Show", onClick: () => navigate({ to: "/notifications" }) },
+      };
+      if (problems) toast.warning(`${batch.length} new notifications`, opts);
+      else toast(`${batch.length} new notifications`, opts);
+    };
     const connect = () => {
       es = new EventSource("/api/v1/events" + (lastId ? `?last_event_id=${encodeURIComponent(lastId)}` : ""));
       es.addEventListener("notification", (ev) => {
@@ -37,15 +64,9 @@ export function useLiveEvents() {
           return;
         }
         qc.invalidateQueries({ queryKey: keys.notifications });
-        if (n.event_type.startsWith("document.")) invalidateDocuments(qc);
-        const opts = {
-          description: n.body || undefined,
-          action: n.link ? { label: "Open", onClick: () => navigate({ to: n.link }) } : undefined,
-        };
-        if (n.severity === "error") toast.error(n.title, opts);
-        else if (n.severity === "warning") toast.warning(n.title, opts);
-        else if (n.severity === "success") toast.success(n.title, opts);
-        else toast(n.title, opts);
+        if (n.event_type.startsWith("document.")) invalidateDocumentsLive(qc);
+        pending.push(n);
+        flushTimer ??= setTimeout(flush, 1000);
       });
       es.onerror = () => {
         es?.close();
@@ -56,6 +77,7 @@ export function useLiveEvents() {
     return () => {
       closed = true;
       clearTimeout(retry);
+      clearTimeout(flushTimer);
       es?.close();
     };
   }, [qc, navigate]);

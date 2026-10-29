@@ -574,3 +574,46 @@ func ask(t *testing.T, c *client, body map[string]any) map[string][]string {
 	}
 	return out
 }
+
+// Preparing the library for meaning-based search queues every document that isn't prepared,
+// once: asking twice doesn't prepare anything twice.
+func TestReindexEmbeddings(t *testing.T) {
+	e := newEnv(t)
+	c := e.c
+	fake := newFakeLLM(t)
+	var docs []string
+	for i := range 3 {
+		d := c.upload(e.family, fmt.Sprintf("r%d.pdf", i), minimalPDF(fmt.Sprintf("Water bill number %d for the flat", i)))
+		c.waitStatus(d.ID, "ready")
+		docs = append(docs, d.ID)
+	}
+	var prov struct{ ID string }
+	c.do("POST", "/api/v1/admin/ai/providers", map[string]any{"name": "Fake", "base_url": fake.srv.URL + "/v1", "api_key": "sk-test",
+		"chat_model": "fake-chat", "embedding_model": "fake-embed"}, 201, &prov)
+	c.do("PATCH", "/api/v1/spaces/"+e.family, map[string]any{"ai_policy": "local_only"}, 200, nil)
+	// A space the provider may not read isn't queued: its documents would never be prepared.
+	var none struct{ Queued int }
+	c.do("POST", "/api/v1/admin/ai/reindex", nil, 200, &none)
+	if none.Queued != 0 {
+		t.Fatalf("queued %d documents of a local-only space for a provider that isn't local", none.Queued)
+	}
+	c.do("PATCH", "/api/v1/admin/ai/providers/"+prov.ID, map[string]any{"is_local": true}, 200, nil)
+	var first, second struct{ Queued int }
+	c.do("POST", "/api/v1/admin/ai/reindex", nil, 200, &first)
+	c.do("POST", "/api/v1/admin/ai/reindex", nil, 200, &second)
+	if first.Queued != len(docs) {
+		t.Fatalf("queued %d, want %d", first.Queued, len(docs))
+	}
+	var embedded int
+	e.waitFor("embeddings", func() bool {
+		_ = e.a.Pool.QueryRow(e.ctx, `SELECT count(DISTINCT document_id) FROM embeddings`).Scan(&embedded)
+		return embedded == len(docs)
+	})
+	var jobsRun int
+	if err := e.a.Pool.QueryRow(e.ctx, `SELECT count(*) FROM river_job WHERE kind='ai' AND args->>'embed'='true'`).Scan(&jobsRun); err != nil {
+		t.Fatal(err)
+	}
+	if jobsRun > len(docs) {
+		t.Errorf("%d embedding jobs for %d documents: asking twice queued them twice", jobsRun, len(docs))
+	}
+}

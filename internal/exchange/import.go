@@ -41,11 +41,23 @@ type importer struct {
 	rep   *Report
 
 	users, spaces, tags, corrs, types, fields map[uuid.UUID]uuid.UUID
+	more                                      int // warnings past maxWarnings
 }
 
+// maxWarnings bounds the report: past it, warnings are only counted.
+const maxWarnings = 1000
+
 func (im *importer) warn(format string, args ...any) {
-	im.rep.Warnings = append(im.rep.Warnings, fmt.Sprintf(format, args...))
+	if len(im.rep.Warnings) < maxWarnings {
+		im.rep.Warnings = append(im.rep.Warnings, fmt.Sprintf(format, args...))
+	} else {
+		im.more++
+	}
 }
+
+// failRun is how many documents in a row may fail before the import stops: then the cause is
+// not the documents (the database or the disk, say), and running it again finishes the job.
+const failRun = 50
 
 // Import reads an export folder. It can be run again safely: whatever is already there
 // is left alone.
@@ -75,7 +87,11 @@ func Import(ctx context.Context, pool *pgxpool.Pool, store storage.Store, dir st
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 256<<20)
+	failed := 0
 	for n := 1; sc.Scan(); n++ {
+		if err := ctx.Err(); err != nil {
+			return im.finish(), err
+		}
 		var d DocRec
 		if err := json.Unmarshal(sc.Bytes(), &d); err != nil {
 			im.warn("documents.jsonl line %d: %v", n, err)
@@ -83,15 +99,29 @@ func Import(ctx context.Context, pool *pgxpool.Pool, store storage.Store, dir st
 		}
 		if err := im.document(ctx, &d); err != nil {
 			im.warn("document %q: %v", d.Title, err)
+			if failed++; failed >= failRun {
+				return im.finish(), fmt.Errorf("stopped after %d documents in a row failed (the last: %w); fix the cause and run the import again to continue", failed, err)
+			}
+			continue
 		}
+		failed = 0
 	}
 	if err := sc.Err(); err != nil {
-		return im.rep, err
+		return im.finish(), err
 	}
 	if err := db.InTx(ctx, pool, func(tx pgx.Tx) error { return im.views(ctx, tx, &m) }); err != nil {
 		im.warn("saved views: %v", err)
 	}
-	return im.rep, nil
+	return im.finish(), nil
+}
+
+// finish completes the report: the warnings past maxWarnings are counted in its last line.
+func (im *importer) finish() *Report {
+	if im.more > 0 {
+		im.rep.Warnings = append(im.rep.Warnings, fmt.Sprintf("… and %d more warnings", im.more))
+		im.more = 0
+	}
+	return im.rep
 }
 
 func (im *importer) structure(ctx context.Context, tx pgx.Tx, m *Manifest) error {

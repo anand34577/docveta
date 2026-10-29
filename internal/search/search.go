@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/anand34577/docveta/internal/apperr"
@@ -105,6 +106,7 @@ type cursor struct {
 	Offset int     `json:"o,omitempty"`
 	Key    *string `json:"k,omitempty"`
 	ID     string  `json:"i,omitempty"`
+	Broad  bool    `json:"b,omitempty"` // best match among the newest matches (see broadMatch), kept for every page
 }
 
 func encodeCursor(c cursor) *string {
@@ -129,6 +131,27 @@ func decodeCursor(s string) (cursor, error) {
 		return c, apperr.Invalid("cursor", "Invalid cursor")
 	}
 	return c, nil
+}
+
+// cursorKey turns a keyset cursor's key into the value its sort compares against, so a
+// damaged key is a bad request rather than a database error.
+func cursorKey(sort, key string) (any, error) {
+	switch sort {
+	case "added", "updated":
+		if at, err := time.Parse(addedKeyLayout, key); err == nil {
+			return at, nil
+		}
+	case "date":
+		if key == "-infinity" || key == "0000-00-00" { // 0000-00-00: cursors from before 0.18
+			return pgtype.Date{InfinityModifier: pgtype.NegativeInfinity, Valid: true}, nil
+		}
+		if t, err := time.Parse("2006-01-02", key); err == nil {
+			return pgtype.Date{Time: t, Valid: true}, nil
+		}
+	case "title":
+		return key, nil
+	}
+	return nil, apperr.Invalid("cursor", "Invalid cursor")
 }
 
 // resolveNames turns names from the query language into IDs within visible spaces.
@@ -356,17 +379,20 @@ func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Resul
 	if sort == "relevance" && !hasText {
 		sort = "-added"
 	}
-	var keyExpr, dir, cfOrder string
+	// keyExpr is the sort key as it travels in a cursor; ordExpr is what rows are ordered and
+	// compared by, written exactly as an index on (space_id, ordExpr, id) has it.
+	var keyExpr, ordExpr, dir, cfOrder string
 	switch strings.TrimPrefix(sort, "-") {
 	case "relevance":
 	case "added":
-		keyExpr = "to_char(d.added_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US')"
+		keyExpr, ordExpr = "to_char(d.added_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US')", "d.added_at"
 	case "date":
-		keyExpr = "coalesce(to_char(d.document_date, 'YYYY-MM-DD'), '0000-00-00')"
+		// Undated documents sort as the earliest: last when newest first.
+		keyExpr, ordExpr = "coalesce(to_char(d.document_date, 'YYYY-MM-DD'), '-infinity')", "coalesce(d.document_date, '-infinity'::date)"
 	case "title":
-		keyExpr = "lower(d.title)"
+		keyExpr, ordExpr = "lower(d.title)", "lower(d.title)"
 	case "updated":
-		keyExpr = "to_char(d.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US')"
+		keyExpr, ordExpr = "to_char(d.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US')", "d.updated_at"
 	default:
 		base := strings.TrimPrefix(sort, "-")
 		if !strings.HasPrefix(base, "cf:") {
@@ -381,7 +407,7 @@ func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Resul
 	if strings.HasPrefix(sort, "-") {
 		dir = "DESC"
 	}
-	byAdded := strings.TrimPrefix(sort, "-") == "added"
+	keyset := ordExpr != ""
 
 	where := strings.Join(b.conds, " AND ")
 	countArgs := slices.Clone(b.args)
@@ -398,27 +424,18 @@ func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Resul
 	} else if cfOrder != "" {
 		// Custom field values have no cheap keyset key, so these sorts page by offset.
 		order = cfOrder + " " + dir + " NULLS LAST, d.id " + dir
-	} else if byAdded {
-		order = "d.added_at " + dir + ", d.id " + dir
-		if cur.Key != nil {
-			at, err := time.Parse(addedKeyLayout, *cur.Key)
-			if err != nil {
-				return nil, apperr.Invalid("cursor", "Invalid cursor")
-			}
-			cmp := ">"
-			if dir == "DESC" {
-				cmp = "<"
-			}
-			pageCond = " AND (d.added_at, d.id) " + cmp + " (" + b.arg(at) + "::timestamptz, " + b.arg(cur.ID) + "::uuid)"
-		}
 	} else {
-		order = keyExpr + " " + dir + ", d.id " + dir
+		order = ordExpr + " " + dir + ", d.id " + dir
 		if cur.Key != nil {
+			key, err := cursorKey(strings.TrimPrefix(sort, "-"), *cur.Key)
+			if err != nil {
+				return nil, err
+			}
 			cmp := ">"
 			if dir == "DESC" {
 				cmp = "<"
 			}
-			pageCond = " AND (" + keyExpr + ", d.id) " + cmp + " (" + b.arg(*cur.Key) + ", " + b.arg(cur.ID) + "::uuid)"
+			pageCond = " AND (" + ordExpr + ", d.id) " + cmp + " (" + b.arg(key) + ", " + b.arg(cur.ID) + "::uuid)"
 		}
 	}
 	key := "''"
@@ -427,19 +444,69 @@ func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Resul
 	}
 	sqlq := fmt.Sprintf(`SELECT d.id, %s AS rank, %s AS sortkey FROM documents d WHERE %s%s ORDER BY %s LIMIT %d OFFSET %d`,
 		rankExpr, key, where, pageCond, order, q.Limit+1, cur.Offset)
-	if byAdded {
-		// By date added (what every list shows unless asked otherwise): take the first page of
-		// each space, which the (space_id, added_at, id) index hands over in order, and merge
-		// those. Asked for all spaces at once, PostgreSQL reads and sorts every document the
-		// person can see to return sixty of them: 110 ms against 2 ms at 150,000 documents.
+	if keyset {
+		// Take the first page of each space, which its (space_id, sort key, id) index hands over
+		// in order, and merge those. Asked for all spaces at once, PostgreSQL reads and sorts
+		// every document the person can see to return sixty of them: 110 ms against 2 ms at
+		// 150,000 documents.
 		rest := ""
 		if len(b.conds) > 1 {
 			rest = " AND " + strings.Join(b.conds[1:], " AND ")
 		}
 		sqlq = fmt.Sprintf(`SELECT x.id, x.rank, x.sortkey FROM unnest(%s::uuid[]) AS sp(id) CROSS JOIN LATERAL (
-			SELECT d.id, %s AS rank, %s AS sortkey, d.added_at FROM documents d WHERE d.space_id = sp.id%s%s ORDER BY %s LIMIT %d) x
-			ORDER BY x.added_at %s, x.id %s LIMIT %d`,
-			spaceArg, rankExpr, key, rest, pageCond, order, q.Limit+1, dir, dir, q.Limit+1)
+			SELECT d.id, %s AS rank, %s AS sortkey, %s AS ord FROM documents d WHERE d.space_id = sp.id%s%s ORDER BY %s LIMIT %d) x
+			ORDER BY x.ord %s, x.id %s LIMIT %d`,
+			spaceArg, rankExpr, key, ordExpr, rest, pageCond, order, q.Limit+1, dir, dir, q.Limit+1)
+	}
+	// Words in most of the library (see broadMatch): rank the newest RelevanceCap matches, which
+	// each space's (space_id, added_at, id) index hands over, instead of every document.
+	broad, countCap := false, TotalCap
+	if sort == "relevance" && !q.Trash {
+		if q.Cursor != "" {
+			broad = cur.Broad
+		} else {
+			broad = s.broadMatch(ctx, where, countArgs, spaceIDs)
+		}
+	}
+	if broad {
+		rest := ""
+		if len(b.conds) > 1 {
+			rest = " AND " + strings.Join(b.conds[1:], " AND ")
+		}
+		// Each space newest first, the conditions checked on the way until RelevanceCap match. The
+		// OFFSET 0 keeps them out of the inner query: the planner underestimates how many documents
+		// a word is in and would otherwise collect every match to sort them.
+		sqlq = fmt.Sprintf(`SELECT d.id, %s AS rank, '' AS sortkey FROM (
+			SELECT x.id FROM unnest(%s::uuid[]) AS sp(id) CROSS JOIN LATERAL (
+				SELECT d.id, d.added_at FROM (SELECT * FROM documents d WHERE d.space_id = sp.id AND d.deleted_at IS NULL
+					ORDER BY d.added_at DESC, d.id DESC OFFSET 0) d WHERE TRUE%s LIMIT %d) x
+			ORDER BY x.added_at DESC, x.id DESC LIMIT %d) c JOIN documents d ON d.id = c.id
+			ORDER BY %s LIMIT %d OFFSET %d`,
+			rankExpr, spaceArg, rest, RelevanceCap, RelevanceCap, order, q.Limit+1, cur.Offset)
+		countCap = RelevanceCap
+	}
+	// The total and the filter counts are worked out on another connection meanwhile: for a word
+	// in most documents, each takes about as long as the page itself.
+	type counted struct {
+		n      int
+		facets *Facets
+		err    error
+	}
+	var counts chan counted
+	if (q.WithTotal || q.WithFacets) && q.Cursor == "" {
+		counts = make(chan counted, 1)
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			var c counted
+			// Counting stops at countCap: an exact count of a huge library costs more than the page itself.
+			c.err = s.pool.QueryRow(cctx, `SELECT count(*) FROM (SELECT 1 FROM documents d WHERE `+where+` LIMIT `+strconv.Itoa(countCap+1)+`) x`, countArgs...).Scan(&c.n)
+			// Facet counts walk every matching document; past facetCap the filter menus show overall counts.
+			if c.err == nil && q.WithFacets && c.n <= facetCap && !broad {
+				c.facets, c.err = s.facets(cctx, where, countArgs)
+			}
+			counts <- c
+		}()
 	}
 	rows, err := s.pool.Query(ctx, sqlq, b.args...)
 	if err != nil {
@@ -469,7 +536,7 @@ func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Resul
 		res = res[:q.Limit]
 		last := res[len(res)-1]
 		if sort == "relevance" || cfOrder != "" {
-			out.NextCursor = encodeCursor(cursor{Offset: cur.Offset + q.Limit})
+			out.NextCursor = encodeCursor(cursor{Offset: cur.Offset + q.Limit, Broad: broad})
 		} else {
 			k := last.key
 			out.NextCursor = encodeCursor(cursor{Key: &k, ID: last.id.String()})
@@ -479,28 +546,22 @@ func (s *Service) run(ctx context.Context, visible []uuid.UUID, q Query) (*Resul
 		out.Hits = append(out.Hits, Hit{ID: r.id, Rank: r.rank})
 	}
 
-	n := -1
-	if (q.WithTotal || q.WithFacets) && q.Cursor == "" {
-		// Counting stops at TotalCap: an exact count of a huge library costs more than the page itself.
-		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM (SELECT 1 FROM documents d WHERE `+where+` LIMIT `+strconv.Itoa(TotalCap+1)+`) x`, countArgs...).Scan(&n); err != nil {
-			return nil, err
-		}
-		if q.WithTotal {
-			total := min(n, TotalCap)
-			out.Total = &total
-			out.TotalCapped = n > TotalCap
-		}
-	}
-	// Facet counts walk every matching document; past facetCap the filter menus show overall counts.
-	if q.WithFacets && q.Cursor == "" && n <= facetCap {
-		if out.Facets, err = s.facets(ctx, where, countArgs); err != nil {
-			return nil, err
-		}
-	}
 	if hasText && len(out.Hits) > 0 {
 		if err := s.addSnippets(ctx, out, tsq, parsed); err != nil {
 			return nil, err
 		}
+	}
+	if counts != nil {
+		c := <-counts
+		if c.err != nil {
+			return nil, c.err
+		}
+		if q.WithTotal {
+			total := min(c.n, countCap)
+			out.Total = &total
+			out.TotalCapped = c.n > countCap
+		}
+		out.Facets = c.facets
 	}
 	return out, nil
 }
@@ -583,19 +644,86 @@ func (s *Service) Suggest(ctx context.Context, p *auth.Principal, text string, l
 		parts[len(parts)-1].Prefix = true
 	}
 	tsq := textindex.TSQuery(parts)
-	rows, err := s.pool.Query(ctx, `SELECT id, title FROM documents d
-		WHERE space_id = ANY($1) AND deleted_at IS NULL
-		  AND (($2::text <> '' AND meta_fts @@ $2::text::tsquery) OR lower($3::text) <% lower(title))
-		ORDER BY word_similarity(lower($3::text), lower(title)) DESC, added_at DESC LIMIT $4`, visible, tsq, text, limit)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Suggestion, error) {
+	scan := func(r pgx.CollectableRow) (Suggestion, error) {
 		var x Suggestion
 		err := r.Scan(&x.ID, &x.Title)
 		return x, err
-	})
+	}
+	out := []Suggestion{}
+	if tsq != "" {
+		// Documents whose title, sender, type or tags have words starting with what was typed,
+		// newest first, merged from each space's own index: a few milliseconds even when a word
+		// is in tens of thousands of titles, where ranking every one of them took a third of a
+		// second.
+		rows, err := s.pool.Query(ctx, `SELECT x.id, x.title FROM unnest($1::uuid[]) AS sp(id) CROSS JOIN LATERAL (
+			SELECT d.id, d.title, d.added_at FROM documents d
+			WHERE d.space_id = sp.id AND d.deleted_at IS NULL AND d.meta_fts @@ $2::text::tsquery
+			ORDER BY d.added_at DESC, d.id DESC LIMIT $3) x
+			ORDER BY x.added_at DESC, x.id DESC LIMIT $3`, visible, tsq, limit)
+		if err != nil {
+			return nil, err
+		}
+		if out, err = pgx.CollectRows(rows, scan); err != nil {
+			return nil, err
+		}
+	}
+	if len(out) >= limit || len([]rune(text)) < 3 {
+		return out, nil
+	}
+	// Too few: a typo, perhaps. Titles that look like what was typed, the closest first, among
+	// the first few hundred such titles so a common misspelling can't rank a whole library.
+	seen := make([]uuid.UUID, len(out))
+	for i, x := range out {
+		seen[i] = x.ID
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id, title FROM (
+			SELECT d.id, d.title, d.added_at FROM documents d
+			WHERE d.space_id = ANY($1) AND d.deleted_at IS NULL AND lower($2::text) <% lower(d.title) AND d.id <> ALL($3)
+			LIMIT 500) c
+		ORDER BY word_similarity(lower($2::text), lower(title)) DESC, added_at DESC LIMIT $4`, visible, text, seen, limit-len(out))
+	if err != nil {
+		return nil, err
+	}
+	more, err := pgx.CollectRows(rows, scan)
+	return append(out, more...), err
 }
+
+// broadMatch reports whether the conditions match most of the searched documents, and more
+// than BroadMin of them. Ranking every one of those by relevance reads the whole library (a
+// quarter of a second at 200,000 documents, more with long texts), and among so many the best
+// are found in the newest few thousand as well: see RelevanceCap. The planner can't tell (it
+// can't size a word search whose query is put together at run time), so the conditions are
+// tried on a random sample of about two thousand documents: a few pages read.
+func (s *Service) broadMatch(ctx context.Context, where string, args []any, spaceIDs []uuid.UUID) bool {
+	totals, err := s.spaces.SpaceTotals(ctx, spaceIDs)
+	if err != nil {
+		return false
+	}
+	var n int
+	for _, t := range totals {
+		n += t.Documents
+	}
+	if n <= BroadMin {
+		return false
+	}
+	pct := min(100, 2000*100/float64(n))
+	// where's first condition is the space filter, on $1.
+	var hit, seen int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE `+where+`), count(*) FILTER (WHERE d.space_id = ANY($1) AND d.deleted_at IS NULL)
+		FROM documents d TABLESAMPLE SYSTEM (`+strconv.FormatFloat(pct, 'f', 4, 64)+`)`, args...).Scan(&hit, &seen); err != nil || seen == 0 {
+		return false
+	}
+	share := float64(hit) / float64(seen)
+	return share > 0.5 && share*float64(n) > float64(BroadMin)
+}
+
+// BroadMin and RelevanceCap: a search that matches more than BroadMin documents, and most of the
+// library, ranks the newest RelevanceCap matches for "best match" and counts no further. Variables
+// so tests can see it work on a small library.
+var (
+	BroadMin     = 50000
+	RelevanceCap = 10000
+)
 
 // TotalCap bounds how far result totals are counted; facetCap, above which facets are skipped.
 const (

@@ -12,13 +12,28 @@ import { SuggestInput } from "@/components/ui/suggest-input";
 import { Checkbox, TagChip, useScrollEdges } from "@/components/ui/misc";
 import { confirm } from "@/components/ui/confirm";
 import { useCurrentUser } from "@/components/app-shell";
-import { overlayOpen, spaceLabel } from "@/lib/utils";
+import { formatCount, overlayOpen, spaceLabel } from "@/lib/utils";
 import type { Collection, Document } from "@/lib/types";
 import { AddToCollectionDialog } from "@/components/collections";
 
 interface BulkResult {
   succeeded: number;
   failed: { id: string; message: string }[];
+}
+
+/** Documents per request: each takes a few milliseconds, and a request must finish before a proxy gives up on it. */
+const BULK_CHUNK = 500;
+
+/** Runs a bulk action a chunk at a time, saying how far it got when there are many. */
+async function bulkInChunks(ids: string[], action: string, update: Record<string, unknown>, progress?: string | number): Promise<BulkResult> {
+  const res: BulkResult = { succeeded: 0, failed: [] };
+  for (let i = 0; i < ids.length; i += BULK_CHUNK) {
+    const r = await api.post<BulkResult>("/documents/bulk", { ids: ids.slice(i, i + BULK_CHUNK), action, update });
+    res.succeeded += r.succeeded;
+    res.failed.push(...r.failed);
+    if (progress !== undefined) toast.loading(`${Math.min(i + BULK_CHUNK, ids.length).toLocaleString()} of ${ids.length.toLocaleString()} done…`, { id: progress });
+  }
+  return res;
 }
 
 /** Floating action bar for selected documents. */
@@ -44,9 +59,11 @@ export function BulkBar({ items, trash, collection }: { items: Document[]; trash
 
   const run = async (action: string, update?: Record<string, unknown>, success?: string) => {
     setBusy(true);
+    const chosen = [...ids];
+    const progress = chosen.length > BULK_CHUNK ? toast.loading("Working…") : undefined;
     try {
-      const chosen = [...ids];
-      const res = await api.post<BulkResult>("/documents/bulk", { ids: chosen, action, update: update ?? {} });
+      const res = await bulkInChunks(chosen, action, update ?? {}, progress);
+      if (progress !== undefined) toast.dismiss(progress);
       invalidateDocuments(qc);
       // Moving to Trash is the bulk action that's easiest to hit by mistake: offer the way back.
       const undo =
@@ -55,7 +72,7 @@ export function BulkBar({ items, trash, collection }: { items: Document[]; trash
               label: "Undo",
               onClick: () => {
                 const failed = new Set(res.failed.map((f) => f.id));
-                api.post<BulkResult>("/documents/bulk", { ids: chosen.filter((id) => !failed.has(id)), action: "restore", update: {} }).then(
+                bulkInChunks(chosen.filter((id) => !failed.has(id)), "restore", {}).then(
                   () => invalidateDocuments(qc),
                   (e) => toast.error(errorMessage(e)),
                 );
@@ -67,7 +84,9 @@ export function BulkBar({ items, trash, collection }: { items: Document[]; trash
       clear();
       setDialog(null);
     } catch (e) {
-      toast.error(errorMessage(e));
+      // Chunks done before the failure stay done: show them.
+      toast.error(errorMessage(e), { id: progress });
+      invalidateDocuments(qc);
     } finally {
       setBusy(false);
     }
@@ -79,7 +98,7 @@ export function BulkBar({ items, trash, collection }: { items: Document[]; trash
         <Button size="sm" variant="ghost" onClick={clear} aria-label="Clear selection">
           <X />
         </Button>
-        <span className="whitespace-nowrap px-1 text-sm font-medium">{n} selected</span>
+        <span className="whitespace-nowrap px-1 text-sm font-medium">{formatCount(n)} selected</span>
         {items.length > n && (
           <Button size="sm" variant="link" className="px-2" onClick={() => set(items.map((d) => d.id))}>
             Select all {items.length}

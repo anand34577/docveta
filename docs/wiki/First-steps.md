@@ -60,6 +60,7 @@ company login: *Administration → Single sign-on*.
 
 *Settings → Notifications*: in the app, by email, or to your phone through Gotify or ntfy,
 when a document is processed, someone mentions you in a note, or something needs attention.
+Notifications in the app are kept for half a year.
 
 ## Next
 

@@ -60,14 +60,31 @@ type Config struct {
 	MetricsToken string
 }
 
-func Load() (*Config, error) {
+// loadFiles applies the program's and the data folder's docveta.conf to the environment.
+func loadFiles() error {
 	if err := loadFile(primaryFile()); err != nil {
-		return nil, fmt.Errorf("read %s: %w", primaryFile(), err)
+		return fmt.Errorf("read %s: %w", primaryFile(), err)
 	}
 	if dir, err := filepath.Abs(env("DOCVETA_DATA_DIR", "./data")); err == nil {
 		if err := loadFile(DataFile(dir)); err != nil {
-			return nil, fmt.Errorf("read %s: %w", DataFile(dir), err)
+			return fmt.Errorf("read %s: %w", DataFile(dir), err)
 		}
+	}
+	return nil
+}
+
+// ListenAddr returns the address the server listens on without the rest of Load's work
+// (it creates no secret or key files), for `docveta healthcheck`.
+func ListenAddr() (string, error) {
+	if err := loadFiles(); err != nil {
+		return "", err
+	}
+	return env("DOCVETA_LISTEN", ":8080"), nil
+}
+
+func Load() (*Config, error) {
+	if err := loadFiles(); err != nil {
+		return nil, err
 	}
 	interactive := isTerminal()
 	logFormat := "json"

@@ -84,8 +84,22 @@ suspend fun Repository.downloadFile(d: Document, kind: String, version: Int? = n
     return f
 }
 
+/** Documents per request: each takes a few milliseconds, and a request must finish before a reverse proxy gives up on it. */
+private const val BULK_CHUNK = 500
+
 /** Runs one action on many documents: update | trash | restore | purge | reprocess | suggest. [select] = "inbox" or "failed" picks those documents on the server. */
 suspend fun Repository.bulk(ids: List<String>, action: String, update: JsonObject = JsonObject(emptyMap()), select: String? = null): BulkResult {
+    if (select == null && ids.size > BULK_CHUNK) {
+        // A long selection goes a part at a time; the results add up.
+        var done = 0
+        val failed = mutableListOf<BulkFailure>()
+        for (part in ids.chunked(BULK_CHUNK)) {
+            val r = bulk(part, action, update)
+            done += r.succeeded
+            failed += r.failed
+        }
+        return BulkResult(succeeded = done, failed = failed)
+    }
     val body = buildJsonObject {
         put("ids", strings(ids))
         if (select != null) put("select", select)

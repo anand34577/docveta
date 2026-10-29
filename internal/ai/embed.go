@@ -233,6 +233,7 @@ type SemHit struct {
 	Page       int
 	Text       string
 	Score      float32
+	chunk      int // which of the document's passages (scanChunks fetches the text of the best only)
 }
 
 // Scores below this are noise for typical embedding models; "not found" answers rely on it.
@@ -452,13 +453,17 @@ func (s *Service) MissingEmbeddings(ctx context.Context, p *auth.Principal) ([]u
 	if !p.Admin() {
 		return nil, apperr.Forbidden("")
 	}
+	// The provider EmbedDocument will use; spaces whose policy keeps it out are left alone,
+	// as EmbedDocument would leave them (only local providers may read "local only" spaces).
 	var model string
-	if err := s.pool.QueryRow(ctx, `SELECT coalesce((SELECT embedding_model FROM ai_providers WHERE enabled ORDER BY is_default DESC, created_at LIMIT 1), '')`).Scan(&model); err != nil || model == "" {
+	var local bool
+	if err := s.pool.QueryRow(ctx, `SELECT embedding_model, is_local FROM ai_providers WHERE enabled ORDER BY is_default DESC, created_at LIMIT 1`).
+		Scan(&model, &local); err != nil || model == "" {
 		return nil, ErrNoEmbeds
 	}
 	rows, err := s.pool.Query(ctx, `SELECT d.id FROM documents d JOIN spaces sp ON sp.id=d.space_id
-		WHERE d.deleted_at IS NULL AND d.status='ready' AND sp.ai_policy <> 'off'
-		  AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.document_id=d.id AND e.model=$1)`, model)
+		WHERE d.deleted_at IS NULL AND d.status='ready' AND (sp.ai_policy = 'any' OR (sp.ai_policy = 'local_only' AND $2))
+		  AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.document_id=d.id AND e.model=$1)`, model, local)
 	if err != nil {
 		return nil, err
 	}
