@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"hash/maphash"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +35,11 @@ func (w *MaintenanceWorker) Work(ctx context.Context, _ *river.Job[jobs.Maintena
 	}
 	if err := a.Identity.CleanupSessions(ctx); err != nil {
 		log.Error("cleanup sessions", "err", err)
+	}
+	if n, err := pruneNotifications(ctx, a.Pool); err != nil {
+		log.Error("prune notifications", "err", err)
+	} else if n > 0 {
+		log.Info("removed old notifications", "count", n)
 	}
 	a.FS.CleanTemp(24 * time.Hour)
 	a.Uploads.Cleanup(ctx)
@@ -100,6 +107,24 @@ func (w *MaintenanceWorker) storageAlert(ctx context.Context) {
 		Severity: "warning", ToAdmins: true})
 }
 
+// pruneNotifications removes in-app notifications older than half a year, a batch at a time:
+// each processed document can notify everyone in its space, so kept forever they only grow.
+func pruneNotifications(ctx context.Context, pool *pgxpool.Pool) (int64, error) {
+	const batch = 5000
+	var total int64
+	for {
+		tag, err := pool.Exec(ctx, `DELETE FROM notifications WHERE id IN (
+			SELECT id FROM notifications WHERE created_at < now() - interval '180 days' LIMIT $1)`, batch)
+		if err != nil {
+			return total, err
+		}
+		total += tag.RowsAffected()
+		if tag.RowsAffected() < batch {
+			return total, nil
+		}
+	}
+}
+
 // blobGCGrace keeps unreferenced blobs for a while so backups (DB first, then blobs)
 // are always consistent and in-flight uploads are never collected.
 const blobGCGrace = 7 * 24 * time.Hour
@@ -116,14 +141,14 @@ func (w *MaintenanceWorker) gcBlobs(ctx context.Context) error {
 	if ok, _ := a.Settings.Get(ctx, "maintenance.blob_gc_at", &last); ok && time.Since(last) < 24*time.Hour {
 		return nil
 	}
-	refs, err := ReferencedBlobs(ctx, a.Pool)
+	refs, err := referencedBlobHashes(ctx, a.Pool)
 	if err != nil {
 		return err
 	}
 	cutoff := time.Now().Add(-blobGCGrace)
 	removed := 0
 	err = a.Store.Walk(ctx, func(key string, mod time.Time) error {
-		if _, ok := refs[key]; ok || mod.After(cutoff) {
+		if _, ok := slices.BinarySearch(refs, maphash.String(blobSeed, key)); ok || mod.After(cutoff) {
 			return nil
 		}
 		if err := a.Store.Delete(ctx, key); err != nil {
@@ -151,13 +176,41 @@ func (w *MaintenanceWorker) gcBlobs(ctx context.Context) error {
 	return a.Settings.Set(ctx, "maintenance.blob_gc_at", time.Now(), uuid.Nil)
 }
 
-// ReferencedBlobs returns every blob key the database still points to (files, OCR
-// results). Used by blob GC and by `docveta doctor`.
-func ReferencedBlobs(ctx context.Context, pool *pgxpool.Pool) (map[string]struct{}, error) {
-	rows, err := pool.Query(ctx, `SELECT blob_key FROM document_files
+// referencedBlobsSQL lists every blob key the database still points to (files, OCR results).
+const referencedBlobsSQL = `SELECT blob_key FROM document_files
 		UNION SELECT result_blob_key FROM processing_tasks WHERE result_blob_key IS NOT NULL
 		UNION SELECT result_blob_key FROM ocr_runs WHERE result_blob_key IS NOT NULL
-		UNION SELECT payload->>'ocr_result_key' FROM processing_tasks WHERE payload ? 'ocr_result_key'`)
+		UNION SELECT payload->>'ocr_result_key' FROM processing_tasks WHERE payload ? 'ocr_result_key'`
+
+var blobSeed = maphash.MakeSeed()
+
+// referencedBlobHashes returns the referenced blob keys as sorted 64-bit hashes, read as they
+// stream in: a million documents' keys take 30 MB this way instead of several hundred. A
+// collision can only keep an unused file, never remove one in use.
+func referencedBlobHashes(ctx context.Context, pool *pgxpool.Pool) ([]uint64, error) {
+	rows, err := pool.Query(ctx, referencedBlobsSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hs []uint64
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		hs = append(hs, maphash.String(blobSeed, k))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.Sort(hs)
+	return hs, nil
+}
+
+// ReferencedBlobs returns every blob key the database still points to. Used by `docveta doctor`.
+func ReferencedBlobs(ctx context.Context, pool *pgxpool.Pool) (map[string]struct{}, error) {
+	rows, err := pool.Query(ctx, referencedBlobsSQL)
 	if err != nil {
 		return nil, err
 	}
