@@ -195,31 +195,66 @@ func (s *Service) searchChunksPG(ctx context.Context, f chunkFilter, query []flo
 }
 
 // scanChunks is the fallback without pgvector: it streams the stored vectors and keeps the
-// best k (memory stays bounded by k, time grows with the number of chunks).
+// best k (memory stays bounded by k, time grows with the number of chunks). Only the best
+// passages' text is read.
 func (s *Service) scanChunks(ctx context.Context, f chunkFilter, query []float32, k int) ([]SemHit, error) {
 	docs := f.Docs
 	if docs == nil {
 		docs = []uuid.UUID{}
 	}
-	rows, err := s.pool.Query(ctx, `SELECT e.document_id, e.page_no, e.content, e.vec FROM embeddings e
+	rows, err := s.pool.Query(ctx, `SELECT e.document_id, e.chunk_no, e.page_no, e.vec FROM embeddings e
 		JOIN documents d ON d.id=e.document_id
 		WHERE d.space_id = ANY($1) AND d.deleted_at IS NULL AND e.model=$2 AND e.dims=$3 AND d.id<>$4
 		  AND (cardinality($5::uuid[]) = 0 OR d.id = ANY($5))`, f.Spaces, f.Model, len(query), f.Exclude, docs)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	best := newTopK(k)
 	for rows.Next() {
 		var h SemHit
 		var raw []byte
-		if err := rows.Scan(&h.DocumentID, &h.Page, &h.Text, &raw); err != nil {
+		if err := rows.Scan(&h.DocumentID, &h.chunk, &h.Page, &raw); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		h.Score = dot(query, decodeVec(raw))
 		best.add(h)
 	}
-	return best.sorted(), rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	hits := best.sorted()
+	if len(hits) == 0 {
+		return hits, nil
+	}
+	ids, chunks := make([]uuid.UUID, len(hits)), make([]int32, len(hits))
+	for i, h := range hits {
+		ids[i], chunks[i] = h.DocumentID, int32(h.chunk)
+	}
+	rows, err = s.pool.Query(ctx, `SELECT e.document_id, e.chunk_no, e.content FROM embeddings e
+		JOIN unnest($2::uuid[], $3::int[]) AS w(doc, chunk) ON e.document_id = w.doc AND e.chunk_no = w.chunk WHERE e.model = $1`, f.Model, ids, chunks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type at struct {
+		doc   uuid.UUID
+		chunk int
+	}
+	text := map[at]string{}
+	for rows.Next() {
+		var a at
+		var t string
+		if err := rows.Scan(&a.doc, &a.chunk, &t); err != nil {
+			return nil, err
+		}
+		text[a] = t
+	}
+	for i := range hits {
+		hits[i].Text = text[at{hits[i].DocumentID, hits[i].chunk}]
+	}
+	return hits, rows.Err()
 }
 
 // BackfillVectors copies vectors stored before pgvector was available into the vector

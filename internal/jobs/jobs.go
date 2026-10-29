@@ -144,6 +144,25 @@ func (q *Queue) Insert(ctx context.Context, args river.JobArgs, opts *river.Inse
 	return err
 }
 
+// InsertMany enqueues many jobs with the same options, a thousand per round trip.
+func (q *Queue) InsertMany(ctx context.Context, args []river.JobArgs, opts *river.InsertOpts) error {
+	if q == nil || q.Client == nil {
+		return errNotStarted
+	}
+	for len(args) > 0 {
+		n := min(len(args), 1000)
+		params := make([]river.InsertManyParams, n)
+		for i, a := range args[:n] {
+			params[i] = river.InsertManyParams{Args: a, InsertOpts: opts}
+		}
+		if _, err := q.Client.InsertMany(ctx, params); err != nil {
+			return err
+		}
+		args = args[n:]
+	}
+	return nil
+}
+
 // EmitTx enqueues a notification event inside tx.
 func (q *Queue) EmitTx(ctx context.Context, tx pgx.Tx, e Event) error {
 	if e.At.IsZero() {
