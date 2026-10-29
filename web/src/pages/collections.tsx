@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { invalidateDocuments, useCollections, useDocuments } from "@/lib/queries";
 import type { Collection, DocQuery } from "@/lib/types";
-import { cn, formatDocDate, tagDot, timeAgo } from "@/lib/utils";
+import { cn, formatCount, formatDocDate, tagDot, timeAgo } from "@/lib/utils";
 import { PageHeader } from "@/components/app-shell";
 import { CollectionCovers, CollectionDialog, useSharedLabel } from "@/components/collections";
 import { Thumbnail } from "@/components/documents/doc-items";
@@ -82,7 +82,7 @@ export function CollectionsPage() {
                   {c.description && <p className="line-clamp-2 text-xs text-muted">{c.description}</p>}
                   <div className="mt-auto flex items-center gap-1.5 pt-1 text-xs text-subtle">
                     {c.space_id && <Users className="size-3.5" />}
-                    <span className="truncate">{c.document_count} document{c.document_count === 1 ? "" : "s"} · {shared(c)}</span>
+                    <span className="truncate">{formatCount(c.document_count)} document{c.document_count === 1 ? "" : "s"} · {shared(c)}</span>
                   </div>
                 </div>
               </Link>

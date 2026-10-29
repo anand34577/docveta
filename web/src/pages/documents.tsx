@@ -70,7 +70,7 @@ export function DocumentBrowser({ query, onChange, trash, title, eyebrow, descri
     setRetrying(true);
     let done = 0;
     try {
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 10_000; i++) {
         const r = await api.post<{ succeeded: number; remaining: number }>("/documents/bulk", { select: "failed", action: "reprocess", update: {} });
         done += r.succeeded;
         if (!r.remaining || !r.succeeded) break;

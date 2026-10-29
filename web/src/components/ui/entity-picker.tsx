@@ -6,7 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "./overlay";
 import { TagChip } from "./misc";
 import { useCreateTaxonomy, useTaxonomy } from "@/lib/queries";
 import { errorMessage } from "@/lib/api";
-import { cn, colorNames, tagDot } from "@/lib/utils";
+import { cn, colorNames, compareNames, formatCount, tagDot } from "@/lib/utils";
 import type { TaxonomyKind } from "@/lib/types";
 
 interface Props {
@@ -22,6 +22,8 @@ interface Props {
   id?: string;
 }
 
+const PICKER_LIMIT = 100;
+
 /**
  * Searchable picker for tags, correspondents and document types with inline creation:
  * type a name that doesn't exist and press Enter to create it.
@@ -33,6 +35,16 @@ export function EntityPicker({ kind, spaceId, value, onChange, multiple, placeho
   const create = useCreateTaxonomy(kind);
   const selected = items.filter((i) => value.includes(i.id));
   const exact = items.some((i) => i.name.toLowerCase() === search.trim().toLowerCase());
+  // Filtered here rather than by cmdk, which scores every item on each key press: names that
+  // start with what was typed first, then the most used, and only the first PICKER_LIMIT.
+  const shown = React.useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    const starts = (n: string) => Number(n.toLowerCase().startsWith(needle));
+    return items
+      .filter((i) => !needle || i.name.toLowerCase().includes(needle))
+      .sort((a, b) => starts(b.name) - starts(a.name) || b.document_count - a.document_count || compareNames(a.name, b.name))
+      .slice(0, PICKER_LIMIT);
+  }, [items, search]);
 
   const toggle = (itemId: string) => {
     if (multiple) {
@@ -104,7 +116,7 @@ export function EntityPicker({ kind, spaceId, value, onChange, multiple, placeho
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-64 p-0">
-        <Command loop shouldFilter>
+        <Command loop shouldFilter={false}>
           <Command.Input
             value={search}
             onValueChange={setSearch}
@@ -124,7 +136,7 @@ export function EntityPicker({ kind, spaceId, value, onChange, multiple, placeho
             <Command.Empty className="px-3 py-4 text-center text-sm text-muted">
               {allowCreate && search.trim() ? "Press Enter to create it" : `No ${label}s yet`}
             </Command.Empty>
-            {items.map((it) => (
+            {shown.map((it) => (
               <Command.Item
                 key={it.id}
                 value={`${it.name} ${it.id}`}
@@ -133,7 +145,7 @@ export function EntityPicker({ kind, spaceId, value, onChange, multiple, placeho
               >
                 {kind === "tags" && <span className={cn("size-2 rounded-full", tagDot[it.color ?? "slate"])} />}
                 <span className="flex-1 truncate">{it.name}</span>
-                <span className="text-xs text-subtle">{it.document_count || ""}</span>
+                <span className="text-xs text-subtle">{it.document_count ? formatCount(it.document_count) : ""}</span>
                 {value.includes(it.id) && <Check className="size-4 text-accent" />}
               </Command.Item>
             ))}

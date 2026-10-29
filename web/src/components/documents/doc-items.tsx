@@ -78,11 +78,25 @@ export function stageLabel(stage: string): string {
   }
 }
 
+/** Words kept before the first match: cards show two lines at most, and the match must be on them. */
+const SNIPPET_LEAD = 28;
+
+/** The snippet with at most SNIPPET_LEAD characters (whole words) before its first match. */
+function leadIn(segments: Segment[]): Segment[] {
+  const first = segments.findIndex((s) => s.hit);
+  if (first < 0) return segments;
+  const before = segments.slice(0, first).map((s) => s.text).join("");
+  if (before.length <= SNIPPET_LEAD) return segments;
+  const cut = before.slice(-SNIPPET_LEAD);
+  const space = cut.indexOf(" ");
+  return [{ text: "…" + (space >= 0 ? cut.slice(space + 1) : cut) }, ...segments.slice(first)];
+}
+
 export function Snippet({ segments, className }: { segments?: Segment[]; className?: string }) {
   if (!segments?.length) return null;
   return (
     <p className={cn("line-clamp-2 text-[13px] leading-relaxed text-muted", className)}>
-      {segments.map((s, i) =>
+      {leadIn(segments).map((s, i) =>
         s.hit ? (
           <mark key={i} className="rounded-sm bg-amber-200/70 px-0.5 text-fg dark:bg-amber-400/25">
             {s.text}

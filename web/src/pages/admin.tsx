@@ -5,7 +5,7 @@ import { Activity, Bell, Brain, Cpu, Database, FileStack, FolderSync, KeyRound, 
 import { toast } from "sonner";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import type { AuditEntry, OIDCConfig, ProcessingSettings, QueueStats, ServerSettings, SMTPConfig, SystemInfo, TaskView, User, Worker } from "@/lib/types";
-import { cn, formatBytes, formatDateTime, timeAgo } from "@/lib/utils";
+import { cn, formatBytes, formatCount, formatDateTime, timeAgo } from "@/lib/utils";
 import { useCurrentUser } from "@/components/app-shell";
 import { SecretReveal, SettingsCard, SettingsLayout } from "@/components/settings-layout";
 import { Button } from "@/components/ui/button";
@@ -60,6 +60,10 @@ function UsersAdmin() {
   const qc = useQueryClient();
   const users = useQuery({ queryKey: ["admin-users"], queryFn: () => api.get<{ items: User[] }>("/admin/users").then((r) => r.items) });
   const [dialog, setDialog] = React.useState<User | "new" | null>(null);
+  // With more than a screenful of people, a box to find someone by name or email.
+  const [find, setFind] = React.useState("");
+  const needle = find.trim().toLowerCase();
+  const shown = (users.data ?? []).filter((u) => !needle || u.display_name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle));
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["admin-users"] });
     qc.invalidateQueries({ queryKey: ["directory"] });
@@ -102,11 +106,15 @@ function UsersAdmin() {
         </Button>
       }
     >
+      {(users.data?.length ?? 0) > 8 && (
+        <Input value={find} onChange={(e) => setFind(e.target.value)} placeholder={`Find among ${formatCount(users.data!.length)} people…`} aria-label="Find a user" className="mb-2 h-8" />
+      )}
       {users.isLoading ? (
         <Skeleton className="h-24" />
       ) : (
         <ul className="divide-y divide-border">
-          {(users.data ?? []).map((u) => (
+          {needle && shown.length === 0 && <li className="py-3 text-sm text-muted">No one matches “{find.trim()}”.</li>}
+          {shown.map((u) => (
             <li key={u.id} className="flex flex-wrap items-center gap-3 py-3">
               <Avatar name={u.display_name} />
               <div className="min-w-48 flex-1">
@@ -259,7 +267,7 @@ function ProcessingAdmin() {
           ["Failed (24h)", st?.failed_24h],
         ].map(([l, v]) => (
           <div key={l as string} className="rounded-xl border border-border bg-surface p-4 shadow-sm">
-            <div className="text-2xl font-semibold tabular-nums">{v ?? "–"}</div>
+            <div className="text-2xl font-semibold tabular-nums">{v === undefined ? "–" : formatCount(v as number)}</div>
             <div className="text-[13px] text-muted">{l}</div>
           </div>
         ))}
@@ -873,12 +881,12 @@ function AuditAdmin() {
           {entries.map((e) => (
             <li key={e.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5 text-[13px]">
               <span className={cn("font-medium", e.action.includes("failed") && "text-danger")}>{e.action}</span>
-              <span className="text-muted">{e.actor_name || e.actor_type}</span>
+              <span className="text-muted">{e.actor_name || actorLabel(e.actor_type, e.ip)}</span>
               {e.details && Object.keys(e.details).length > 0 && (
                 <span className="truncate text-xs text-subtle">{Object.entries(e.details).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ")}</span>
               )}
               <span className="ml-auto whitespace-nowrap text-xs text-subtle">
-                {e.ip} · {formatDateTime(e.at)}
+                {[e.ip, formatDateTime(e.at)].filter(Boolean).join(" · ")}
               </span>
             </li>
           ))}
@@ -888,4 +896,11 @@ function AuditAdmin() {
       )}
     </SettingsCard>
   );
+}
+
+/** Who did something, when it wasn't a person's account: entries without an address come from the command line. */
+function actorLabel(type: string, ip?: string) {
+  if (type === "anonymous") return ip ? "Not signed in" : "Command line";
+  if (type === "system") return "Docveta";
+  return type;
 }

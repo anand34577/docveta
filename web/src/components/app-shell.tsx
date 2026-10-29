@@ -27,7 +27,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api, setUnauthorizedHandler } from "@/lib/api";
 import { nameSearch, useAIEnabled, useDocumentTypes, useMe, useSavedViews, useStats, useStatus } from "@/lib/queries";
 import { isAuthPage, safeRedirect } from "@/lib/redirect";
-import { cn, modKey, overlayOpen, setDateFormat, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
+import { cn, formatCount, modKey, overlayOpen, setDateFormat, spaceDot, spaceLabel, usePageTitle } from "@/lib/utils";
 import { applyTheme, useUI } from "@/stores/ui";
 import { useUploads } from "@/stores/uploads";
 import { Button } from "@/components/ui/button";
@@ -355,7 +355,7 @@ function TypeLinks({ onNavigate }: { onNavigate?: () => void }) {
             <Link key={t.name} to="/documents" search={{ q }} onClick={onNavigate} data-status={current === q ? "active" : undefined} className={navItem}>
               <Shapes />
               <span className="flex-1 truncate">{t.name}</span>
-              <span className="text-xs tabular-nums text-subtle">{t.count}</span>
+              <span className="text-xs tabular-nums text-subtle">{formatCount(t.count)}</span>
             </Link>
           );
         })}
@@ -408,7 +408,7 @@ function SpaceLink({ space, onNavigate }: { space: Space; onNavigate?: () => voi
           {personal ? <User className="!size-3" /> : space.name[0]?.toUpperCase()}
         </span>
         <span className="flex-1 truncate">{spaceLabel(space)}</span>
-        <span className={cn("text-xs tabular-nums text-subtle", owner && "lg:group-hover/space:invisible lg:group-focus-within/space:invisible")}>{space.document_count || ""}</span>
+        <span className={cn("text-xs tabular-nums text-subtle", owner && "lg:group-hover/space:invisible lg:group-focus-within/space:invisible")}>{space.document_count ? formatCount(space.document_count) : ""}</span>
       </Link>
       {owner && (
         <Link
