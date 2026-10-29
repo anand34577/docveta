@@ -2114,3 +2114,70 @@ func TestDateReminders(t *testing.T) {
 		})
 	}
 }
+
+// A share link's visitor may ask for a file many times (a PDF viewer reads a long file in
+// hundreds of parts, a shared view runs its search for each), but guessing at links is cut off.
+func TestShareLinkLimits(t *testing.T) {
+	e := newEnv(t)
+	c := e.c
+	doc := c.upload(e.family, "limits.pdf", minimalPDF("a document seen through a shared view"))
+	c.waitStatus(doc.ID, "ready")
+	var view struct{ ID string }
+	c.do("POST", "/api/v1/saved-views", map[string]any{"name": "Seen", "space_id": e.family, "query": map[string]any{"q": "seen"}}, 201, &view)
+	var sh struct {
+		Link string `json:"link"`
+	}
+	c.do("POST", "/api/v1/shares", map[string]any{"view_id": view.ID}, 201, &sh)
+	tok := sh.Link[strings.LastIndex(sh.Link, "/")+1:]
+	anon := newClient(t, e.srv.URL)
+	for i := 0; i < 400; i++ {
+		anon.raw("GET", "/api/v1/public/shares/"+tok+"/documents/"+doc.ID+"/file", nil, map[string]string{"Range": "bytes=0-99"}, 206)
+	}
+	guesser := newClient(t, e.srv.URL)
+	for i := 0; i < 100; i++ {
+		guesser.do("GET", fmt.Sprintf("/api/v1/public/shares/dvt_shr_guess%d", i), nil, 404, nil)
+	}
+	guesser.do("GET", "/api/v1/public/shares/dvt_shr_guess-again", nil, 429, nil)
+	// The limit is per address: from here a real link is refused too, until the window passes.
+	guesser.do("GET", "/api/v1/public/shares/"+tok, nil, 429, nil)
+}
+
+// An import whose documents all fail stops after a run of failures (the cause then lies outside
+// the documents) and says how far it got, instead of logging a warning for every document.
+func TestImportStopsOnRepeatedFailures(t *testing.T) {
+	src := newEnv(t)
+	doc := src.c.upload(src.family, "one.pdf", minimalPDF("The only document of this export"))
+	src.c.waitStatus(doc.ID, "ready")
+	dir := filepath.Join(t.TempDir(), "export")
+	if _, err := exchange.Export(src.ctx, src.a.Pool, src.a.Store, exchange.DirSink(dir), exchange.ExportOptions{Version: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	line, err := os.ReadFile(filepath.Join(dir, "documents.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(line), &rec); err != nil {
+		t.Fatal(err)
+	}
+	// Sixty documents whose files are missing from the export.
+	var many bytes.Buffer
+	for i := range 60 {
+		rec["id"] = uuid.Must(uuid.NewV7()).String()
+		rec["original"] = fmt.Sprintf("files/missing-%d.pdf", i)
+		rec["sha256"] = fmt.Sprintf("%064x", i+1)
+		b, _ := json.Marshal(rec)
+		many.Write(append(b, '\n'))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "documents.jsonl"), many.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := newEnv(t)
+	rep, err := exchange.Import(dst.ctx, dst.a.Pool, dst.a.Store, dir)
+	if err == nil || !strings.Contains(err.Error(), "in a row failed") {
+		t.Fatalf("import of documents that all fail: %v", err)
+	}
+	if rep == nil || rep.Documents != 0 || len(rep.Warnings) != 50 {
+		t.Fatalf("report: %+v", rep)
+	}
+}

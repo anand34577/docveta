@@ -54,3 +54,16 @@ func (l *Limiter) Reset(key string) {
 	delete(l.hits, key)
 	l.mu.Unlock()
 }
+
+// Over reports whether key has used up its hits in the current window, without recording
+// one, plus the time until the window resets.
+func (l *Limiter) Over(key string) (bool, time.Duration) {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.hits[key]
+	if !ok || now.After(b.reset) {
+		return false, 0
+	}
+	return b.count >= l.limit, b.reset.Sub(now)
+}

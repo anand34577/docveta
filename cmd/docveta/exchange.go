@@ -65,15 +65,22 @@ func importCmd(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	}
 	defer a.Close()
 	rep, err := exchange.Import(ctx, a.Pool, a.Store, *dir)
+	if rep == nil {
+		return err
+	}
+	// Stopped part-way, it still says how far it got: running it again carries on from there.
+	defer func() {
+		for _, w := range rep.Warnings {
+			fmt.Println("  warning:", w)
+		}
+	}()
 	if err != nil {
+		fmt.Printf("imported %d documents before stopping\n", rep.Documents)
 		return err
 	}
 	fmt.Printf("imported %d documents (%d already there), %d notes, %d new users, %d new spaces\n", rep.Documents, rep.Skipped, rep.Notes, rep.Users, rep.Spaces)
 	for _, u := range rep.UnsetUsers {
 		fmt.Printf("  %s has no password: reset it with `docveta user reset-password --email %s`\n", u, u)
-	}
-	for _, w := range rep.Warnings {
-		fmt.Println("  warning:", w)
 	}
 	return nil
 }

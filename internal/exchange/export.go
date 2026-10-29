@@ -30,6 +30,7 @@ import (
 
 	"github.com/anand34577/docveta/internal/customfields"
 	"github.com/anand34577/docveta/internal/documents"
+	"github.com/anand34577/docveta/internal/platform/db"
 	"github.com/anand34577/docveta/internal/storage"
 )
 
@@ -276,9 +277,15 @@ func Export(ctx context.Context, pool *pgxpool.Pool, store storage.Store, sink S
 		ids = append(ids, id)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err // a list cut short would make an export that silently misses documents
+	}
 
 	for _, id := range ids {
 		rec, err := loadDoc(ctx, pool, id)
+		if db.IsNoRows(err) {
+			continue // deleted while a long export was running
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -286,8 +293,10 @@ func Export(ctx context.Context, pool *pgxpool.Pool, store storage.Store, sink S
 		put := func(kind, dst string) (string, error) {
 			var key string
 			if err := pool.QueryRow(ctx, `SELECT f.blob_key FROM document_files f JOIN documents d ON d.id=f.document_id
-				WHERE f.document_id=$1 AND f.kind=$2 AND f.version_no=d.current_version`, id, kind).Scan(&key); err != nil {
+				WHERE f.document_id=$1 AND f.kind=$2 AND f.version_no=d.current_version`, id, kind).Scan(&key); db.IsNoRows(err) {
 				return "", nil // no such file: fine
+			} else if err != nil {
+				return "", err
 			}
 			r, _, err := store.Open(ctx, key)
 			if err != nil {
